@@ -1,0 +1,43 @@
+// RoV Pro Team Analytics — Database Schema
+// Maps directly onto the data shapes already used in the app's state
+// (matches, rivals, roster, enemyRosters, scoutMatches, photos, custom heroes).
+// Team data is SHARED — every logged-in user reads/writes the same rows.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("POSTGRES_PRISMA_URL")     // pooled connection (used at runtime)
+  directUrl = env("POSTGRES_URL_NON_POOLING") // direct connection (used for migrations)
+}
+
+// ── Auth ──
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String   // bcrypt hash
+  name      String?
+  createdAt DateTime @default(now())
+}
+
+// ── App data ──
+// Single shared row per team. Keeping this as one JSON blob (like the
+// original window.storage design) instead of fully normalized tables
+// keeps the API surface tiny and avoids a large rewrite of the app's
+// reducer logic, which already expects one big state object.
+model TeamData {
+  id            String   @id @default("singleton") // only one row — whole team shares it
+  matches       Json     @default("[]")
+  rivals        Json     @default("[]")
+  roster        Json     @default("[\"Player 1\",\"Player 2\"]")
+  enemyRosters  Json     @default("{}")
+  scoutMatches  Json     @default("[]")
+  playerPhotos  Json     @default("{}")
+  heroPhotos    Json     @default("{}")
+  customHeroes  Json     @default("[]")
+  roleOverrides Json     @default("{}")
+  updatedAt     DateTime @updatedAt
+  updatedBy     String?  // email of last person who saved, for visibility
+}
