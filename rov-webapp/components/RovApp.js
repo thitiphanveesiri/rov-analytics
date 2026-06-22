@@ -1,3 +1,4 @@
+"use client";
 import { useState, useEffect, useReducer, useCallback, useRef, createContext, useContext } from "react";
 
 // ═══════════════════════════════════════════
