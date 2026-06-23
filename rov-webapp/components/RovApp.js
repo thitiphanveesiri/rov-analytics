@@ -1,5 +1,7 @@
 "use client";
 import { useState, useEffect, useReducer, useCallback, useRef, createContext, useContext } from "react";
+import { useSession, signOut } from "next-auth/react";
+import { loadFromStorage, saveToStorage } from "@/lib/storage";
 
 // ═══════════════════════════════════════════
 //  CONSTANTS
@@ -3134,214 +3136,6 @@ function HeroImageSlot({ hero, photoUrl, onSet, onRemove, onSetRole }) {
   );
 }
 
-// ═══════════════════════════════════════════
-//  AI DRAFT ASSISTANT
-// ═══════════════════════════════════════════
-function AIDraftAssistant({ draftState, ourSide, allGames, scoutMatches, rivalName }) {
-  const [open,        setOpen]        = useState(false);
-  const [enemyHeroes, setEnemyHeroes] = useState([]); // heroes กรอกเอง
-  const [heroInput,   setHeroInput]   = useState("");
-  const [aiResponse,  setAiResponse]  = useState("");
-  const [loading,     setLoading]     = useState(false);
-  const [mode,        setMode]        = useState("suggest"); // suggest | counter
-
-  // current draft state summary
-  const { blueBans, redBans, bluePicks, redPicks, step } = draftState;
-  const ourBans    = ourSide==="blue" ? blueBans  : redBans;
-  const enemyBans  = ourSide==="blue" ? redBans   : blueBans;
-  const ourPicks   = ourSide==="blue" ? bluePicks : redPicks;
-  const enemyPicks = ourSide==="blue" ? redPicks  : bluePicks;
-
-  // build context from app data
-  function buildContext() {
-    // Synergy data
-    const synergy = {};
-    allGames.forEach(g=>{
-      const op=(g.ourPicks||[]).filter(s=>s.hero?.name).map(s=>s.hero.name);
-      const ourWin=g.result==="WIN";
-      for(let i=0;i<op.length;i++) for(let j=i+1;j<op.length;j++){
-        const k=[op[i],op[j]].sort().join("+");
-        if(!synergy[k])synergy[k]={games:0,wins:0};
-        synergy[k].games++;if(ourWin)synergy[k].wins++;
-      }
-    });
-    const topSynergy=Object.entries(synergy)
-      .filter(([,v])=>v.games>=2)
-      .map(([k,v])=>({pair:k,wr:Math.round(v.wins/v.games*100),games:v.games}))
-      .sort((a,b)=>b.wr-a.wr).slice(0,10);
-
-    // Counter data
-    const counter = {};
-    allGames.forEach(g=>{
-      const op=(g.ourPicks||[]).filter(s=>s.hero?.name).map(s=>s.hero.name);
-      const ep=(g.enemyPicks||[]).filter(s=>s.hero?.name).map(s=>s.hero.name);
-      const ourWin=g.result==="WIN";
-      op.forEach(ha=>ep.forEach(hb=>{
-        const k=`${ha}>${hb}`;
-        if(!counter[k])counter[k]={games:0,wins:0};
-        counter[k].games++;if(ourWin)counter[k].wins++;
-      }));
-    });
-    const topCounter=Object.entries(counter)
-      .filter(([,v])=>v.games>=2)
-      .map(([k,v])=>({pair:k,wr:Math.round(v.wins/v.games*100),games:v.games}))
-      .sort((a,b)=>b.wr-a.wr).slice(0,10);
-
-    // ban frequency
-    const banFreq={};
-    allGames.forEach(g=>(g.ourBans||[]).forEach(h=>{if(h?.name)banFreq[h.name]=(banFreq[h.name]||0)+1;}));
-    const topBans=Object.entries(banFreq).sort((a,b)=>b[1]-a[1]).slice(0,8).map(([h,c])=>`${h}(${c}x)`);
-
-    // rival pick history
-    const rivalPicks={};
-    allGames.filter(g=>g.rivalName===rivalName).forEach(g=>{
-      (g.enemyPicks||[]).forEach(s=>{if(s.hero?.name)rivalPicks[s.hero.name]=(rivalPicks[s.hero.name]||0)+1;});
-    });
-    const topRivalPicks=Object.entries(rivalPicks).sort((a,b)=>b[1]-a[1]).slice(0,8).map(([h,c])=>`${h}(${c}x)`);
-
-    return { topSynergy, topCounter, topBans, topRivalPicks };
-  }
-
-  async function askAI() {
-    if (loading) return;
-    setLoading(true);
-    setAiResponse("");
-
-    const ctx = buildContext();
-    const currentOurPicks  = ourPicks.filter(s=>s.hero).map(s=>s.hero.name);
-    const currentEnemyPicks= enemyPicks.filter(s=>s.hero).map(s=>s.hero.name);
-    const currentOurBans   = ourBans.filter(Boolean).map(h=>h.name);
-    const currentEnemyBans = enemyBans.filter(Boolean).map(h=>h.name);
-    const extraEnemyHeroes = enemyHeroes;
-
-    const prompt = `คุณคือ Coach ผู้เชี่ยวชาญ RoV ช่วยวิเคราะห์สถานการณ์ Draft ปัจจุบัน
-
-=== ข้อมูลจากประวัติการซ้อมของทีม ===
-Synergy คู่ที่ชนะบ่อย (เราใช้): ${ctx.topSynergy.map(s=>`${s.pair} WR${s.wr}%`).join(", ")||"ยังไม่มีข้อมูล"}
-Counter Hero ที่ได้ผล (เรา vs คู่แข่ง): ${ctx.topCounter.map(c=>`${c.pair} WR${c.wr}%`).join(", ")||"ยังไม่มีข้อมูล"}
-Hero ที่เราแบนบ่อย: ${ctx.topBans.join(", ")||"ยังไม่มี"}
-Hero ที่ ${rivalName} ชอบ Pick: ${ctx.topRivalPicks.join(", ")||"ยังไม่มี"}
-
-=== สถานการณ์ Draft ปัจจุบัน ===
-ฝั่งเรา: ${ourSide==="blue"?"🔵 Blue":"🔴 Red"} Side
-เราแบนแล้ว: ${currentOurBans.join(", ")||"ยังไม่มี"}
-คู่แข่งแบนแล้ว: ${currentEnemyBans.join(", ")||"ยังไม่มี"}
-เรา Pick แล้ว: ${currentOurPicks.join(", ")||"ยังไม่มี"}
-คู่แข่ง Pick แล้ว: ${currentEnemyPicks.join(", ")||"ยังไม่มี"}
-${extraEnemyHeroes.length>0?`Hero ที่เห็นว่าคู่แข่งน่าจะออก: ${extraEnemyHeroes.join(", ")}`:""}
-
-=== คำถาม ===
-${mode==="suggest"
-  ? "แนะนำว่าควร Ban อะไรต่อ และ Pick อะไรดี อธิบายเหตุผลจากสถิติจริงที่ให้มา"
-  : "คู่แข่งมี Hero เหล่านี้ในมือ — เราควร Pick อะไร Counter และควร Ban อะไรเพื่อตัด Combo ของเขา"}
-
-ตอบเป็นภาษาไทย กระชับ ชัดเจน แบ่งเป็นข้อ ไม่เกิน 150 คำ`;
-
-    try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({
-          model:"claude-sonnet-4-6",
-          max_tokens:400,
-          messages:[{role:"user",content:prompt}]
-        })
-      });
-      const data = await res.json();
-      setAiResponse(data.content?.[0]?.text || "ไม่สามารถวิเคราะห์ได้");
-    } catch {
-      setAiResponse("❌ เชื่อมต่อ AI ไม่ได้ กรุณาลองใหม่");
-    }
-    setLoading(false);
-  }
-
-  function addEnemyHero() {
-    const h = heroInput.trim();
-    if (!h || enemyHeroes.includes(h)) return;
-    setEnemyHeroes(prev=>[...prev, h]);
-    setHeroInput("");
-  }
-
-  return (
-    <div style={{marginTop:10,background:C.bgPanel,border:`1px solid ${C.primary}40`,
-      borderRadius:14,overflow:"hidden"}}>
-      {/* toggle header */}
-      <button onClick={()=>setOpen(v=>!v)}
-        style={{width:"100%",background:open?C.primary+"25":"#0d0b1e",
-          border:"none",padding:"10px 16px",cursor:"pointer",
-          display:"flex",alignItems:"center",gap:8,color:C.textMain}}>
-        <span style={{fontSize:16}}>🧠</span>
-        <span style={{fontWeight:800,fontSize:13,color:C.primaryLight}}>AI Draft Assistant</span>
-        <span style={{fontSize:10,color:C.textMuted,background:C.primary+"20",
-          padding:"1px 8px",borderRadius:99}}>Claude</span>
-        <span style={{marginLeft:"auto",color:C.textMuted,fontSize:12}}>{open?"▲":"▼"}</span>
-      </button>
-
-      {open && (
-        <div style={{padding:"12px 16px"}}>
-          {/* mode */}
-          <div style={{display:"flex",gap:6,marginBottom:10}}>
-            {[{id:"suggest",label:"💡 แนะนำ Ban/Pick"},
-              {id:"counter",label:"⚔️ Counter Hero คู่แข่ง"}].map(m=>(
-              <button key={m.id} onClick={()=>setMode(m.id)} style={{
-                background:mode===m.id?C.primary+"30":"transparent",
-                border:`1px solid ${mode===m.id?C.primary:C.border}`,
-                color:mode===m.id?C.primaryLight:C.textMuted,
-                borderRadius:7,padding:"4px 12px",cursor:"pointer",fontWeight:700,fontSize:11}}>
-                {m.label}
-              </button>
-            ))}
-          </div>
-
-          {/* enemy hero input */}
-          <div style={{marginBottom:10}}>
-            <div style={{fontSize:10,color:C.textMuted,marginBottom:5,fontWeight:700}}>
-              Hero ที่คาดว่าคู่แข่งจะออก (พิมพ์เพิ่มได้)
-            </div>
-            <div style={{display:"flex",gap:6,marginBottom:6}}>
-              <input value={heroInput} onChange={e=>setHeroInput(e.target.value)}
-                onKeyDown={e=>e.key==="Enter"&&addEnemyHero()}
-                placeholder="เช่น Florentino, Keera..."
-                style={{...iStyle,flex:1,padding:"5px 10px",fontSize:12}}/>
-              <button onClick={addEnemyHero}
-                style={{background:C.primary,color:"#fff",border:"none",
-                  borderRadius:7,padding:"0 12px",cursor:"pointer",fontSize:12,fontWeight:700}}>
-                + เพิ่ม
-              </button>
-            </div>
-            <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
-              {enemyHeroes.map(h=>(
-                <span key={h} style={{background:C.lose+"20",color:C.lose,
-                  fontSize:11,padding:"2px 10px",borderRadius:99,fontWeight:700,
-                  cursor:"pointer",display:"flex",alignItems:"center",gap:4}}
-                  onClick={()=>setEnemyHeroes(prev=>prev.filter(x=>x!==h))}>
-                  {h} <span style={{opacity:.7}}>✕</span>
-                </span>
-              ))}
-            </div>
-          </div>
-
-          {/* ask button */}
-          <button onClick={askAI} disabled={loading}
-            style={{width:"100%",background:loading?"#2a2550":`linear-gradient(135deg,${C.primary},${C.primaryLight})`,
-              color:"#fff",border:"none",borderRadius:9,padding:"9px 0",
-              cursor:loading?"not-allowed":"pointer",fontWeight:800,fontSize:13,marginBottom:10}}>
-            {loading?"🧠 กำลังวิเคราะห์...":"🧠 วิเคราะห์ Draft ตอนนี้"}
-          </button>
-
-          {/* response */}
-          {aiResponse && (
-            <div style={{background:C.primary+"10",border:`1px solid ${C.primary}30`,
-              borderRadius:10,padding:"12px 14px",fontSize:12,color:C.textMain,lineHeight:1.7,
-              whiteSpace:"pre-wrap"}}>
-              {aiResponse}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
 
 // ═══════════════════════════════════════════
 //  TACTICAL WHITEBOARD (merged module)
@@ -4094,7 +3888,7 @@ const TAGS = ["drill","review","scrim","tutorial","highlight"];
 function getVideoInfo(url) {
   try {
     const u = url.trim();
-    const ytMatch = u.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/);
+    const ytMatch = u.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/live\/)([a-zA-Z0-9_-]{11})/);
     if (ytMatch) return { type:"youtube", id:ytMatch[1] };
     if (u.startsWith("blob:") || /\.(mp4|webm|mov|avi|mkv)$/i.test(u)) return { type:"video", url:u };
     if (u.startsWith("http")) return { type:"iframe", url:u };
@@ -4491,8 +4285,8 @@ const APP_INIT = {
   enemyRosters: null,
 };
 
-// ── Database (window.storage) helpers ──
-const STORAGE_KEY = "rov-app-data";
+// ── App state defaults (actual load/save now goes through lib/storage.js,
+//    which talks to the real Postgres-backed /api/data route) ──
 
 function defaultAppState() {
   return {
@@ -4511,29 +4305,6 @@ function defaultAppState() {
 function initAppState() {
   // sync default — actual data is hydrated async via loadFromStorage()
   return { ...defaultAppState(), _loaded: false };
-}
-
-async function loadFromStorage() {
-  try {
-    const result = await window.storage.get(STORAGE_KEY, false);
-    if (result && result.value) {
-      const parsed = JSON.parse(result.value);
-      return { ...defaultAppState(), ...parsed, _loaded: true };
-    }
-  } catch {
-    // key doesn't exist yet (first time user) — fall through to default
-  }
-  return { ...defaultAppState(), _loaded: true };
-}
-
-async function saveToStorage(appState) {
-  try {
-    const { _loaded, _saving, ...dataToSave } = appState;
-    const result = await window.storage.set(STORAGE_KEY, JSON.stringify(dataToSave), false);
-    if (!result) console.error("Storage save returned null");
-  } catch (err) {
-    console.error("Storage save failed:", err);
-  }
 }
 
 function appReducer(state, action) {
@@ -4779,14 +4550,18 @@ function draftReducer(state, action) {
     case "SET_META":        return { ...state, meta: { ...state.meta, ...action.payload } };
 
     case "GAME_DONE": {
-      // เกมสุดท้ายของ BO จะถูก intercept ที่ handleGameDone() ก่อน dispatch
-      // ดังนั้น case นี้จะทำงานเฉพาะเกมที่ยังไม่ใช่เกมสุดท้ายเท่านั้น
+      // Note: when this was the LAST game of the BO series, the component
+      // intercepts handleGameDone() and calls onFinishSession() directly
+      // instead of dispatching here — see DraftPageR.handleGameDone().
+      // This reducer case only ever runs for non-final games now, so it
+      // always advances to the next game.
       const newGames = [...state.completedGames, { ...action.payload, gameNo: state.currentGame }];
       return {
         ...state,
         completedGames: newGames,
         currentGame: state.currentGame + 1,
         stage: "chooseSide",
+        // reset board for next game
         step: 0,
         blueBans:  Array(4).fill(null),
         redBans:   Array(4).fill(null),
@@ -4806,7 +4581,8 @@ function draftReducer(state, action) {
 // ═══════════════════════════════════════════
 //  MAIN APP
 // ═══════════════════════════════════════════
-export default function App() {
+export default function RovApp() {
+  const { data: session } = useSession();
   const [app,  dispatchApp]  = useReducer(appReducer,  null, initAppState);
   const [ui,   dispatchUI]   = useReducer(uiReducer,   null, initUIState);
   const [draft, dispatchDraft]= useReducer(draftReducer, null, initDraftState);
@@ -5001,6 +4777,19 @@ export default function App() {
             {n.icon} {n.label}
           </button>
         ))}
+        {session?.user && (
+          <div style={{display:"flex",alignItems:"center",gap:8,marginLeft:14,paddingLeft:14,
+            borderLeft:`1px solid ${C.border}`}}>
+            <span style={{fontSize:11,color:C.textMuted}}>
+              {session.user.name || session.user.email}
+            </span>
+            <button onClick={()=>signOut({ callbackUrl: "/login" })}
+              style={{background:"transparent",border:`1px solid ${C.border}`,color:C.textMuted,
+                borderRadius:7,padding:"4px 10px",cursor:"pointer",fontSize:11,fontWeight:600}}>
+              ออกจากระบบ
+            </button>
+          </div>
+        )}
       </div>
 
       {/* ── DRAFT PAGE ── */}
@@ -5757,11 +5546,16 @@ function DraftPageR({ draft, dispatch, roster, rivals, enemyRosters, onFinishSes
       gameStats:{ our:{}, enemy:{} },
       gameNo: currentGame,
     };
-    // ถ้าครบ BO แล้ว → save ทันที ไม่รอกดปุ่ม Finish
+
+    // If this was the last game in the BO series, save the whole match
+    // immediately instead of relying on the user to notice and press the
+    // separate "Finish" button — that button doesn't even exist once the
+    // reducer's "done" stage is reached, leaving the match unsaved.
     if (currentGame >= bo.total) {
       onFinishSession([...completedGames, finishedGame]);
       return;
     }
+
     dispatch({ type:"GAME_DONE", payload: finishedGame });
   }
 
