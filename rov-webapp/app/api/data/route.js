@@ -3,29 +3,42 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
-const SINGLETON_ID = "singleton";
+async function getTeamId(session) {
+  const user = await prisma.user.findUnique({
+    where: { email: session.user.email },
+    select: { teamId: true }
+  });
+  return user?.teamId;
+}
 
-// GET: load the team's shared data (creates the row with defaults if it
-// doesn't exist yet — handles the very first load after deploy).
 export async function GET() {
   const session = await getServerSession(authOptions);
   if (!session) return NextResponse.json({ error: "ไม่ได้ login" }, { status: 401 });
 
+  const teamId = await getTeamId(session);
+  if (!teamId) return NextResponse.json({ error: "ยังไม่ได้เข้าทีม" }, { status: 403 });
+
   const data = await prisma.teamData.upsert({
-    where: { id: SINGLETON_ID },
+    where: { teamId },
     update: {},
-    create: { id: SINGLETON_ID },
+    create: { teamId },
   });
 
-  return NextResponse.json(data);
+  // ส่ง team info ไปด้วยเพื่อให้แอปแสดงชื่อทีมและ invite code
+  const team = await prisma.team.findUnique({
+    where: { id: teamId },
+    select: { name: true, inviteCode: true }
+  });
+
+  return NextResponse.json({ ...data, teamName: team?.name, inviteCode: team?.inviteCode });
 }
 
-// PUT: save the team's shared data. Body is the same shape the client
-// already keeps in its `app` reducer state, so the client can send it
-// almost as-is (see lib/saveTeamData.js on the client side).
 export async function PUT(req) {
   const session = await getServerSession(authOptions);
   if (!session) return NextResponse.json({ error: "ไม่ได้ login" }, { status: 401 });
+
+  const teamId = await getTeamId(session);
+  if (!teamId) return NextResponse.json({ error: "ยังไม่ได้เข้าทีม" }, { status: 403 });
 
   try {
     const body = await req.json();
@@ -35,14 +48,14 @@ export async function PUT(req) {
     } = body;
 
     const updated = await prisma.teamData.upsert({
-      where: { id: SINGLETON_ID },
+      where: { teamId },
       update: {
         matches, rivals, roster, enemyRosters, scoutMatches,
         playerPhotos, heroPhotos, customHeroes, roleOverrides,
         updatedBy: session.user.email,
       },
       create: {
-        id: SINGLETON_ID,
+        teamId,
         matches, rivals, roster, enemyRosters, scoutMatches,
         playerPhotos, heroPhotos, customHeroes, roleOverrides,
         updatedBy: session.user.email,

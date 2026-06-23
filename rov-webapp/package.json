@@ -19,9 +19,9 @@
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
-    "@types/bcryptjs": "^2.4.6",
+    "prisma": "^5.20.0",
     "@types/node": "^20",
     "@types/react": "^18",
-    "prisma": "^5.20.0"
+    "@types/bcryptjs": "^2.4.6"
   }
 }

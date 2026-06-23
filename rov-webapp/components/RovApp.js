@@ -3908,7 +3908,6 @@ function VideoEmbed({ src, title }) {
     </div>
   );
 
-  // YouTube fallback card — shown when embed is blocked (private/unlisted with embedding disabled)
   const YouTubeFallback = ({ url }) => (
     <div style={{width:"100%",aspectRatio:"16/9",background:"#0f0f0f",
       borderRadius:8,display:"flex",flexDirection:"column",
@@ -4805,6 +4804,21 @@ export default function RovApp() {
         {session?.user && (
           <div style={{display:"flex",alignItems:"center",gap:8,marginLeft:14,paddingLeft:14,
             borderLeft:`1px solid ${C.border}`}}>
+            {session.user.teamName && (
+              <span style={{fontSize:11,color:C.primaryLight,fontWeight:700}}>
+                🏆 {session.user.teamName}
+              </span>
+            )}
+            {session.user.inviteCode && (
+              <span
+                title="คลิกเพื่อคัดลอก Invite Code"
+                onClick={()=>{navigator.clipboard.writeText(session.user.inviteCode);alert(`คัดลอก Invite Code แล้ว: ${session.user.inviteCode}`);}}
+                style={{fontSize:10,color:C.textMuted,background:C.bgPanel,
+                  border:`1px solid ${C.border}`,borderRadius:6,padding:"2px 8px",
+                  cursor:"pointer",fontFamily:"monospace"}}>
+                🔑 {session.user.inviteCode}
+              </span>
+            )}
             <span style={{fontSize:11,color:C.textMuted}}>
               {session.user.name || session.user.email}
             </span>
