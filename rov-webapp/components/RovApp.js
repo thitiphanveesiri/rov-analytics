@@ -3897,7 +3897,9 @@ function getVideoInfo(url) {
 }
 
 function VideoEmbed({ src, title }) {
+  const [embedFailed, setEmbedFailed] = useState(false);
   const info = getVideoInfo(src);
+
   if (!info) return (
     <div style={{width:"100%",aspectRatio:"16/9",background:"#080614",
       borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",
@@ -3905,12 +3907,35 @@ function VideoEmbed({ src, title }) {
       ❌ URL ไม่ถูกต้อง
     </div>
   );
-  if (info.type==="youtube") return (
-    <iframe
-      style={{width:"100%",aspectRatio:"16/9",border:"none",borderRadius:8}}
-      src={`https://www.youtube.com/embed/${info.id}?rel=0`}
-      title={title} allowFullScreen/>
+
+  // YouTube fallback card — shown when embed is blocked (private/unlisted with embedding disabled)
+  const YouTubeFallback = ({ url }) => (
+    <div style={{width:"100%",aspectRatio:"16/9",background:"#0f0f0f",
+      borderRadius:8,display:"flex",flexDirection:"column",
+      alignItems:"center",justifyContent:"center",gap:14}}>
+      <div style={{fontSize:36}}>▶️</div>
+      <div style={{fontSize:13,color:C.textMuted,textAlign:"center",padding:"0 20px"}}>
+        วิดีโอนี้ไม่อนุญาตให้ embed — คลิกเพื่อเปิดใน YouTube
+      </div>
+      <a href={url} target="_blank" rel="noopener noreferrer"
+        style={{background:"#ff0000",color:"#fff",borderRadius:8,
+          padding:"9px 22px",fontWeight:700,fontSize:13,
+          textDecoration:"none",display:"flex",alignItems:"center",gap:8}}>
+        🔗 เปิดใน YouTube
+      </a>
+    </div>
   );
+
+  if (info.type==="youtube") {
+    if (embedFailed) return <YouTubeFallback url={src}/>;
+    return (
+      <iframe
+        style={{width:"100%",aspectRatio:"16/9",border:"none",borderRadius:8}}
+        src={`https://www.youtube.com/embed/${info.id}?rel=0`}
+        title={title} allowFullScreen
+        onError={()=>setEmbedFailed(true)}/>
+    );
+  }
   if (info.type==="video") return (
     <video controls style={{width:"100%",aspectRatio:"16/9",borderRadius:8,background:"#000"}}>
       <source src={src}/>
