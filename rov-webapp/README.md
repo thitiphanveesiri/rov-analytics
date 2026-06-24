@@ -128,9 +128,3 @@ npm run dev
 
 ---
 
-## หมายเหตุสำคัญ
-
-- **รูปภาพ (นักกีฬา/Hero)** ตอนนี้ยังเก็บเป็น base64 string ใน Postgres เหมือนระบบเดิม ใช้งานได้ปกติแต่ถ้าทีมอัพโหลดรูปเยอะมากในระยะยาว แนะนำให้ย้ายไปใช้ [Vercel Blob](https://vercel.com/docs/storage/vercel-blob) แทน (เก็บแค่ URL ใน database แทนตัวรูปเอง) — บอกได้ถ้าอยากให้ช่วยทำเพิ่ม
-- **AI Draft Assistant** ของเดิมที่เรียก Claude API ผ่าน Artifact proxy ถูกถอดออกแล้ว เพราะใช้นอก Claude.ai ไม่ได้ ถ้าต้องการฟีเจอร์แบบนี้ในเว็บจริง ต้องเพิ่ม Anthropic API key ของตัวเองในฝั่ง server (`app/api/...`) แล้วเรียกผ่าน backend แทน — เป็นงานแยกที่ทำเพิ่มได้
-- **Liquipedia / external pro-meta data** ยังไม่ได้ทำ เหมือนเดิม
-- ทุกคนใน Database ตอนนี้เห็นข้อมูล**เดียวกันหมด** (shared, ไม่มี role/สิทธิ์แยก) ถ้าอยากเพิ่ม role (เช่น Coach แก้ได้ แต่ผู้เล่นดูได้อย่างเดียว) แจ้งได้ จะเพิ่ม role field ใน User model ให้
