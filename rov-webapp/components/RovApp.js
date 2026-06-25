@@ -3194,22 +3194,39 @@ const SIZES  = [2, 4, 8, 14];
 // ═══════════════════════════════════════════
 function HeroAvatar({ name, team, size=40, style={} }) {
   const col = TEAM_COLORS[team] || TEAM_COLORS.our;
+  const hero = HERO_DATA.find(h=>h.name===name);
+  const imgUrl = useHeroImage(hero);
+  const [imgErr, setImgErr] = useState(false);
   return (
     <div style={{
       width:size, height:size, borderRadius:"50%",
       background:col+"30", border:`2.5px solid ${col}`,
-      display:"flex", flexDirection:"column",
+      display:"flex", flexDirection:"column", overflow:"hidden",
       alignItems:"center", justifyContent:"center",
       fontSize:size*0.28, fontWeight:900, color:col,
-      userSelect:"none", flexShrink:0,
+      userSelect:"none", flexShrink:0, position:"relative",
       ...style,
     }}>
-      <div style={{lineHeight:1}}>{name.charAt(0)}</div>
-      <div style={{fontSize:size*0.18,fontWeight:700,color:col+"cc",lineHeight:1,
-        maxWidth:size-4,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",
-        textAlign:"center"}}>
-        {name.length>6?name.slice(0,5)+"…":name}
-      </div>
+      {imgUrl && !imgErr ? (
+        <>
+          <img src={imgUrl} onError={()=>setImgErr(true)} alt={name}
+            style={{width:"100%",height:"100%",objectFit:"cover",position:"absolute",top:0,left:0}}/>
+          <div style={{position:"absolute",bottom:0,left:0,right:0,background:"rgba(0,0,0,0.55)",
+            fontSize:size*0.16,fontWeight:700,color:"#fff",textAlign:"center",
+            padding:"1px 2px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+            {name.length>6?name.slice(0,5)+"…":name}
+          </div>
+        </>
+      ) : (
+        <>
+          <div style={{lineHeight:1}}>{name.charAt(0)}</div>
+          <div style={{fontSize:size*0.18,fontWeight:700,color:col+"cc",lineHeight:1,
+            maxWidth:size-4,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",
+            textAlign:"center"}}>
+            {name.length>6?name.slice(0,5)+"…":name}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -3330,18 +3347,41 @@ function TacticalWhiteboard() {
         // draw circle with letter
         const col = TEAM_COLORS[el.team] || TEAM_COLORS.our;
         const r   = el.r || 22;
-        ctx.fillStyle   = col+"40";
-        ctx.strokeStyle = col;
         ctx.lineWidth   = isSel ? 3 : 2;
-        ctx.beginPath(); ctx.arc(el.x, el.y, r, 0, Math.PI*2); ctx.fill(); ctx.stroke();
-        ctx.fillStyle   = col;
-        ctx.font        = `bold ${r*0.55}px 'Segoe UI', sans-serif`;
-        ctx.textAlign   = "center";
-        ctx.textBaseline= "middle";
-        ctx.fillText(el.name.charAt(0), el.x, el.y-4);
-        ctx.font        = `${r*0.35}px 'Segoe UI', sans-serif`;
+        const heroObj = HERO_DATA.find(h=>h.name===el.name);
+        const cachedUrl = heroObj ? (HERO_IMG_CACHE[el.name] || null) : null;
+        ctx.save();
+        ctx.beginPath(); ctx.arc(el.x, el.y, r, 0, Math.PI*2); ctx.clip();
+        if (cachedUrl) {
+          const img = new Image();
+          img.src = cachedUrl;
+          if (img.complete && img.naturalWidth > 0) {
+            ctx.drawImage(img, el.x-r, el.y-r, r*2, r*2);
+          } else {
+            ctx.fillStyle = col+"40"; ctx.fill();
+            ctx.fillStyle = col;
+            ctx.font = `bold ${r*0.55}px 'Segoe UI', sans-serif`;
+            ctx.textAlign = "center"; ctx.textBaseline = "middle";
+            ctx.fillText(el.name.charAt(0), el.x, el.y-4);
+          }
+        } else {
+          ctx.fillStyle = col+"40"; ctx.fill();
+          ctx.fillStyle = col;
+          ctx.font = `bold ${r*0.55}px 'Segoe UI', sans-serif`;
+          ctx.textAlign = "center"; ctx.textBaseline = "middle";
+          ctx.fillText(el.name.charAt(0), el.x, el.y-4);
+        }
+        ctx.restore();
+        ctx.strokeStyle = col;
+        ctx.lineWidth = isSel ? 3 : 2;
+        ctx.beginPath(); ctx.arc(el.x, el.y, r, 0, Math.PI*2); ctx.stroke();
+        ctx.fillStyle = "rgba(0,0,0,0.6)";
+        ctx.fillRect(el.x-r, el.y+r*0.55, r*2, r*0.55);
+        ctx.fillStyle = col;
+        ctx.font = `${r*0.32}px 'Segoe UI', sans-serif`;
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
         const short = el.name.length>5 ? el.name.slice(0,5)+"…" : el.name;
-        ctx.fillText(short, el.x, el.y+r*0.45);
+        ctx.fillText(short, el.x, el.y+r*0.82);
         ctx.textAlign = "left";
       }
       ctx.restore();
@@ -3565,7 +3605,7 @@ function TacticalWhiteboard() {
     e.target.value="";
   }
 
-  const filteredHeroes = HERO_LIST.filter(h=>h.toLowerCase().includes(heroSearch.toLowerCase()));
+  const filteredHeroes = HERO_DATA.filter(h=>h.name.toLowerCase().includes(heroSearch.toLowerCase()));
 
   return (
     <div style={{height:"calc(100vh - 114px)",background:C.bg,color:C.textMain,
@@ -3815,17 +3855,17 @@ function TacticalWhiteboard() {
                 borderRadius:8,padding:"7px 12px",fontSize:13,outline:"none",marginBottom:10}}/>
             <div style={{overflowY:"auto",display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6}}>
               {filteredHeroes.map(h=>(
-                <button key={h} onClick={()=>placeHero(h)}
+                <button key={h.name} onClick={()=>placeHero(h.name)}
                   style={{background:C.card,border:`1px solid ${C.border}`,
                     color:C.textMain,borderRadius:8,padding:"8px 4px",cursor:"pointer",
                     fontSize:11,fontWeight:700,textAlign:"center",
                     display:"flex",flexDirection:"column",alignItems:"center",gap:4}}
                   onMouseEnter={e=>e.currentTarget.style.borderColor=TEAM_COLORS[heroTeam]}
                   onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
-                  <HeroAvatar name={h} team={heroTeam} size={36}/>
+                  <HeroAvatar name={h.name} team={heroTeam} size={36}/>
                   <span style={{fontSize:9,lineHeight:1.2,overflow:"hidden",
                     textOverflow:"ellipsis",whiteSpace:"nowrap",width:"100%",
-                    textAlign:"center"}}>{h}</span>
+                    textAlign:"center"}}>{h.name}</span>
                 </button>
               ))}
             </div>
