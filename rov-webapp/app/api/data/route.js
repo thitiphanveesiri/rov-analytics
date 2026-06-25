@@ -44,20 +44,20 @@ export async function PUT(req) {
     const body = await req.json();
     const {
       matches, rivals, roster, enemyRosters, scoutMatches,
-      playerPhotos, heroPhotos, customHeroes, roleOverrides,
+      playerPhotos, heroPhotos, customHeroes, roleOverrides, videos,
     } = body;
 
     const updated = await prisma.teamData.upsert({
       where: { teamId },
       update: {
         matches, rivals, roster, enemyRosters, scoutMatches,
-        playerPhotos, heroPhotos, customHeroes, roleOverrides,
+        playerPhotos, heroPhotos, customHeroes, roleOverrides, videos,
         updatedBy: session.user.email,
       },
       create: {
         teamId,
         matches, rivals, roster, enemyRosters, scoutMatches,
-        playerPhotos, heroPhotos, customHeroes, roleOverrides,
+        playerPhotos, heroPhotos, customHeroes, roleOverrides, videos,
         updatedBy: session.user.email,
       },
     });

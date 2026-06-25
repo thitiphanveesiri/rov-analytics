@@ -568,7 +568,7 @@ function SingleGameDetail({ g, gameNo, onUpdateStats, playerPhotos={}, rivalName
 // ═══════════════════════════════════════════
 //  MATCH CARD (Match Log page)
 // ═══════════════════════════════════════════
-function MatchCardWithStats({ m, onUpdateStats, playerPhotos={} }) {
+function MatchCardWithStats({ m, onUpdateStats, playerPhotos={}, onDelete }) {
   const [open, setOpen] = useState(false);
   const isBO  = Array.isArray(m.games) && m.games.length > 0;
   const wins  = isBO ? m.games.filter(g=>g.result==="WIN").length : (m.result==="WIN"?1:0);
@@ -629,6 +629,18 @@ function MatchCardWithStats({ m, onUpdateStats, playerPhotos={} }) {
             </span>
           )}
           {isBO && <span style={{fontSize:12,color:bc,fontWeight:700}}>{wins}W – {total-wins}L</span>}
+          {onDelete && (
+            <button onClick={e=>{
+              e.stopPropagation();
+              if(window.confirm(`ลบแมตช์ vs ${m.rivalName} (${m.date}) ออกไหม?\nไม่สามารถย้อนคืนได้`))
+                onDelete(m.id);
+            }}
+              style={{background:C.lose+"20",border:`1px solid ${C.lose}40`,color:C.lose,
+                borderRadius:7,padding:"3px 10px",cursor:"pointer",fontSize:11,
+                fontWeight:700,flexShrink:0}}>
+              🗑️ ลบ
+            </button>
+          )}
           <span style={{color:C.textMuted,fontSize:14}}>{open?"▲":"▼"}</span>
         </div>
       </div>
@@ -4054,8 +4066,7 @@ function VideoCard({ v, onDelete, onEdit }) {
   );
 }
 
-function VideoLibrary() {
-  const [videos,      setVideos]      = useState([]);
+function VideoLibrary({ videos=[], onAddVideo, onUpdateVideo, onDeleteVideo }) {
   const [showAdd,     setShowAdd]     = useState(false);
   const [filterTag,   setFilterTag]   = useState("all");
   const [filterRival, setFilterRival] = useState("");
@@ -4069,11 +4080,7 @@ function VideoLibrary() {
   function addVideo() {
     if (!form.title.trim()) { alert("กรุณากรอกชื่อวิดีโอ"); return; }
     if (!form.url.trim())   { alert("กรุณาใส่ URL หรืออัพโหลดไฟล์"); return; }
-    const today = new Date().toLocaleDateString("th-TH",{day:"numeric",month:"short",year:"numeric"});
-    setVideos(prev=>[{
-      id:Date.now(), ...form,
-      date: form.date || today,
-    }, ...prev]);
+    onAddVideo && onAddVideo({ ...form });
     setForm({title:"",url:"",rival:"",date:"",tags:[],note:"",type:"link"});
     setShowAdd(false);
   }
@@ -4286,8 +4293,8 @@ function VideoLibrary() {
           <div style={{display:"flex",flexDirection:"column",gap:10}}>
             {filtered.map(v=>(
               <VideoCard key={v.id} v={v}
-                onDelete={()=>setVideos(prev=>prev.filter(x=>x.id!==v.id))}
-                onEdit={updated=>setVideos(prev=>prev.map(x=>x.id===v.id?{...x,...updated}:x))}
+                onDelete={()=>onDeleteVideo && onDeleteVideo(v.id)}
+                onEdit={updated=>onUpdateVideo && onUpdateVideo({id:v.id,...updated})}
               />
             ))}
           </div>
@@ -4322,7 +4329,8 @@ function defaultAppState() {
     playerPhotos:  {}, // { "our:Name": dataURL|URL, "enemy:Team:Name": dataURL|URL }
     heroPhotos:    {}, // { "HeroName": dataURL } — user-uploaded hero images, overrides web lookup
     customHeroes:  [], // [{name, role, img}] — heroes added by the user (future patches/new releases)
-    roleOverrides: {}, // { "HeroName": "Role" } — role edits for ANY hero (built-in or custom)
+    roleOverrides: {},
+    videos:        [], // { id, title, url, rival, date, tags, note, type }
   };
 }
 
@@ -4345,6 +4353,21 @@ function appReducer(state, action) {
         : [...state.rivals, { id: Date.now()+1, name: action.payload.rivalName }];
       return { ...state, matches: [m, ...state.matches], rivals };
     }
+
+    case "DELETE_MATCH":
+      return { ...state, matches: state.matches.filter(m => m.id !== action.payload) };
+
+    case "ADD_VIDEO": {
+      const today = new Date().toLocaleDateString("th-TH",{day:"numeric",month:"short",year:"numeric"});
+      const v = { id: Date.now(), date: action.payload.date || today, ...action.payload };
+      return { ...state, videos: [v, ...state.videos] };
+    }
+
+    case "UPDATE_VIDEO":
+      return { ...state, videos: state.videos.map(v => v.id===action.payload.id ? { ...v, ...action.payload } : v) };
+
+    case "DELETE_VIDEO":
+      return { ...state, videos: state.videos.filter(v => v.id !== action.payload) };
 
     case "UPDATE_STATS": {
       const { matchId, gameIdx, gameStats } = action.payload;
@@ -5010,7 +5033,7 @@ export default function RovApp() {
                     ยังไม่มีประวัติ — บันทึกแมตช์จาก Live Draft ก่อน
                   </div>
                 :matches.map(m=>(
-                    <MatchCardWithStats key={m.id} m={m} onUpdateStats={handleUpdateStats} playerPhotos={app.playerPhotos}/>
+                    <MatchCardWithStats key={m.id} m={m} onUpdateStats={handleUpdateStats} playerPhotos={app.playerPhotos} onDelete={id=>dispatchApp({type:"DELETE_MATCH",payload:id})}/>
                   ))
               }
             </div>
@@ -5193,7 +5216,7 @@ export default function RovApp() {
                         />
                       )}
                       {rivalView==="history" && rm.map(m=>(
-                        <MatchCardWithStats key={m.id} m={m} onUpdateStats={handleUpdateStats} playerPhotos={app.playerPhotos}/>
+                        <MatchCardWithStats key={m.id} m={m} onUpdateStats={handleUpdateStats} playerPhotos={app.playerPhotos} onDelete={id=>dispatchApp({type:"DELETE_MATCH",payload:id})}/>
                       ))}
                       {rivalView==="overview" && (
                         <div>
@@ -5274,7 +5297,14 @@ export default function RovApp() {
           )}
 
           {/* ═══ VIDEO LIBRARY ═══ */}
-          {page==="video" && <VideoLibrary/>}
+          {page==="video" && (
+            <VideoLibrary
+              videos={app.videos||[]}
+              onAddVideo={v=>dispatchApp({type:"ADD_VIDEO",payload:v})}
+              onUpdateVideo={v=>dispatchApp({type:"UPDATE_VIDEO",payload:v})}
+              onDeleteVideo={id=>dispatchApp({type:"DELETE_VIDEO",payload:id})}
+            />
+          )}
 
           {/* ═══ HERO IMAGES ═══ */}
           {page==="heroimg" && (

@@ -17,6 +17,7 @@ export async function loadFromStorage() {
       heroPhotos:    data.heroPhotos    ?? {},
       customHeroes:  data.customHeroes  ?? [],
       roleOverrides: data.roleOverrides ?? {},
+      videos:        data.videos        ?? [],
       _loaded: true,
     };
   } catch (err) {

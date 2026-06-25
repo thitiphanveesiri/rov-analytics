@@ -46,6 +46,7 @@ model TeamData {
   heroPhotos    Json     @default("{}")
   customHeroes  Json     @default("[]")
   roleOverrides Json     @default("{}")
+  videos        Json     @default("[]")
   updatedAt     DateTime @updatedAt
   updatedBy     String?
 }
