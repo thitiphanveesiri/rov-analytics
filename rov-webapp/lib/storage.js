@@ -1,50 +1,51 @@
-// Drop-in replacements for the loadFromStorage()/saveToStorage() functions
-// that the original artifact used with window.storage. Same shape in,
-// same shape out — only the transport changed (window.storage → fetch).
+// Storage layer: load/save team data via the /api/data API route.
+// Replaces the original window.storage calls from the Claude.ai artifact.
+
+const FIELDS = [
+  "matches","rivals","roster","enemyRosters","scoutMatches",
+  "playerPhotos","heroPhotos","customHeroes","roleOverrides","videos",
+];
+
+const FALLBACK = {
+  matches:[], rivals:[], roster:["Player 1","Player 2"],
+  enemyRosters:{}, scoutMatches:[], playerPhotos:{}, heroPhotos:{},
+  customHeroes:[], roleOverrides:{}, videos:[], _loaded:true,
+};
 
 export async function loadFromStorage() {
   try {
     const res = await fetch("/api/data");
-    if (!res.ok) throw new Error("Failed to load");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    return {
-      matches:       data.matches       ?? [],
-      rivals:        data.rivals        ?? [],
-      roster:        data.roster        ?? ["Player 1", "Player 2"],
-      enemyRosters:  data.enemyRosters  ?? {},
-      scoutMatches:  data.scoutMatches  ?? [],
-      playerPhotos:  data.playerPhotos  ?? {},
-      heroPhotos:    data.heroPhotos    ?? {},
-      customHeroes:  data.customHeroes  ?? [],
-      roleOverrides: data.roleOverrides ?? {},
-      videos:        data.videos        ?? [],
-      _loaded: true,
-    };
+    // Build state from DB data, falling back to safe defaults per field
+    const state = { _loaded: true };
+    FIELDS.forEach(f => { state[f] = data[f] ?? FALLBACK[f]; });
+    return state;
   } catch (err) {
     console.error("loadFromStorage failed:", err);
-    // fall back to empty defaults so the app still renders something
-    // instead of hanging on the loading screen forever
-    return {
-      matches: [], rivals: [], roster: ["Player 1", "Player 2"],
-      enemyRosters: {}, scoutMatches: [], playerPhotos: {}, heroPhotos: {},
-      customHeroes: [], roleOverrides: {}, _loaded: true,
-    };
+    return { ...FALLBACK };
   }
 }
 
 export async function saveToStorage(appState) {
   try {
-    const { _loaded, _saving, ...dataToSave } = appState;
+    // Only send the fields that belong in the DB — strip all React/internal state
+    const payload = {};
+    FIELDS.forEach(f => { payload[f] = appState[f] ?? FALLBACK[f]; });
+
     const res = await fetch("/api/data", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(dataToSave),
+      body: JSON.stringify(payload),
     });
+
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      console.error("Save failed:", body.error || res.statusText);
+      throw new Error(body.error || `HTTP ${res.status}`);
     }
+    return true;
   } catch (err) {
     console.error("saveToStorage failed:", err);
+    return false;
   }
 }

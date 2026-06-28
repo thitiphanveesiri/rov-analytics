@@ -1,11 +1,25 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   images: {
-    // Allow the Fandom wiki image domain (used for hero image fallback lookups)
     remotePatterns: [
       { protocol: "https", hostname: "static.wikia.nocookie.net" },
       { protocol: "https", hostname: "*.fandom.com" },
     ],
+  },
+  // Increase body size limit for API routes to handle base64 images
+  // (hero photos + player photos can be several MB combined)
+  experimental: {
+    serverActions: {
+      bodySizeLimit: "10mb",
+    },
+  },
+  async headers() {
+    return [
+      {
+        source: "/api/:path*",
+        headers: [{ key: "Content-Type", value: "application/json" }],
+      },
+    ];
   },
 };
 

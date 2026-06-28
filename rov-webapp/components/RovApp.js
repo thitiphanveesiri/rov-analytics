@@ -559,6 +559,105 @@ function SingleGameDetail({ g, gameNo, onUpdateStats, playerPhotos={}, rivalName
             gameStats={gameStats}
             onChangeStats={setGameStats}
           />
+          {g.duration > 0 && (() => {
+            const dur = Number(g.duration) || 0;
+            if (!dur) return null;
+            const ourStats = (g.ourPicks||[]).map((slot,i) => {
+              const st = gameStats.our?.[i] || {};
+              return { player:slot.player||`Slot ${i+1}`, hero:slot.hero?.name||"—",
+                role:slot.role||"", dmg:Number(st.damage||0), gold:Number(st.gold||0) };
+            });
+            const totalDmg  = ourStats.reduce((s,p)=>s+p.dmg, 0);
+            const totalGold = ourStats.reduce((s,p)=>s+p.gold, 0);
+            if (!totalDmg && !totalGold) return null;
+            return (
+              <div style={{marginTop:12,background:"#080614",borderRadius:10,padding:"12px 14px"}}>
+                <div style={{fontSize:11,fontWeight:800,color:C.primaryLight,marginBottom:10,
+                  display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <span>📊 GPM / DPM / Damage Share — เกม {dur} นาที</span>
+                  <span style={{fontSize:10,color:C.textMuted}}>ทีมเราเท่านั้น</span>
+                </div>
+                <div style={{overflowX:"auto"}}>
+                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+                    <thead>
+                      <tr style={{color:C.textMuted,fontSize:10,borderBottom:`1px solid ${C.border}`}}>
+                        <th style={{textAlign:"left",padding:"4px 6px"}}>ผู้เล่น / Hero</th>
+                        <th style={{textAlign:"center",padding:"4px 6px"}}>DMG</th>
+                        <th style={{textAlign:"center",padding:"4px 6px"}}>DPM</th>
+                        <th style={{textAlign:"center",padding:"4px 6px"}}>%Dmg</th>
+                        <th style={{textAlign:"center",padding:"4px 6px"}}>Gold</th>
+                        <th style={{textAlign:"center",padding:"4px 6px"}}>GPM</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {ourStats.map((p,i) => {
+                        const dpm=dur?Math.round(p.dmg/dur):0;
+                        const gpm=dur?Math.round(p.gold/dur):0;
+                        const dmgShare=totalDmg?Math.round(p.dmg/totalDmg*100):0;
+                        const roleCol=ROLE_COLOR[p.role]||C.textMuted;
+                        return (
+                          <tr key={i} style={{borderBottom:`1px solid ${C.border}30`,
+                            background:i%2?"transparent":"#0d0a1e"}}>
+                            <td style={{padding:"5px 6px"}}>
+                              <div style={{fontWeight:700,fontSize:11}}>{p.player}</div>
+                              <div style={{fontSize:9,color:roleCol}}>{p.role} · {p.hero}</div>
+                            </td>
+                            <td style={{padding:"5px 6px",textAlign:"center",color:C.primaryLight,fontWeight:700}}>
+                              {p.dmg?p.dmg.toLocaleString():"—"}
+                            </td>
+                            <td style={{padding:"5px 6px",textAlign:"center",color:"#74b9ff",fontWeight:700}}>
+                              {dpm?dpm.toLocaleString():"—"}
+                            </td>
+                            <td style={{padding:"5px 6px",textAlign:"center"}}>
+                              {dmgShare>0?(
+                                <div style={{display:"flex",alignItems:"center",gap:4}}>
+                                  <div style={{flex:1,height:6,background:C.border,borderRadius:3,overflow:"hidden"}}>
+                                    <div style={{width:`${dmgShare}%`,height:"100%",borderRadius:3,
+                                      background:dmgShare>=30?"#e17055":dmgShare>=20?C.primary:"#6b6b8a"}}/>
+                                  </div>
+                                  <span style={{fontSize:10,fontWeight:700,minWidth:28,textAlign:"right",
+                                    color:dmgShare>=30?"#e17055":dmgShare>=20?C.primaryLight:C.textMuted}}>
+                                    {dmgShare}%
+                                  </span>
+                                </div>
+                              ):"—"}
+                            </td>
+                            <td style={{padding:"5px 6px",textAlign:"center",color:"#feca57",fontWeight:700}}>
+                              {p.gold?p.gold.toLocaleString():"—"}
+                            </td>
+                            <td style={{padding:"5px 6px",textAlign:"center",color:"#00b894",fontWeight:700}}>
+                              {gpm?gpm.toLocaleString():"—"}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {(totalDmg>0||totalGold>0)&&(
+                        <tr style={{borderTop:`2px solid ${C.border}`,background:"#0a0820"}}>
+                          <td style={{padding:"5px 6px",fontWeight:800,color:C.primaryLight,fontSize:10}}>รวมทีม</td>
+                          <td style={{padding:"5px 6px",textAlign:"center",fontWeight:800,color:C.primaryLight}}>
+                            {totalDmg.toLocaleString()}
+                          </td>
+                          <td style={{padding:"5px 6px",textAlign:"center",fontWeight:800,color:"#74b9ff"}}>
+                            {dur?Math.round(totalDmg/dur).toLocaleString():"—"}
+                          </td>
+                          <td style={{padding:"5px 6px",textAlign:"center",color:C.textMuted,fontSize:10}}>100%</td>
+                          <td style={{padding:"5px 6px",textAlign:"center",fontWeight:800,color:"#feca57"}}>
+                            {totalGold.toLocaleString()}
+                          </td>
+                          <td style={{padding:"5px 6px",textAlign:"center",fontWeight:800,color:"#00b894"}}>
+                            {dur?Math.round(totalGold/dur).toLocaleString():"—"}
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                <div style={{fontSize:9,color:C.textMuted,marginTop:6,textAlign:"right"}}>
+                  DPM = Damage Per Minute · GPM = Gold Per Minute · %Dmg = สัดส่วนดาเมจ
+                </div>
+              </div>
+            );
+          })()}
         </div>
       )}
     </div>
@@ -3999,14 +4098,56 @@ function VideoEmbed({ src, title }) {
   );
 }
 
+function TimestampedNote({ note, onSeek }) {
+  const parts = note.split(/(\[\d{1,2}:\d{2}(?::\d{2})?\])/g);
+  return (
+    <div style={{marginTop:10,background:C.primary+"12",borderRadius:8,
+      padding:"8px 12px",fontSize:12,color:C.primaryLight,lineHeight:2}}>
+      📝{" "}
+      {parts.map((part, i) => {
+        const match = part.match(/^\[(\d{1,2}):(\d{2})(?::(\d{2}))?\]$/);
+        if (!match) return <span key={i}>{part}</span>;
+        const hasHours = match[3] !== undefined;
+        const secs = hasHours
+          ? parseInt(match[1])*3600 + parseInt(match[2])*60 + parseInt(match[3])
+          : parseInt(match[1])*60 + parseInt(match[2]);
+        return (
+          <button key={i} onClick={()=>onSeek(secs)}
+            title={`กระโดดไปที่ ${part.slice(1,-1)}`}
+            style={{background:C.primary+"40",border:`1px solid ${C.primary}`,
+              color:C.primaryLight,borderRadius:5,padding:"1px 7px",
+              cursor:"pointer",fontSize:11,fontWeight:800,margin:"0 2px",
+              fontFamily:"monospace"}}>
+            ⏱ {part.slice(1,-1)}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function VideoCard({ v, onDelete, onEdit }) {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editData, setEditData] = useState({...v});
+  const iframeRef = useRef(null);
 
-  function saveEdit() {
-    onEdit(editData); setEditing(false);
+  function saveEdit() { onEdit(editData); setEditing(false); }
+
+  function seekTo(seconds) {
+    if (!iframeRef.current) return;
+    iframeRef.current.contentWindow?.postMessage(
+      JSON.stringify({ event:"command", func:"seekTo", args:[seconds, true] }), "*"
+    );
+    iframeRef.current.contentWindow?.postMessage(
+      JSON.stringify({ event:"command", func:"playVideo", args:[] }), "*"
+    );
   }
+
+  const info = getVideoInfo(v.url);
+  const embedSrc = info?.type==="youtube"
+    ? `https://www.youtube.com/embed/${info.id}?rel=0&enablejsapi=1`
+    : null;
 
   return (
     <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:14,
@@ -4093,11 +4234,24 @@ function VideoCard({ v, onDelete, onEdit }) {
 
       {open&&!editing&&(
         <div style={{padding:"0 16px 16px"}}>
-          <VideoEmbed src={v.url} title={v.title}/>
+          {embedSrc ? (
+            <iframe ref={iframeRef}
+              style={{width:"100%",aspectRatio:"16/9",border:"none",borderRadius:8}}
+              src={embedSrc} title={v.title} allowFullScreen/>
+          ) : (
+            <VideoEmbed src={v.url} title={v.title}/>
+          )}
           {v.note&&(
-            <div style={{marginTop:10,background:C.primary+"12",borderRadius:8,
-              padding:"8px 12px",fontSize:12,color:C.primaryLight,lineHeight:1.6}}>
-              📝 {v.note}
+            v.note.match(/\[\d{1,2}:\d{2}(?::\d{2})?\]/)
+              ? <TimestampedNote note={v.note} onSeek={seekTo}/>
+              : <div style={{marginTop:10,background:C.primary+"12",borderRadius:8,
+                  padding:"8px 12px",fontSize:12,color:C.primaryLight,lineHeight:1.6}}>
+                  📝 {v.note}
+                </div>
+          )}
+          {v.note&&v.note.match(/\[\d{1,2}:\d{2}(?::\d{2})?\]/)&&(
+            <div style={{fontSize:10,color:C.textMuted,marginTop:4,textAlign:"right"}}>
+              💡 กดปุ่มเวลาเพื่อกระโดดไปยังช่วงนั้นในวิดีโอ
             </div>
           )}
         </div>
@@ -4687,13 +4841,18 @@ export default function RovApp() {
 
   // ── save to Database (debounced) whenever app data changes ──
   useEffect(() => {
-    if (!app._loaded) return; // don't save until initial load completes
+    if (!app._loaded) return;
     setSaveStatus("saving");
     const timer = setTimeout(async () => {
-      await saveToStorage(app);
-      setSaveStatus("saved");
-      setTimeout(()=>setSaveStatus("idle"), 1500);
-    }, 600); // debounce: wait 600ms after last change before saving
+      const ok = await saveToStorage(app);
+      if (ok) {
+        setSaveStatus("saved");
+        setTimeout(()=>setSaveStatus("idle"), 1500);
+      } else {
+        setSaveStatus("error");
+        setTimeout(()=>setSaveStatus("idle"), 3000);
+      }
+    }, 600);
     return () => clearTimeout(timer);
   }, [app]);
 
@@ -4846,11 +5005,14 @@ export default function RovApp() {
         <span style={{background:C.primary,color:"#fff",fontSize:10,padding:"2px 8px",borderRadius:99,fontWeight:700,marginLeft:10}}>V7</span>
         {/* save status indicator */}
         <span style={{marginLeft:12,fontSize:11,color:
-          saveStatus==="saving"?C.primaryLight:saveStatus==="saved"?"#00b894":saveStatus==="error"?"#ff4757":C.textMuted,
+          saveStatus==="saving"?C.primaryLight:
+          saveStatus==="saved"?"#00b894":
+          saveStatus==="error"?"#ff4757":C.textMuted,
           display:"flex",alignItems:"center",gap:4,transition:"opacity .3s",
           opacity:saveStatus==="idle"?0.4:1}}>
           {saveStatus==="saving" && <>☁️ กำลังบันทึก...</>}
           {saveStatus==="saved"  && <>✅ บันทึกแล้ว</>}
+          {saveStatus==="error"  && <>❌ บันทึกไม่สำเร็จ</>}
           {saveStatus==="idle"   && <>☁️ ซิงค์แล้ว</>}
         </span>
         <div style={{flex:1}}/>
@@ -5916,6 +6078,61 @@ function DraftPageR({ draft, dispatch, roster, rivals, enemyRosters, onFinishSes
           {/* center hero grid */}
           <div style={{flex:1,display:"flex",flexDirection:"column",padding:"10px 12px",overflowY:"auto",background:C.bgBase}}>
             <PhaseTracker step={step}/>
+
+            {/* ── Draft Suggestion from history ── */}
+            {cur && cur.action==="pick" && cur.team===ourSide && (() => {
+              const enemyPicksSoFar = (ourSide==="blue" ? redPicks : bluePicks)
+                .filter(s=>s.hero).map(s=>s.hero.name);
+              if (!enemyPicksSoFar.length) return null;
+              const heroWinRate = {};
+              allGames.forEach(g => {
+                const ep = (g.enemyPicks||[]).filter(s=>s.hero?.name).map(s=>s.hero.name);
+                const op = (g.ourPicks||[]).filter(s=>s.hero?.name).map(s=>s.hero.name);
+                const overlap = enemyPicksSoFar.filter(h=>ep.includes(h));
+                if (!overlap.length) return;
+                const win = g.result==="WIN";
+                op.forEach(h=>{
+                  if (!heroWinRate[h]) heroWinRate[h]={wins:0,total:0};
+                  heroWinRate[h].total++;
+                  if (win) heroWinRate[h].wins++;
+                });
+              });
+              const suggestions = Object.entries(heroWinRate)
+                .filter(([,s])=>s.total>=1)
+                .map(([name,s])=>({name,wr:Math.round(s.wins/s.total*100),total:s.total}))
+                .sort((a,b)=>b.wr-a.wr||b.total-a.total)
+                .slice(0,5);
+              if (!suggestions.length) return null;
+              return (
+                <div style={{marginBottom:8,background:"#0d0b1e",borderRadius:10,
+                  padding:"8px 12px",border:`1px solid ${C.primary}40`}}>
+                  <div style={{fontSize:10,fontWeight:800,color:C.primaryLight,marginBottom:6}}>
+                    💡 แนะนำ Pick — vs {enemyPicksSoFar.join(", ")}
+                  </div>
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                    {suggestions.map(s=>(
+                      <div key={s.name}
+                        onClick={()=>{
+                          const h=HERO_DATA.find(hh=>hh.name===s.name);
+                          if(h&&!usedThisGame.has(s.name))selectHero(h);
+                        }}
+                        style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer",
+                          background:s.wr>=60?C.win+"20":s.wr>=50?C.primary+"20":C.border+"40",
+                          border:`1px solid ${s.wr>=60?C.win:s.wr>=50?C.primary:C.border}`,
+                          borderRadius:8,padding:"4px 8px"}}>
+                        <HeroChip name={s.name} size={20} fontSize={11} bold={true}/>
+                        <span style={{fontSize:10,fontWeight:800,
+                          color:s.wr>=60?C.win:s.wr>=50?C.primaryLight:C.textMuted}}>
+                          {s.wr}%
+                        </span>
+                        <span style={{fontSize:9,color:C.textMuted}}>({s.total})</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+
             <div style={{display:"flex",gap:5,marginBottom:8,flexWrap:"wrap",alignItems:"center"}}>
               <input value={search}
                 onChange={e=>dispatch({type:"SET_SEARCH",payload:e.target.value})}

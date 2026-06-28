@@ -3,6 +3,11 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
+// Allow larger payloads for base64 images (hero photos + player photos)
+export const config = {
+  api: { bodyParser: { sizeLimit: "10mb" } },
+};
+
 async function getTeamId(session) {
   const user = await prisma.user.findUnique({
     where: { email: session.user.email },
