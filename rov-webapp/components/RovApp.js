@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect, useReducer, useCallback, useRef, createContext, useContext } from "react";
 import { useSession, signOut } from "next-auth/react";
+import { upload } from "@vercel/blob/client";
 import { loadFromStorage, saveToStorage } from "@/lib/storage";
 
 // ═══════════════════════════════════════════
@@ -285,19 +286,33 @@ function PlayerAvatar({ name, photoUrl, size=44, team="our", style={} }) {
 function PhotoPicker({ value, onChange, size=72, team="our" }) {
   const [showUrlInput, setShowUrlInput] = useState(false);
   const [urlVal, setUrlVal] = useState(value && value.startsWith("http") ? value : "");
+  const [uploading, setUploading] = useState(false);
   const fileRef = useRef(null);
 
-  function handleFile(e) {
+  async function handleFile(e) {
     const file = e.target.files?.[0];
     if (!file) return;
     if (file.size > 1.5*1024*1024) {
       alert("ไฟล์รูปใหญ่เกินไป (จำกัด 1.5MB) — กรุณาเลือกรูปที่เล็กกว่านี้");
       e.target.value=""; return;
     }
-    const reader = new FileReader();
-    reader.onload = ev => onChange(ev.target.result);
-    reader.readAsDataURL(file);
-    e.target.value = "";
+    setUploading(true);
+    try {
+      // Uploads straight to Vercel Blob from the browser — this route only
+      // hands out a token (see app/api/upload/route.js), so the image bytes
+      // never touch /api/data and never hit the 4.5MB function body limit.
+      const blob = await upload(file.name, file, {
+        access: "public",
+        handleUploadUrl: "/api/upload",
+      });
+      onChange(blob.url); // we only ever store the URL in app state now, not base64
+    } catch (err) {
+      console.error("Photo upload failed:", err);
+      alert("อัพโหลดรูปไม่สำเร็จ ลองใหม่อีกครั้ง");
+    } finally {
+      setUploading(false);
+      e.target.value = "";
+    }
   }
 
   return (
@@ -315,10 +330,11 @@ function PhotoPicker({ value, onChange, size=72, team="our" }) {
       </div>
       <div style={{display:"flex",gap:5}}>
         <label style={{background:C.primary+"20",border:`1px solid ${C.primary}50`,
-          color:C.primaryLight,borderRadius:6,padding:"3px 9px",cursor:"pointer",
-          fontSize:10,fontWeight:700}}>
-          📂 อัพโหลด
-          <input ref={fileRef} type="file" accept="image/*" style={{display:"none"}} onChange={handleFile}/>
+          color:C.primaryLight,borderRadius:6,padding:"3px 9px",cursor:uploading?"default":"pointer",
+          fontSize:10,fontWeight:700,opacity:uploading?0.6:1}}>
+          {uploading ? "⏳ กำลังอัพโหลด..." : "📂 อัพโหลด"}
+          <input ref={fileRef} type="file" accept="image/*" disabled={uploading}
+            style={{display:"none"}} onChange={handleFile}/>
         </label>
         <button onClick={()=>setShowUrlInput(v=>!v)}
           style={{background:showUrlInput?C.primary+"30":"transparent",
@@ -559,105 +575,6 @@ function SingleGameDetail({ g, gameNo, onUpdateStats, playerPhotos={}, rivalName
             gameStats={gameStats}
             onChangeStats={setGameStats}
           />
-          {g.duration > 0 && (() => {
-            const dur = Number(g.duration) || 0;
-            if (!dur) return null;
-            const ourStats = (g.ourPicks||[]).map((slot,i) => {
-              const st = gameStats.our?.[i] || {};
-              return { player:slot.player||`Slot ${i+1}`, hero:slot.hero?.name||"—",
-                role:slot.role||"", dmg:Number(st.damage||0), gold:Number(st.gold||0) };
-            });
-            const totalDmg  = ourStats.reduce((s,p)=>s+p.dmg, 0);
-            const totalGold = ourStats.reduce((s,p)=>s+p.gold, 0);
-            if (!totalDmg && !totalGold) return null;
-            return (
-              <div style={{marginTop:12,background:"#080614",borderRadius:10,padding:"12px 14px"}}>
-                <div style={{fontSize:11,fontWeight:800,color:C.primaryLight,marginBottom:10,
-                  display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                  <span>📊 GPM / DPM / Damage Share — เกม {dur} นาที</span>
-                  <span style={{fontSize:10,color:C.textMuted}}>ทีมเราเท่านั้น</span>
-                </div>
-                <div style={{overflowX:"auto"}}>
-                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
-                    <thead>
-                      <tr style={{color:C.textMuted,fontSize:10,borderBottom:`1px solid ${C.border}`}}>
-                        <th style={{textAlign:"left",padding:"4px 6px"}}>ผู้เล่น / Hero</th>
-                        <th style={{textAlign:"center",padding:"4px 6px"}}>DMG</th>
-                        <th style={{textAlign:"center",padding:"4px 6px"}}>DPM</th>
-                        <th style={{textAlign:"center",padding:"4px 6px"}}>%Dmg</th>
-                        <th style={{textAlign:"center",padding:"4px 6px"}}>Gold</th>
-                        <th style={{textAlign:"center",padding:"4px 6px"}}>GPM</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {ourStats.map((p,i) => {
-                        const dpm=dur?Math.round(p.dmg/dur):0;
-                        const gpm=dur?Math.round(p.gold/dur):0;
-                        const dmgShare=totalDmg?Math.round(p.dmg/totalDmg*100):0;
-                        const roleCol=ROLE_COLOR[p.role]||C.textMuted;
-                        return (
-                          <tr key={i} style={{borderBottom:`1px solid ${C.border}30`,
-                            background:i%2?"transparent":"#0d0a1e"}}>
-                            <td style={{padding:"5px 6px"}}>
-                              <div style={{fontWeight:700,fontSize:11}}>{p.player}</div>
-                              <div style={{fontSize:9,color:roleCol}}>{p.role} · {p.hero}</div>
-                            </td>
-                            <td style={{padding:"5px 6px",textAlign:"center",color:C.primaryLight,fontWeight:700}}>
-                              {p.dmg?p.dmg.toLocaleString():"—"}
-                            </td>
-                            <td style={{padding:"5px 6px",textAlign:"center",color:"#74b9ff",fontWeight:700}}>
-                              {dpm?dpm.toLocaleString():"—"}
-                            </td>
-                            <td style={{padding:"5px 6px",textAlign:"center"}}>
-                              {dmgShare>0?(
-                                <div style={{display:"flex",alignItems:"center",gap:4}}>
-                                  <div style={{flex:1,height:6,background:C.border,borderRadius:3,overflow:"hidden"}}>
-                                    <div style={{width:`${dmgShare}%`,height:"100%",borderRadius:3,
-                                      background:dmgShare>=30?"#e17055":dmgShare>=20?C.primary:"#6b6b8a"}}/>
-                                  </div>
-                                  <span style={{fontSize:10,fontWeight:700,minWidth:28,textAlign:"right",
-                                    color:dmgShare>=30?"#e17055":dmgShare>=20?C.primaryLight:C.textMuted}}>
-                                    {dmgShare}%
-                                  </span>
-                                </div>
-                              ):"—"}
-                            </td>
-                            <td style={{padding:"5px 6px",textAlign:"center",color:"#feca57",fontWeight:700}}>
-                              {p.gold?p.gold.toLocaleString():"—"}
-                            </td>
-                            <td style={{padding:"5px 6px",textAlign:"center",color:"#00b894",fontWeight:700}}>
-                              {gpm?gpm.toLocaleString():"—"}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                      {(totalDmg>0||totalGold>0)&&(
-                        <tr style={{borderTop:`2px solid ${C.border}`,background:"#0a0820"}}>
-                          <td style={{padding:"5px 6px",fontWeight:800,color:C.primaryLight,fontSize:10}}>รวมทีม</td>
-                          <td style={{padding:"5px 6px",textAlign:"center",fontWeight:800,color:C.primaryLight}}>
-                            {totalDmg.toLocaleString()}
-                          </td>
-                          <td style={{padding:"5px 6px",textAlign:"center",fontWeight:800,color:"#74b9ff"}}>
-                            {dur?Math.round(totalDmg/dur).toLocaleString():"—"}
-                          </td>
-                          <td style={{padding:"5px 6px",textAlign:"center",color:C.textMuted,fontSize:10}}>100%</td>
-                          <td style={{padding:"5px 6px",textAlign:"center",fontWeight:800,color:"#feca57"}}>
-                            {totalGold.toLocaleString()}
-                          </td>
-                          <td style={{padding:"5px 6px",textAlign:"center",fontWeight:800,color:"#00b894"}}>
-                            {dur?Math.round(totalGold/dur).toLocaleString():"—"}
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-                <div style={{fontSize:9,color:C.textMuted,marginTop:6,textAlign:"right"}}>
-                  DPM = Damage Per Minute · GPM = Gold Per Minute · %Dmg = สัดส่วนดาเมจ
-                </div>
-              </div>
-            );
-          })()}
         </div>
       )}
     </div>
@@ -2923,6 +2840,7 @@ function HeroImageManager({ heroPhotos, onSetPhoto, onSetPhotosBulk, onRemovePho
   const [dragOver,   setDragOver]   = useState(false);
   const [matchLog,   setMatchLog]   = useState(null); // { matched:[], unmatched:[] }
   const [showAddHero, setShowAddHero] = useState(false);
+  const [bulkUploading, setBulkUploading] = useState(false);
   const bulkInputRef = useRef(null);
 
   // normalize a string for fuzzy filename matching: lowercase, strip
@@ -2931,36 +2849,38 @@ function HeroImageManager({ heroPhotos, onSetPhoto, onSetPhotosBulk, onRemovePho
     return s.toLowerCase().replace(/\.[a-z0-9]+$/,"").replace(/[^a-z0-9]/g,"");
   }
 
-  function handleBulkFiles(fileList) {
+  async function handleBulkFiles(fileList) {
     const files = Array.from(fileList);
+    if (files.length === 0) return;
     const heroByNorm = {};
     HERO_DATA.forEach(h => { heroByNorm[normalize(h.name)] = h.name; });
 
+    setBulkUploading(true);
     const matched = [];
     const unmatched = [];
-    let pending = files.length;
-    if (pending === 0) return;
     const updates = {};
 
-    files.forEach(file => {
+    // Upload every file straight to Vercel Blob in parallel (same token
+    // endpoint as PhotoPicker) — we only ever keep the resulting URL, never
+    // the raw base64, so a 90-hero bulk upload doesn't bloat /api/data.
+    await Promise.all(files.map(async file => {
       const norm = normalize(file.name);
       const heroName = heroByNorm[norm];
-      const reader = new FileReader();
-      reader.onload = ev => {
-        if (heroName) {
-          updates[heroName] = ev.target.result;
-          matched.push({ file: file.name, hero: heroName });
-        } else {
-          unmatched.push(file.name);
-        }
-        pending--;
-        if (pending === 0) {
-          if (Object.keys(updates).length > 0) onSetPhotosBulk(updates);
-          setMatchLog({ matched, unmatched });
-        }
-      };
-      reader.readAsDataURL(file);
-    });
+      if (!heroName) { unmatched.push(file.name); return; }
+      if (file.size > 1.5*1024*1024) { unmatched.push(`${file.name} (ใหญ่เกิน 1.5MB)`); return; }
+      try {
+        const blob = await upload(file.name, file, { access: "public", handleUploadUrl: "/api/upload" });
+        updates[heroName] = blob.url;
+        matched.push({ file: file.name, hero: heroName });
+      } catch (err) {
+        console.error("Hero photo upload failed:", file.name, err);
+        unmatched.push(`${file.name} (อัพโหลดไม่สำเร็จ)`);
+      }
+    }));
+
+    if (Object.keys(updates).length > 0) onSetPhotosBulk(updates);
+    setMatchLog({ matched, unmatched });
+    setBulkUploading(false);
   }
 
   function handleDrop(e) {
@@ -3005,18 +2925,20 @@ function HeroImageManager({ heroPhotos, onSetPhoto, onSetPhotosBulk, onRemovePho
         style={{background:dragOver?C.primary+"15":C.bgPanel,
           border:`2px dashed ${dragOver?C.primary:C.border}`,borderRadius:14,
           padding:"28px 20px",textAlign:"center",marginBottom:16,transition:"all .15s"}}>
-        <div style={{fontSize:30,marginBottom:8}}>📂</div>
+        <div style={{fontSize:30,marginBottom:8}}>{bulkUploading ? "⏳" : "📂"}</div>
         <div style={{fontSize:14,fontWeight:700,marginBottom:6}}>
-          ลากไฟล์รูปมาวางที่นี่ หรือเลือกหลายไฟล์พร้อมกัน
+          {bulkUploading ? "กำลังอัพโหลดรูป..." : "ลากไฟล์รูปมาวางที่นี่ หรือเลือกหลายไฟล์พร้อมกัน"}
         </div>
         <div style={{fontSize:11,color:C.textMuted,marginBottom:14}}>
           ระบบจะจับคู่ไฟล์กับ Hero อัตโนมัติจากชื่อไฟล์ เช่น "Toro.png" → Toro
         </div>
         <label style={{background:`linear-gradient(135deg,${C.primary},${C.primaryLight})`,
-          color:"#fff",border:"none",borderRadius:9,padding:"9px 22px",cursor:"pointer",
+          color:"#fff",border:"none",borderRadius:9,padding:"9px 22px",
+          cursor:bulkUploading?"default":"pointer",opacity:bulkUploading?0.6:1,
           fontWeight:800,fontSize:13,display:"inline-block"}}>
           เลือกไฟล์รูป (เลือกได้หลายไฟล์)
-          <input ref={bulkInputRef} type="file" accept="image/*" multiple style={{display:"none"}}
+          <input ref={bulkInputRef} type="file" accept="image/*" multiple disabled={bulkUploading}
+            style={{display:"none"}}
             onChange={e=>{ if(e.target.files?.length) handleBulkFiles(e.target.files); e.target.value=""; }}/>
         </label>
       </div>
@@ -3169,17 +3091,29 @@ function AddHeroModal({ onAdd, onClose }) {
 function HeroImageSlot({ hero, photoUrl, onSet, onRemove, onSetRole }) {
   const [err, setErr] = useState(false);
   const [editingRole, setEditingRole] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const fileRef = useRef(null);
   const webUrl = useHeroImage(photoUrl ? null : hero); // only fall back to web lookup if no upload
   const displayUrl = photoUrl || webUrl;
 
-  function handleFile(e) {
+  async function handleFile(e) {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = ev => onSet(ev.target.result);
-    reader.readAsDataURL(file);
-    e.target.value = "";
+    if (file.size > 1.5*1024*1024) {
+      alert("ไฟล์รูปใหญ่เกินไป (จำกัด 1.5MB) — กรุณาเลือกรูปที่เล็กกว่านี้");
+      e.target.value=""; return;
+    }
+    setUploading(true);
+    try {
+      const blob = await upload(file.name, file, { access: "public", handleUploadUrl: "/api/upload" });
+      onSet(blob.url);
+    } catch (err) {
+      console.error("Hero photo upload failed:", err);
+      alert("อัพโหลดรูปไม่สำเร็จ ลองใหม่อีกครั้ง");
+    } finally {
+      setUploading(false);
+      e.target.value = "";
+    }
   }
 
   return (
@@ -3230,10 +3164,11 @@ function HeroImageSlot({ hero, photoUrl, onSet, onRemove, onSetRole }) {
 
       <div style={{display:"flex",gap:4}}>
         <label style={{flex:1,background:C.primary+"20",border:`1px solid ${C.primary}50`,
-          color:C.primaryLight,borderRadius:6,padding:"3px 0",cursor:"pointer",
-          fontSize:10,fontWeight:700}}>
-          📂
-          <input ref={fileRef} type="file" accept="image/*" style={{display:"none"}} onChange={handleFile}/>
+          color:C.primaryLight,borderRadius:6,padding:"3px 0",cursor:uploading?"default":"pointer",
+          fontSize:10,fontWeight:700,opacity:uploading?0.6:1}}>
+          {uploading ? "⏳" : "📂"}
+          <input ref={fileRef} type="file" accept="image/*" disabled={uploading}
+            style={{display:"none"}} onChange={handleFile}/>
         </label>
         {photoUrl && (
           <button onClick={onRemove}
@@ -4098,56 +4033,14 @@ function VideoEmbed({ src, title }) {
   );
 }
 
-function TimestampedNote({ note, onSeek }) {
-  const parts = note.split(/(\[\d{1,2}:\d{2}(?::\d{2})?\])/g);
-  return (
-    <div style={{marginTop:10,background:C.primary+"12",borderRadius:8,
-      padding:"8px 12px",fontSize:12,color:C.primaryLight,lineHeight:2}}>
-      📝{" "}
-      {parts.map((part, i) => {
-        const match = part.match(/^\[(\d{1,2}):(\d{2})(?::(\d{2}))?\]$/);
-        if (!match) return <span key={i}>{part}</span>;
-        const hasHours = match[3] !== undefined;
-        const secs = hasHours
-          ? parseInt(match[1])*3600 + parseInt(match[2])*60 + parseInt(match[3])
-          : parseInt(match[1])*60 + parseInt(match[2]);
-        return (
-          <button key={i} onClick={()=>onSeek(secs)}
-            title={`กระโดดไปที่ ${part.slice(1,-1)}`}
-            style={{background:C.primary+"40",border:`1px solid ${C.primary}`,
-              color:C.primaryLight,borderRadius:5,padding:"1px 7px",
-              cursor:"pointer",fontSize:11,fontWeight:800,margin:"0 2px",
-              fontFamily:"monospace"}}>
-            ⏱ {part.slice(1,-1)}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 function VideoCard({ v, onDelete, onEdit }) {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editData, setEditData] = useState({...v});
-  const iframeRef = useRef(null);
 
-  function saveEdit() { onEdit(editData); setEditing(false); }
-
-  function seekTo(seconds) {
-    if (!iframeRef.current) return;
-    iframeRef.current.contentWindow?.postMessage(
-      JSON.stringify({ event:"command", func:"seekTo", args:[seconds, true] }), "*"
-    );
-    iframeRef.current.contentWindow?.postMessage(
-      JSON.stringify({ event:"command", func:"playVideo", args:[] }), "*"
-    );
+  function saveEdit() {
+    onEdit(editData); setEditing(false);
   }
-
-  const info = getVideoInfo(v.url);
-  const embedSrc = info?.type==="youtube"
-    ? `https://www.youtube.com/embed/${info.id}?rel=0&enablejsapi=1`
-    : null;
 
   return (
     <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:14,
@@ -4234,24 +4127,11 @@ function VideoCard({ v, onDelete, onEdit }) {
 
       {open&&!editing&&(
         <div style={{padding:"0 16px 16px"}}>
-          {embedSrc ? (
-            <iframe ref={iframeRef}
-              style={{width:"100%",aspectRatio:"16/9",border:"none",borderRadius:8}}
-              src={embedSrc} title={v.title} allowFullScreen/>
-          ) : (
-            <VideoEmbed src={v.url} title={v.title}/>
-          )}
+          <VideoEmbed src={v.url} title={v.title}/>
           {v.note&&(
-            v.note.match(/\[\d{1,2}:\d{2}(?::\d{2})?\]/)
-              ? <TimestampedNote note={v.note} onSeek={seekTo}/>
-              : <div style={{marginTop:10,background:C.primary+"12",borderRadius:8,
-                  padding:"8px 12px",fontSize:12,color:C.primaryLight,lineHeight:1.6}}>
-                  📝 {v.note}
-                </div>
-          )}
-          {v.note&&v.note.match(/\[\d{1,2}:\d{2}(?::\d{2})?\]/)&&(
-            <div style={{fontSize:10,color:C.textMuted,marginTop:4,textAlign:"right"}}>
-              💡 กดปุ่มเวลาเพื่อกระโดดไปยังช่วงนั้นในวิดีโอ
+            <div style={{marginTop:10,background:C.primary+"12",borderRadius:8,
+              padding:"8px 12px",fontSize:12,color:C.primaryLight,lineHeight:1.6}}>
+              📝 {v.note}
             </div>
           )}
         </div>
@@ -6078,61 +5958,6 @@ function DraftPageR({ draft, dispatch, roster, rivals, enemyRosters, onFinishSes
           {/* center hero grid */}
           <div style={{flex:1,display:"flex",flexDirection:"column",padding:"10px 12px",overflowY:"auto",background:C.bgBase}}>
             <PhaseTracker step={step}/>
-
-            {/* ── Draft Suggestion from history ── */}
-            {cur && cur.action==="pick" && cur.team===ourSide && (() => {
-              const enemyPicksSoFar = (ourSide==="blue" ? redPicks : bluePicks)
-                .filter(s=>s.hero).map(s=>s.hero.name);
-              if (!enemyPicksSoFar.length) return null;
-              const heroWinRate = {};
-              allGames.forEach(g => {
-                const ep = (g.enemyPicks||[]).filter(s=>s.hero?.name).map(s=>s.hero.name);
-                const op = (g.ourPicks||[]).filter(s=>s.hero?.name).map(s=>s.hero.name);
-                const overlap = enemyPicksSoFar.filter(h=>ep.includes(h));
-                if (!overlap.length) return;
-                const win = g.result==="WIN";
-                op.forEach(h=>{
-                  if (!heroWinRate[h]) heroWinRate[h]={wins:0,total:0};
-                  heroWinRate[h].total++;
-                  if (win) heroWinRate[h].wins++;
-                });
-              });
-              const suggestions = Object.entries(heroWinRate)
-                .filter(([,s])=>s.total>=1)
-                .map(([name,s])=>({name,wr:Math.round(s.wins/s.total*100),total:s.total}))
-                .sort((a,b)=>b.wr-a.wr||b.total-a.total)
-                .slice(0,5);
-              if (!suggestions.length) return null;
-              return (
-                <div style={{marginBottom:8,background:"#0d0b1e",borderRadius:10,
-                  padding:"8px 12px",border:`1px solid ${C.primary}40`}}>
-                  <div style={{fontSize:10,fontWeight:800,color:C.primaryLight,marginBottom:6}}>
-                    💡 แนะนำ Pick — vs {enemyPicksSoFar.join(", ")}
-                  </div>
-                  <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-                    {suggestions.map(s=>(
-                      <div key={s.name}
-                        onClick={()=>{
-                          const h=HERO_DATA.find(hh=>hh.name===s.name);
-                          if(h&&!usedThisGame.has(s.name))selectHero(h);
-                        }}
-                        style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer",
-                          background:s.wr>=60?C.win+"20":s.wr>=50?C.primary+"20":C.border+"40",
-                          border:`1px solid ${s.wr>=60?C.win:s.wr>=50?C.primary:C.border}`,
-                          borderRadius:8,padding:"4px 8px"}}>
-                        <HeroChip name={s.name} size={20} fontSize={11} bold={true}/>
-                        <span style={{fontSize:10,fontWeight:800,
-                          color:s.wr>=60?C.win:s.wr>=50?C.primaryLight:C.textMuted}}>
-                          {s.wr}%
-                        </span>
-                        <span style={{fontSize:9,color:C.textMuted}}>({s.total})</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              );
-            })()}
-
             <div style={{display:"flex",gap:5,marginBottom:8,flexWrap:"wrap",alignItems:"center"}}>
               <input value={search}
                 onChange={e=>dispatch({type:"SET_SEARCH",payload:e.target.value})}

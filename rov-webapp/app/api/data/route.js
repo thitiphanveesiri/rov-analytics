@@ -3,10 +3,12 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
-// Allow larger payloads for base64 images (hero photos + player photos)
-export const config = {
-  api: { bodyParser: { sizeLimit: "10mb" } },
-};
+// NOTE: there is no body-size-limit config for App Router Route Handlers —
+// the old Pages Router `export const config = { api: { bodyParser... } }`
+// never worked here and was just dead code (it's what was breaking the build).
+// Vercel also hard-caps request/response bodies at 4.5MB regardless of config,
+// which is why playerPhotos/heroPhotos were moved to Vercel Blob (see
+// app/api/upload/route.js) instead of being sent as base64 in this payload.
 
 async function getTeamId(session) {
   const user = await prisma.user.findUnique({
