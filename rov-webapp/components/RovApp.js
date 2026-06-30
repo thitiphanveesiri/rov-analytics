@@ -298,14 +298,8 @@ function PhotoPicker({ value, onChange, size=72, team="our" }) {
     }
     setUploading(true);
     try {
-      // Uploads straight to Vercel Blob from the browser — this route only
-      // hands out a token (see app/api/upload/route.js), so the image bytes
-      // never touch /api/data and never hit the 4.5MB function body limit.
-      const blob = await upload(file.name, file, {
-        access: "public",
-        handleUploadUrl: "/api/upload",
-      });
-      onChange(blob.url); // we only ever store the URL in app state now, not base64
+      const blob = await upload(file.name, file, { access: "public", handleUploadUrl: "/api/upload" });
+      onChange(blob.url);
     } catch (err) {
       console.error("Photo upload failed:", err);
       alert("อัพโหลดรูปไม่สำเร็จ ลองใหม่อีกครั้ง");
@@ -330,9 +324,10 @@ function PhotoPicker({ value, onChange, size=72, team="our" }) {
       </div>
       <div style={{display:"flex",gap:5}}>
         <label style={{background:C.primary+"20",border:`1px solid ${C.primary}50`,
-          color:C.primaryLight,borderRadius:6,padding:"3px 9px",cursor:uploading?"default":"pointer",
-          fontSize:10,fontWeight:700,opacity:uploading?0.6:1}}>
-          {uploading ? "⏳ กำลังอัพโหลด..." : "📂 อัพโหลด"}
+          color:C.primaryLight,borderRadius:6,padding:"3px 9px",
+          cursor:uploading?"default":"pointer",opacity:uploading?0.6:1,
+          fontSize:10,fontWeight:700}}>
+          {uploading ? "⏳..." : "📂 อัพโหลด"}
           <input ref={fileRef} type="file" accept="image/*" disabled={uploading}
             style={{display:"none"}} onChange={handleFile}/>
         </label>
@@ -2860,9 +2855,6 @@ function HeroImageManager({ heroPhotos, onSetPhoto, onSetPhotosBulk, onRemovePho
     const unmatched = [];
     const updates = {};
 
-    // Upload every file straight to Vercel Blob in parallel (same token
-    // endpoint as PhotoPicker) — we only ever keep the resulting URL, never
-    // the raw base64, so a 90-hero bulk upload doesn't bloat /api/data.
     await Promise.all(files.map(async file => {
       const norm = normalize(file.name);
       const heroName = heroByNorm[norm];
@@ -2873,7 +2865,7 @@ function HeroImageManager({ heroPhotos, onSetPhoto, onSetPhotosBulk, onRemovePho
         updates[heroName] = blob.url;
         matched.push({ file: file.name, hero: heroName });
       } catch (err) {
-        console.error("Hero photo upload failed:", file.name, err);
+        console.error("Hero bulk upload failed:", file.name, err);
         unmatched.push(`${file.name} (อัพโหลดไม่สำเร็จ)`);
       }
     }));
@@ -2925,20 +2917,18 @@ function HeroImageManager({ heroPhotos, onSetPhoto, onSetPhotosBulk, onRemovePho
         style={{background:dragOver?C.primary+"15":C.bgPanel,
           border:`2px dashed ${dragOver?C.primary:C.border}`,borderRadius:14,
           padding:"28px 20px",textAlign:"center",marginBottom:16,transition:"all .15s"}}>
-        <div style={{fontSize:30,marginBottom:8}}>{bulkUploading ? "⏳" : "📂"}</div>
+        <div style={{fontSize:30,marginBottom:8}}>📂</div>
         <div style={{fontSize:14,fontWeight:700,marginBottom:6}}>
-          {bulkUploading ? "กำลังอัพโหลดรูป..." : "ลากไฟล์รูปมาวางที่นี่ หรือเลือกหลายไฟล์พร้อมกัน"}
+          ลากไฟล์รูปมาวางที่นี่ หรือเลือกหลายไฟล์พร้อมกัน
         </div>
         <div style={{fontSize:11,color:C.textMuted,marginBottom:14}}>
           ระบบจะจับคู่ไฟล์กับ Hero อัตโนมัติจากชื่อไฟล์ เช่น "Toro.png" → Toro
         </div>
         <label style={{background:`linear-gradient(135deg,${C.primary},${C.primaryLight})`,
-          color:"#fff",border:"none",borderRadius:9,padding:"9px 22px",
-          cursor:bulkUploading?"default":"pointer",opacity:bulkUploading?0.6:1,
+          color:"#fff",border:"none",borderRadius:9,padding:"9px 22px",cursor:"pointer",
           fontWeight:800,fontSize:13,display:"inline-block"}}>
           เลือกไฟล์รูป (เลือกได้หลายไฟล์)
-          <input ref={bulkInputRef} type="file" accept="image/*" multiple disabled={bulkUploading}
-            style={{display:"none"}}
+          <input ref={bulkInputRef} type="file" accept="image/*" multiple style={{display:"none"}}
             onChange={e=>{ if(e.target.files?.length) handleBulkFiles(e.target.files); e.target.value=""; }}/>
         </label>
       </div>
@@ -3100,7 +3090,7 @@ function HeroImageSlot({ hero, photoUrl, onSet, onRemove, onSetRole }) {
     const file = e.target.files?.[0];
     if (!file) return;
     if (file.size > 1.5*1024*1024) {
-      alert("ไฟล์รูปใหญ่เกินไป (จำกัด 1.5MB) — กรุณาเลือกรูปที่เล็กกว่านี้");
+      alert("ไฟล์รูปใหญ่เกินไป (จำกัด 1.5MB)");
       e.target.value=""; return;
     }
     setUploading(true);
@@ -3164,9 +3154,10 @@ function HeroImageSlot({ hero, photoUrl, onSet, onRemove, onSetRole }) {
 
       <div style={{display:"flex",gap:4}}>
         <label style={{flex:1,background:C.primary+"20",border:`1px solid ${C.primary}50`,
-          color:C.primaryLight,borderRadius:6,padding:"3px 0",cursor:uploading?"default":"pointer",
-          fontSize:10,fontWeight:700,opacity:uploading?0.6:1}}>
-          {uploading ? "⏳" : "📂"}
+          color:C.primaryLight,borderRadius:6,padding:"3px 0",
+          cursor:uploading?"default":"pointer",opacity:uploading?0.6:1,
+          fontSize:10,fontWeight:700}}>
+          {uploading?"⏳":"📂"}
           <input ref={fileRef} type="file" accept="image/*" disabled={uploading}
             style={{display:"none"}} onChange={handleFile}/>
         </label>
