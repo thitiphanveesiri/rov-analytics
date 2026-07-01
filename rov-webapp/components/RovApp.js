@@ -127,6 +127,23 @@ const HeroPhotosContext = createContext({});
 //  concurrently, so every hero still resolves — just staggered.
 // ═══════════════════════════════════════════
 const HERO_IMG_CACHE = {}; // { heroName: url | null }  null = lookup failed, don't retry
+const WB_IMG_ELEM_CACHE = {}; // { url: HTMLImageElement } — preloaded for canvas drawImage
+
+function getPreloadedImg(url, onReady) {
+  if (!url) return null;
+  if (WB_IMG_ELEM_CACHE[url]) {
+    const img = WB_IMG_ELEM_CACHE[url];
+    return img.complete && img.naturalWidth > 0 ? img : null;
+  }
+  // start loading
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+  img.onload = () => { WB_IMG_ELEM_CACHE[url] = img; if (onReady) onReady(); };
+  img.onerror = () => { WB_IMG_ELEM_CACHE[url] = null; };
+  img.src = url;
+  WB_IMG_ELEM_CACHE[url] = img; // store immediately (complete=false until loaded)
+  return null;
+}
 const HERO_IMG_LISTENERS = {}; // { heroName: Set<setStateFn> }
 const HERO_IMG_QUEUE = []; // pending heroNames waiting to be fetched
 let HERO_IMG_INFLIGHT = 0;
@@ -724,6 +741,18 @@ function MatchCardWithStats({ m, onUpdateStats, playerPhotos={}, onDelete }) {
               background:bc+"20",color:bc}}>{m.result}</span>
         }
         <span style={{fontWeight:800,fontSize:16,color:C.primaryLight}}>vs {m.rivalName}</span>
+        {m.category==="tournament" && (
+          <span style={{background:"#f9ca24"+"30",border:"1px solid #f9ca24"+"60",
+            color:"#f9ca24",borderRadius:99,padding:"2px 10px",fontSize:10,fontWeight:800}}>
+            🏆 แข่ง
+          </span>
+        )}
+        {(!m.category||m.category==="scrim") && (
+          <span style={{background:C.primary+"20",border:`1px solid ${C.primary}40`,
+            color:C.textMuted,borderRadius:99,padding:"2px 10px",fontSize:10,fontWeight:700}}>
+            🏋️ ซ้อม
+          </span>
+        )}
         <span style={{fontSize:13,color:C.textMuted}}>{m.date}</span>
         {isBO && (
           <div style={{display:"flex",gap:5}}>
@@ -1792,6 +1821,7 @@ function ScoutGameForm({ gameNo, teamA, teamB, rivals, enemyRosters, onSave, onC
   const [statsA,    setStatsA]    = useState({});
   const [statsB,    setStatsB]    = useState({});
   const [result,    setResult]    = useState("A");
+  const [sideA,     setSideA]     = useState("blue"); // "blue" | "red" — side ของ teamA
   const [killsA,    setKillsA]    = useState("");
   const [killsB,    setKillsB]    = useState("");
   const [duration,  setDuration]  = useState("");
@@ -1843,6 +1873,7 @@ function ScoutGameForm({ gameNo, teamA, teamB, rivals, enemyRosters, onSave, onC
 
   function handleSave() {
     onSave({ gameNo, teamAResult:result==="A"?"WIN":"LOSE",
+      sideA, sideB: sideA==="blue"?"red":"blue",
       picksA, picksB, statsA, statsB,
       killsA, killsB, duration, note, tags });
   }
@@ -1999,7 +2030,7 @@ function ScoutGameForm({ gameNo, teamA, teamB, rivals, enemyRosters, onSave, onC
         {renderPickColumn(teamB||"ทีม B","B",picksB,setPicksB,rosterB,C.red)}
       </div>
 
-      {/* Result + kills + duration */}
+      {/* Result + side + kills + duration */}
       <div style={{display:"flex",gap:10,alignItems:"flex-end",marginBottom:10,flexWrap:"wrap"}}>
         <div>
           <div style={{fontSize:10,color:C.textMuted,marginBottom:4}}>ทีมที่ชนะ</div>
@@ -2013,6 +2044,23 @@ function ScoutGameForm({ gameNo, teamA, teamB, rivals, enemyRosters, onSave, onC
                 🏆 {opt.label}
               </button>
             ))}
+          </div>
+        </div>
+        <div>
+          <div style={{fontSize:10,color:C.textMuted,marginBottom:4}}>ฝั่ง {teamA||"ทีม A"}</div>
+          <div style={{display:"flex",gap:6}}>
+            {[{k:"blue",label:"🔵 Blue",col:C.blue},{k:"red",label:"🔴 Red",col:C.red}].map(s=>(
+              <button key={s.k} onClick={()=>setSideA(s.k)}
+                style={{background:sideA===s.k?s.col+"30":"transparent",
+                  border:`2px solid ${sideA===s.k?s.col:C.border}`,
+                  color:sideA===s.k?s.col:C.textMuted,
+                  borderRadius:8,padding:"5px 10px",cursor:"pointer",fontWeight:700,fontSize:11}}>
+                {s.label}
+              </button>
+            ))}
+          </div>
+          <div style={{fontSize:9,color:C.textMuted,marginTop:3}}>
+            {teamB||"ทีม B"} = {sideA==="blue"?"🔴 Red":"🔵 Blue"}
           </div>
         </div>
         <div>
@@ -2285,6 +2333,17 @@ function ScoutCard({ sm, onDelete }) {
                   <span style={{fontWeight:800,fontSize:12,color:C.primaryLight}}>Game {gi+1}</span>
                   <span style={{padding:"2px 10px",borderRadius:99,fontSize:11,fontWeight:800,
                     background:C.win+"20",color:C.win}}>🏆 {winner}</span>
+                  {g.sideA&&(
+                    <span style={{fontSize:10,color:C.textMuted}}>
+                      <span style={{color:g.sideA==="blue"?C.blue:C.red,fontWeight:700}}>
+                        {g.sideA==="blue"?"🔵":"🔴"} {sm.teamA}
+                      </span>
+                      {" vs "}
+                      <span style={{color:g.sideA==="blue"?C.red:C.blue,fontWeight:700}}>
+                        {g.sideA==="blue"?"🔴":"🔵"} {sm.teamB}
+                      </span>
+                    </span>
+                  )}
                   {(g.killsA||g.killsB)&&(
                     <span style={{fontSize:11,color:C.textMuted}}>
                       <span style={{color:C.blue,fontWeight:700}}>{g.killsA||0}</span>
@@ -3380,6 +3439,9 @@ function TacticalWhiteboard() {
   const fileInputRef = useRef(null);
   const textInputRef = useRef(null);
 
+  // ── hero photos from context (user-uploaded) ──
+  const heroPhotos = useContext(HeroPhotosContext);
+
   // ── tool state ──
   const [tool,       setTool]       = useState("pen");
   const [color,      setColor]      = useState("#00cec9");
@@ -3484,27 +3546,20 @@ function TacticalWhiteboard() {
           ctx.setLineDash([]);
         }
       } else if (el.type === "hero") {
-        // draw circle with letter
+        // draw circle with hero image (uploaded > wiki fallback > letter)
         const col = TEAM_COLORS[el.team] || TEAM_COLORS.our;
         const r   = el.r || 22;
         ctx.lineWidth   = isSel ? 3 : 2;
-        // try to draw real hero image from cache
-        const heroObj = HERO_DATA.find(h=>h.name===el.name);
-        const cachedUrl = heroObj ? (HERO_IMG_CACHE[el.name] || null) : null;
+        // resolve best URL: user-uploaded first, then wiki cache
+        const uploadedUrl = heroPhotos?.[el.name] || null;
+        const wikiUrl     = HERO_IMG_CACHE[el.name] || null;
+        const imgUrl      = uploadedUrl || wikiUrl;
+        // trigger preload if needed — onReady redraws the canvas
+        const preloaded   = imgUrl ? getPreloadedImg(imgUrl, () => redraw()) : null;
         ctx.save();
         ctx.beginPath(); ctx.arc(el.x, el.y, r, 0, Math.PI*2); ctx.clip();
-        if (cachedUrl) {
-          const img = new Image();
-          img.src = cachedUrl;
-          if (img.complete && img.naturalWidth > 0) {
-            ctx.drawImage(img, el.x-r, el.y-r, r*2, r*2);
-          } else {
-            ctx.fillStyle = col+"40"; ctx.fill();
-            ctx.fillStyle = col;
-            ctx.font = `bold ${r*0.55}px 'Segoe UI', sans-serif`;
-            ctx.textAlign = "center"; ctx.textBaseline = "middle";
-            ctx.fillText(el.name.charAt(0), el.x, el.y-4);
-          }
+        if (preloaded) {
+          ctx.drawImage(preloaded, el.x-r, el.y-r, r*2, r*2);
         } else {
           ctx.fillStyle = col+"40"; ctx.fill();
           ctx.fillStyle = col;
@@ -4601,7 +4656,7 @@ function appReducer(state, action) {
 
     case "SAVE_MATCH": {
       const today = new Date().toLocaleDateString("th-TH",{day:"numeric",month:"short",year:"numeric"});
-      const m = { id: Date.now(), date: today, ...action.payload };
+      const m = { id: Date.now(), date: today, category: "scrim", ...action.payload };
       const rivals = state.rivals.find(r => r.name === action.payload.rivalName)
         ? state.rivals
         : [...state.rivals, { id: Date.now()+1, name: action.payload.rivalName }];
@@ -4702,6 +4757,9 @@ function appReducer(state, action) {
       return { ...state, rivals: [...state.rivals, { id: Date.now()+Math.random(), name }] };
     }
 
+    case "DELETE_RIVAL":
+      return { ...state, rivals: state.rivals.filter(r=>r.name!==action.payload) };
+
     case "ADD_CUSTOM_HERO": {
       // payload: { name, role, img? }
       const name = action.payload.name.trim();
@@ -4768,6 +4826,7 @@ function uiReducer(state, action) {
     case "SET_NEW_ENEMY_NAME":  return { ...state, newEnemyName: action.payload };
     case "CLEAR_NEW_NAME":      return { ...state, newName: "" };
     case "CLEAR_NEW_ENEMY_NAME":return { ...state, newEnemyName: "" };
+    case "SET_MATCH_CAT_FILTER":return { ...state, matchCatFilter: action.payload };
     default: return state;
   }
 }
@@ -4778,6 +4837,7 @@ function initDraftState() {
     stage:          "setup",   // setup | chooseSide | playing | done
     boType:         "BO3",
     rivalName:      "",
+    category:       "scrim",  // "scrim" | "tournament"
     ourSide:        null,
     currentGame:    1,
     completedGames: [],
@@ -4798,6 +4858,7 @@ function draftReducer(state, action) {
 
     case "SETUP_SET_BO":       return { ...state, boType: action.payload };
     case "SETUP_SET_RIVAL":    return { ...state, rivalName: action.payload };
+    case "SETUP_SET_CATEGORY": return { ...state, category: action.payload };
     case "SETUP_NEXT":         return { ...state, stage: "chooseSide" };
 
     case "CHOOSE_SIDE":
@@ -4990,7 +5051,7 @@ export default function RovApp() {
   // ── draft: finish session ──
   function finishSession(games) {
     if (!games.length) { dispatchDraft({ type:"RESET" }); return; }
-    handleSaveMatch({ rivalName:draft.rivalName, boType:draft.boType, games, ourSide:games[0].ourSide });
+    handleSaveMatch({ rivalName:draft.rivalName, boType:draft.boType, category:draft.category, games, ourSide:games[0].ourSide });
   }
 
   // ── overview stats ──
@@ -5264,17 +5325,47 @@ export default function RovApp() {
                   )}
                 </div>
               </div>
-              <p style={{margin:"0 0 20px",color:C.textMuted,fontSize:13}}>
+              <p style={{margin:"0 0 12px",color:C.textMuted,fontSize:13}}>
                 คลิกที่แมตช์เพื่อดูรายละเอียด · กด <b style={{color:C.win}}>📊 Stats ทั้งทีม</b> เพื่อกรอก KDA/Damage/DmgTaken/Gold
               </p>
-              {matches.length===0
-                ?<div style={{textAlign:"center",padding:60,background:C.bgPanel,borderRadius:14,color:C.textMuted}}>
-                    ยังไม่มีประวัติ — บันทึกแมตช์จาก Live Draft ก่อน
-                  </div>
-                :matches.map(m=>(
-                    <MatchCardWithStats key={m.id} m={m} onUpdateStats={handleUpdateStats} playerPhotos={app.playerPhotos} onDelete={id=>dispatchApp({type:"DELETE_MATCH",payload:id})}/>
-                  ))
-              }
+              {/* ── Filter tabs ── */}
+              {(() => {
+                const [matchCatFilter, setMatchCatFilter] = [ui.matchCatFilter||"all", v=>dispatchUI({type:"SET_MATCH_CAT_FILTER",payload:v})];
+                const tabs = [
+                  {id:"all",    label:"ทั้งหมด",  count: matches.length},
+                  {id:"scrim",  label:"🏋️ ซ้อม",  count: matches.filter(m=>!m.category||m.category==="scrim").length},
+                  {id:"tournament", label:"🏆 แข่ง", count: matches.filter(m=>m.category==="tournament").length},
+                ];
+                const filtered = matchCatFilter==="all" ? matches
+                  : matchCatFilter==="tournament" ? matches.filter(m=>m.category==="tournament")
+                  : matches.filter(m=>!m.category||m.category==="scrim");
+                return (
+                  <>
+                    <div style={{display:"flex",gap:6,marginBottom:16}}>
+                      {tabs.map(t=>(
+                        <button key={t.id} onClick={()=>setMatchCatFilter(t.id)}
+                          style={{background:matchCatFilter===t.id?C.primary+"30":"transparent",
+                            border:`2px solid ${matchCatFilter===t.id?C.primary:C.border}`,
+                            color:matchCatFilter===t.id?C.primaryLight:C.textMuted,
+                            borderRadius:99,padding:"6px 16px",cursor:"pointer",
+                            fontWeight:700,fontSize:12}}>
+                          {t.label} <span style={{opacity:0.6,fontWeight:400}}>({t.count})</span>
+                        </button>
+                      ))}
+                    </div>
+                    {filtered.length===0
+                      ?<div style={{textAlign:"center",padding:60,background:C.bgPanel,borderRadius:14,color:C.textMuted}}>
+                          {matches.length===0
+                            ? "ยังไม่มีประวัติ — บันทึกแมตช์จาก Live Draft ก่อน"
+                            : `ยังไม่มีแมตช์ประเภท "${tabs.find(t=>t.id===matchCatFilter)?.label}"`}
+                        </div>
+                      :filtered.map(m=>(
+                          <MatchCardWithStats key={m.id} m={m} onUpdateStats={handleUpdateStats} playerPhotos={app.playerPhotos} onDelete={id=>dispatchApp({type:"DELETE_MATCH",payload:id})}/>
+                        ))
+                    }
+                  </>
+                );
+              })()}
             </div>
           )}
 
@@ -5361,6 +5452,18 @@ export default function RovApp() {
                                 background:C.bgBase,padding:"6px",borderRadius:8,border:`1px solid ${C.border}`}}>
                                 ดูประวัติการดราฟต์ ➔
                               </div>
+                              <button
+                                onClick={e=>{
+                                  e.stopPropagation();
+                                  if(window.confirm(`ลบทีม "${rv.name}" ออกจาก Rivals?\nประวัติ Match/Scout จะยังอยู่ แต่ไม่แสดงในหน้านี้อีกต่อไป`))
+                                    dispatchApp({type:"DELETE_RIVAL",payload:rv.name});
+                                }}
+                                style={{marginTop:8,width:"100%",background:"transparent",
+                                  border:`1px solid ${C.lose}40`,color:C.lose,
+                                  borderRadius:8,padding:"5px 0",cursor:"pointer",
+                                  fontSize:11,fontWeight:700,opacity:0.7}}>
+                                🗑️ ลบทีมนี้
+                              </button>
                             </div>
                           );
                         })}
@@ -5937,6 +6040,23 @@ function DraftPageR({ draft, dispatch, roster, rivals, enemyRosters, onFinishSes
                   color:boType===b.label?C.primaryLight:C.textMuted,
                   borderRadius:10,padding:"10px 4px",cursor:"pointer",textAlign:"center"}}>
                 <div style={{fontWeight:900,fontSize:15}}>{b.label}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+        {/* ── Category: ซ้อม / แข่ง ── */}
+        <div style={{marginBottom:28}}>
+          <div style={{fontSize:12,color:C.textMuted,marginBottom:10,fontWeight:700}}>ประเภทแมตช์</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+            {[{id:"scrim",label:"🏋️ ซ้อม",desc:"Scrim / Practice"},{id:"tournament",label:"🏆 แข่ง",desc:"Tournament / Official"}].map(cat=>(
+              <button key={cat.id}
+                onClick={()=>dispatch({type:"SETUP_SET_CATEGORY",payload:cat.id})}
+                style={{background:draft.category===cat.id?C.primary+"30":"transparent",
+                  border:`2px solid ${draft.category===cat.id?C.primary:C.border}`,
+                  color:draft.category===cat.id?C.primaryLight:C.textMuted,
+                  borderRadius:10,padding:"12px 8px",cursor:"pointer",textAlign:"center"}}>
+                <div style={{fontWeight:900,fontSize:15}}>{cat.label}</div>
+                <div style={{fontSize:10,marginTop:3,opacity:0.7}}>{cat.desc}</div>
               </button>
             ))}
           </div>
