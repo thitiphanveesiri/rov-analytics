@@ -4,8 +4,6 @@ import { prisma } from "@/lib/prisma";
 import { Resend } from "resend";
 import crypto from "crypto";
 
-const resend = new Resend(process.env.RESEND_API_KEY);
-
 // ป้องกัน brute force: จำกัด 3 request ต่อ email ต่อ 15 นาที
 const rateLimitMap = new Map();
 
@@ -47,6 +45,7 @@ export async function POST(req) {
       const resetUrl = `${process.env.NEXTAUTH_URL}/reset-password?token=${token}`;
 
       // ── ส่ง Email ผ่าน Resend ──
+      const resend = new Resend(process.env.RESEND_API_KEY);
       await resend.emails.send({
         from: "RoV Analytics <onboarding@resend.dev>",
         to: normalizedEmail,

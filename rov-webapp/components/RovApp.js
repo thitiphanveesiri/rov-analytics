@@ -4069,13 +4069,23 @@ function TacticalWhiteboard() {
     if(ov) ov.getContext("2d").clearRect(0,0,canvasW,canvasH);
 
     if (tool==="pen" && currentPath.current.length>1) {
+      // วาด path ลง main canvas ทันที (ก่อน React state update cycle)
+      // เพื่อไม่ให้ stroke หายไประหว่างรอ re-render
+      const mainCtx = canvasRef.current?.getContext("2d");
+      if (mainCtx && currentPath.current.length > 1) {
+        mainCtx.strokeStyle = color;
+        mainCtx.lineWidth   = size;
+        mainCtx.lineCap     = "round";
+        mainCtx.lineJoin    = "round";
+        mainCtx.beginPath();
+        currentPath.current.forEach((p, i) =>
+          i === 0 ? mainCtx.moveTo(p.x, p.y) : mainCtx.lineTo(p.x, p.y)
+        );
+        mainCtx.stroke();
+      }
+      // บันทึกเข้า state (redraw จาก state จะ sync ในภายหลัง)
       pushHistory();
-      setElements(prev=>{
-        const next=[...prev,{type:"path",points:currentPath.current,color,size}];
-        return next;
-      });
-      // force redraw immediately so stroke doesn't flicker
-      requestAnimationFrame(()=>redraw());
+      setElements(prev=>[...prev,{type:"path",points:currentPath.current,color,size}]);
     } else if (tool==="arrow") {
       pushHistory();
       setElements(prev=>[...prev,{type:"arrow",x1:startPt.current.x,y1:startPt.current.y,x2:pos.x,y2:pos.y,color,size}]);
