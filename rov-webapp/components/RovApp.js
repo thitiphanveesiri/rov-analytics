@@ -2139,21 +2139,21 @@ function ScoutGameForm({ gameNo, teamA, teamB, rivals, enemyRosters, onSave, onC
       {/* 3-col: teamA | hero grid | teamB */}
       <div style={{display:"flex",gap:10,marginBottom:14}}>
         {renderPickColumn(teamA||"ทีม A","A",picksA,setPicksA,rosterA,C.blue)}
-        <div style={{flex:1.4,display:"flex",flexDirection:"column",gap:6}}>
+        <div style={{flex:2,display:"flex",flexDirection:"column",gap:6}}>
           <div style={{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center"}}>
             <input value={search} onChange={e=>setSearch(e.target.value)}
               placeholder="🔍 Hero..."
-              style={{...iStyle,width:110,padding:"4px 8px",fontSize:11}}/>
+              style={{...iStyle,width:120,padding:"4px 8px",fontSize:11}}/>
             {ROLES_FILTER.map(r=>(
               <button key={r} onClick={()=>setRoleFilter(r)} style={{
                 background:roleFilter===r?(ROLE_COLOR[r]||C.primary):"#14112a",
                 border:`1px solid ${roleFilter===r?(ROLE_COLOR[r]||C.primary):C.border}`,
                 color:roleFilter===r?"#fff":C.textMuted,
-                borderRadius:99,padding:"2px 7px",fontSize:9,cursor:"pointer",fontWeight:700}}>{r}</button>
+                borderRadius:99,padding:"3px 9px",fontSize:10,cursor:"pointer",fontWeight:700}}>{r}</button>
             ))}
           </div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(54px,1fr))",
-            gap:3,maxHeight:260,overflowY:"auto"}}>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(62px,1fr))",
+            gap:4,maxHeight:420,overflowY:"auto"}}>
             {filtered.map(hero=>{
               const used=usedHeroes.has(hero.name);
               return (
@@ -3794,6 +3794,7 @@ function TacticalWhiteboard() {
   const [textMode,   setTextMode]   = useState(false);
   const [textPos,    setTextPos]    = useState(null);
   const [textVal,    setTextVal]    = useState("");
+  const [editingTextIdx, setEditingTextIdx] = useState(null); // index ของ text element ที่กำลังแก้
 
   // ── selected element ──
   const [selected,   setSelected]   = useState(null);
@@ -3837,7 +3838,7 @@ function TacticalWhiteboard() {
       ctx.fillText("อัพโหลดรูปแมพ RoV ด้านบน", canvasW/2, canvasH/2);
       drawElements(ctx);
     }
-  }, [mapImg, elements, selected]);
+  }, [mapImg, elements, selected, heroPhotos]);
 
   function drawElements(ctx) {
     elements.forEach((el, idx) => {
@@ -3988,6 +3989,20 @@ function TacticalWhiteboard() {
       }
       return;
     }
+    // double-click ใน text tool บน text element = แก้ไข
+    if (tool==="text") {
+      const hit = hitTest(pos);
+      if (hit!==null && elements[hit]?.type==="text") {
+        // แก้ไขข้อความเดิม
+        const el = elements[hit];
+        setEditingTextIdx(hit);
+        setTextPos({x:el.x, y:el.y});
+        setTextVal(el.text);
+        setTextMode(true);
+        setTimeout(()=>textInputRef.current?.focus(), 50);
+        return;
+      }
+    }
     if (tool==="erase") {
       const hit = hitTest(pos);
       if (hit!==null) deleteElement(hit);
@@ -4055,7 +4070,12 @@ function TacticalWhiteboard() {
 
     if (tool==="pen" && currentPath.current.length>1) {
       pushHistory();
-      setElements(prev=>[...prev,{type:"path",points:currentPath.current,color,size}]);
+      setElements(prev=>{
+        const next=[...prev,{type:"path",points:currentPath.current,color,size}];
+        return next;
+      });
+      // force redraw immediately so stroke doesn't flicker
+      requestAnimationFrame(()=>redraw());
     } else if (tool==="arrow") {
       pushHistory();
       setElements(prev=>[...prev,{type:"arrow",x1:startPt.current.x,y1:startPt.current.y,x2:pos.x,y2:pos.y,color,size}]);
@@ -4066,9 +4086,17 @@ function TacticalWhiteboard() {
   function commitText() {
     if (textVal.trim()) {
       pushHistory();
-      setElements(prev=>[...prev,{type:"text",x:textPos.x,y:textPos.y,text:textVal,color,size}]);
+      if (editingTextIdx !== null) {
+        // แก้ไขข้อความเดิม
+        setElements(prev => prev.map((el,i) =>
+          i===editingTextIdx ? {...el, text:textVal} : el
+        ));
+      } else {
+        // สร้างข้อความใหม่
+        setElements(prev=>[...prev,{type:"text",x:textPos.x,y:textPos.y,text:textVal,color,size}]);
+      }
     }
-    setTextMode(false); setTextVal(""); setTextPos(null);
+    setTextMode(false); setTextVal(""); setTextPos(null); setEditingTextIdx(null);
   }
 
   function placeHero(name) {
@@ -4219,6 +4247,18 @@ function TacticalWhiteboard() {
               onMouseMove={onMouseMove}
               onMouseUp={onMouseUp}
               onMouseLeave={onMouseUp}
+              onDoubleClick={e=>{
+                const pos = getPos(e);
+                const hit = hitTest(pos);
+                if (hit!==null && elements[hit]?.type==="text") {
+                  const el = elements[hit];
+                  setEditingTextIdx(hit);
+                  setTextPos({x:el.x, y:el.y});
+                  setTextVal(el.text);
+                  setTextMode(true);
+                  setTimeout(()=>textInputRef.current?.focus(), 50);
+                }
+              }}
             />
             {/* overlay canvas for live preview */}
             <canvas ref={overlayRef} width={canvasW} height={canvasH}
@@ -4233,12 +4273,12 @@ function TacticalWhiteboard() {
                 transform:"translate(0,-50%)"}}>
                 <input ref={textInputRef}
                   value={textVal} onChange={e=>setTextVal(e.target.value)}
-                  onKeyDown={e=>{ if(e.key==="Enter")commitText(); if(e.key==="Escape"){setTextMode(false);setTextVal("");} }}
+                  onKeyDown={e=>{ if(e.key==="Enter")commitText(); if(e.key==="Escape"){setTextMode(false);setTextVal("");setEditingTextIdx(null);} }}
                   onBlur={commitText}
-                  style={{background:"rgba(20,17,42,0.92)",border:`1px solid ${C.primary}`,
+                  style={{background:"rgba(20,17,42,0.92)",border:`2px solid ${editingTextIdx!==null?C.win:C.primary}`,
                     color:color,borderRadius:4,padding:"3px 8px",
-                    fontSize:`${size*3+10}px`,outline:"none",minWidth:100,fontWeight:700}}
-                  placeholder="พิมพ์ข้อความ..."/>
+                    fontSize:`${size*3+10}px`,outline:"none",minWidth:120,fontWeight:700}}
+                  placeholder={editingTextIdx!==null?"แก้ไขข้อความ...":"พิมพ์ข้อความ..."}/>
               </div>
             )}
           </div>
@@ -4352,6 +4392,7 @@ function TacticalWhiteboard() {
             <div>✏️ วาดเส้นอิสระ</div>
             <div>→ วาดลูกศรทิศทาง</div>
             <div>T พิมพ์ข้อความ</div>
+            <div>🖱️ ดับเบิ้ลคลิก text = แก้ไข</div>
             <div>🦸 วาง Hero icon</div>
             <div>↖ Select & ย้าย</div>
             <div>⌫ ลบ element</div>
