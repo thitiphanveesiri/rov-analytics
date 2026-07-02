@@ -1881,6 +1881,8 @@ function ScoutGameForm({ gameNo, teamA, teamB, rivals, enemyRosters, onSave, onC
   const initPicks = () => ROLES_PICK.map(r=>({role:r,hero:null,player:""}));
   const [picksA,    setPicksA]    = useState(initPicks);
   const [picksB,    setPicksB]    = useState(initPicks);
+  const [bansA,     setBansA]     = useState(Array(4).fill(null)); // ลำดับแบน ทีม A (4 ตัว)
+  const [bansB,     setBansB]     = useState(Array(4).fill(null)); // ลำดับแบน ทีม B (4 ตัว)
   // statsA/B: { [slotIdx]: { kills, deaths, assists, damage, damageTaken, gold } }
   const [statsA,    setStatsA]    = useState({});
   const [statsB,    setStatsB]    = useState({});
@@ -1907,6 +1909,8 @@ function ScoutGameForm({ gameNo, teamA, teamB, rivals, enemyRosters, onSave, onC
   );
 
   function pickHero(hero) {
+    // ถ้ากำลัง ban อยู่ให้ ban ก่อน
+    if (banMode) { banHero(hero); return; }
     if (usedHeroes.has(hero.name)) return;
     const { team, idx } = activeSlot;
     if (team==="A") { const p=[...picksA]; p[idx]={...p[idx],hero}; setPicksA(p); }
@@ -1930,6 +1934,28 @@ function ScoutGameForm({ gameNo, teamA, teamB, rivals, enemyRosters, onSave, onC
 
   function toggleTag(t) { setTags(prev=>prev.includes(t)?prev.filter(x=>x!==t):[...prev,t]); }
 
+  // ── Ban hero (เลือก slot ว่างอัตโนมัติ) ──
+  const [banMode, setBanMode] = useState(null); // null | "A" | "B"
+  const [banSlot, setBanSlot] = useState(0);
+
+  function banHero(hero) {
+    if (!banMode) return;
+    if (banMode==="A") {
+      const b=[...bansA]; b[banSlot]=hero; setBansA(b);
+      const next=bansA.findIndex((x,i)=>i>banSlot&&!x);
+      if(next>=0) setBanSlot(next); else setBanMode(null);
+    } else {
+      const b=[...bansB]; b[banSlot]=hero; setBansB(b);
+      const next=bansB.findIndex((x,i)=>i>banSlot&&!x);
+      if(next>=0) setBanSlot(next); else setBanMode(null);
+    }
+  }
+
+  function clearBan(team, idx) {
+    if(team==="A"){ const b=[...bansA]; b[idx]=null; setBansA(b); }
+    else          { const b=[...bansB]; b[idx]=null; setBansB(b); }
+  }
+
   function setStatVal(side, idx, field, val) {
     const setter = side==="A" ? setStatsA : setStatsB;
     setter(prev=>({...prev,[idx]:{...(prev[idx]||{}),[field]:val===""?undefined:Number(val)}}));
@@ -1938,7 +1964,7 @@ function ScoutGameForm({ gameNo, teamA, teamB, rivals, enemyRosters, onSave, onC
   function handleSave() {
     onSave({ gameNo, teamAResult:result==="A"?"WIN":"LOSE",
       sideA, sideB: sideA==="blue"?"red":"blue",
-      picksA, picksB, statsA, statsB,
+      picksA, picksB, bansA, bansB, statsA, statsB,
       killsA, killsB, duration, note, tags });
   }
 
@@ -2058,6 +2084,56 @@ function ScoutGameForm({ gameNo, teamA, teamB, rivals, enemyRosters, onSave, onC
     <div style={{background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:14,padding:"16px 18px",marginBottom:12}}>
       <div style={{fontWeight:800,fontSize:14,color:C.primaryLight,marginBottom:12}}>
         🎮 Game {gameNo}
+      </div>
+
+      {/* ── Ban Order Section ── */}
+      <div style={{marginBottom:14,background:C.bgCard,borderRadius:12,padding:"12px 14px"}}>
+        <div style={{fontWeight:700,fontSize:12,color:C.textMuted,marginBottom:10}}>
+          🚫 ลำดับแบน
+          <span style={{fontSize:10,fontWeight:400,marginLeft:8,opacity:0.6}}>
+            {banMode ? `กำลังแบนให้${banMode==="A"?teamA||"ทีม A":teamB||"ทีม B"} — คลิก Hero ด้านล่าง` : "กดปุ่มเพื่อเพิ่มแบน"}
+          </span>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+          {[{label:teamA||"ทีม A",col:C.blue,bans:bansA,setBans:setBansA,team:"A"},
+            {label:teamB||"ทีม B",col:C.red, bans:bansB,setBans:setBansB,team:"B"}].map(({label,col,bans,team})=>(
+            <div key={team}>
+              <div style={{fontSize:11,color:col,fontWeight:700,marginBottom:6}}>{label}</div>
+              <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+                {bans.map((h,i)=>(
+                  <div key={i}
+                    onClick={()=>{ if(h){ clearBan(team,i); } else { setBanMode(team); setBanSlot(i); }}}
+                    style={{width:40,height:40,borderRadius:8,border:`2px solid ${h?col:C.border}`,
+                      background:h?col+"20":C.bgBase,cursor:"pointer",
+                      display:"flex",alignItems:"center",justifyContent:"center",
+                      position:"relative",overflow:"hidden",
+                      outline:banMode===team&&banSlot===i?`3px solid ${col}`:"none"}}>
+                    {h
+                      ? <><HeroChip name={h.name} size={36} accentCol={col} fontSize={9}/>
+                          <div style={{position:"absolute",top:0,left:0,background:"rgba(0,0,0,0.5)",
+                            fontSize:9,fontWeight:900,color:"#fff",padding:"1px 3px",borderRadius:"0 0 4px 0"}}>
+                            {i+1}
+                          </div>
+                        </>
+                      : <span style={{fontSize:16,color:C.border}}>+</span>
+                    }
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+        {banMode&&(
+          <div style={{marginTop:8,fontSize:11,color:C.textMuted,
+            background:C.bgBase,borderRadius:7,padding:"5px 10px"}}>
+            💡 คลิก Hero ในกริดด้านล่างเพื่อแบน · กด + อีกครั้งเพื่อยกเลิก
+            <button onClick={()=>setBanMode(null)}
+              style={{marginLeft:10,background:"transparent",border:"none",
+                color:C.lose,cursor:"pointer",fontWeight:700,fontSize:11}}>
+              ✕ ยกเลิก
+            </button>
+          </div>
+        )}
       </div>
 
       {/* 3-col: teamA | hero grid | teamB */}
@@ -2196,13 +2272,14 @@ function ScoutGameForm({ gameNo, teamA, teamB, rivals, enemyRosters, onSave, onC
   );
 }
 function ScoutSessionCreator({ rivals, enemyRosters, onSave, onCancel }) {
-  const [teamA,    setTeamA]    = useState("");
-  const [teamB,    setTeamB]    = useState("");
-  const [mode,     setMode]     = useState("quick"); // "quick" | "bo"
-  const [boType,   setBoType]   = useState("BO3");
-  const [games,    setGames]    = useState([]);
-  const [gameNo,   setGameNo]   = useState(1);
-  const [stage,    setStage]    = useState("setup"); // "setup" | "recording" | "done"
+  const [teamA,      setTeamA]      = useState("");
+  const [teamB,      setTeamB]      = useState("");
+  const [mode,       setMode]       = useState("quick"); // "quick" | "bo"
+  const [boType,     setBoType]     = useState("BO3");
+  const [scoutCat,   setScoutCat]   = useState("scrim"); // "scrim" | "tournament"
+  const [games,      setGames]      = useState([]);
+  const [gameNo,     setGameNo]     = useState(1);
+  const [stage,      setStage]      = useState("setup"); // "setup" | "recording" | "done"
 
   const bo = BO_OPTIONS.find(b=>b.label===boType)||BO_OPTIONS[2];
 
@@ -2210,7 +2287,8 @@ function ScoutSessionCreator({ rivals, enemyRosters, onSave, onCancel }) {
     const newGames = [...games, gameData];
     setGames(newGames);
     if (mode==="quick" || newGames.length >= bo.total) {
-      onSave({ teamA, teamB, mode, boType:mode==="bo"?boType:"Quick", games:newGames });
+      onSave({ teamA, teamB, mode, boType:mode==="bo"?boType:"Quick",
+               category:scoutCat, games:newGames });
     } else {
       setGameNo(n=>n+1);
     }
@@ -2274,6 +2352,24 @@ function ScoutSessionCreator({ rivals, enemyRosters, onSave, onCancel }) {
             </div>
           </div>
         )}
+      </div>
+
+      {/* ── ประเภท Scout ── */}
+      <div style={{marginBottom:16}}>
+        <div style={{fontSize:11,color:C.textMuted,fontWeight:700,marginBottom:8}}>ประเภทแมตช์</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+          {[{id:"scrim",label:"🏋️ ซ้อม",desc:"Scrim / Practice"},
+            {id:"tournament",label:"🏆 แข่ง",desc:"Tournament / Official"}].map(cat=>(
+            <button key={cat.id} onClick={()=>setScoutCat(cat.id)}
+              style={{background:scoutCat===cat.id?C.primary+"30":"transparent",
+                border:`2px solid ${scoutCat===cat.id?C.primary:C.border}`,
+                color:scoutCat===cat.id?C.primaryLight:C.textMuted,
+                borderRadius:10,padding:"10px 8px",cursor:"pointer",textAlign:"center"}}>
+              <div style={{fontWeight:900,fontSize:14}}>{cat.label}</div>
+              <div style={{fontSize:10,marginTop:2,opacity:0.7}}>{cat.desc}</div>
+            </button>
+          ))}
+        </div>
       </div>
 
       <div style={{display:"flex",gap:8}}>
@@ -2360,6 +2456,12 @@ function ScoutCard({ sm, onDelete }) {
         <span style={{fontSize:11,color:C.textMuted}}>{sm.date}</span>
         <span style={{fontSize:11,padding:"2px 9px",borderRadius:99,fontWeight:700,
           background:C.primary+"20",color:C.primaryLight}}>{sm.boType}</span>
+        {sm.category==="tournament"
+          ? <span style={{background:"#f9ca24"+"30",border:"1px solid #f9ca24"+"60",color:"#f9ca24",
+              borderRadius:99,padding:"2px 9px",fontSize:10,fontWeight:800}}>🏆 แข่ง</span>
+          : <span style={{background:C.border+"40",color:C.textMuted,
+              borderRadius:99,padding:"2px 9px",fontSize:10,fontWeight:700}}>🏋️ ซ้อม</span>
+        }
         <div style={{marginLeft:"auto",display:"flex",gap:12,alignItems:"center"}}>
           {/* win score */}
           <div style={{display:"flex",gap:4,alignItems:"center"}}>
@@ -2427,6 +2529,34 @@ function ScoutCard({ sm, onDelete }) {
                   )}
                 </div>
 
+                {/* ── Ban Order Display ── */}
+                {(g.bansA?.some(Boolean)||g.bansB?.some(Boolean))&&(
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
+                    {[{label:sm.teamA,bans:g.bansA||[],col:C.blue,sideLabel:g.sideA==="blue"?"🔵":"🔴"},
+                      {label:sm.teamB,bans:g.bansB||[],col:C.red, sideLabel:g.sideA==="blue"?"🔴":"🔵"}].map(({label,bans,col,sideLabel})=>(
+                      <div key={label}>
+                        <div style={{fontSize:10,color:col,fontWeight:700,marginBottom:5}}>
+                          {sideLabel} {label} แบน:
+                        </div>
+                        <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+                          {bans.map((h,i)=>h&&(
+                            <div key={i} style={{position:"relative"}}>
+                              <HeroChip name={h.name} size={32} accentCol={col} fontSize={9}/>
+                              <div style={{position:"absolute",top:-3,left:-3,
+                                background:col,color:"#fff",fontSize:8,fontWeight:900,
+                                width:14,height:14,borderRadius:"50%",
+                                display:"flex",alignItems:"center",justifyContent:"center",
+                                lineHeight:1}}>
+                                {i+1}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
                 {/* picks + inline stats */}
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:g.note?8:0}}>
                   {[
@@ -2491,8 +2621,10 @@ function ScoutCard({ sm, onDelete }) {
 // ── helper: คำนวณ stats ต่อ matchup ──
 function calcMatchupStats(records, teamFocus) {
   let wins=0, games=0, kFor=0, kAgainst=0;
-  let totK=0,totD=0,totA=0,totDmg=0,totDtk=0,statCnt=0;
-  const heroFreq={}, patternCount={};
+  let totK=0,totD=0,totA=0,totDmg=0,totDtk=0,totGold=0,statCnt=0;
+  // แยกตาม side (blue/red)
+  const sideStats = { blue:{dmg:0,dtk:0,gold:0,cnt:0,wins:0,games:0}, red:{dmg:0,dtk:0,gold:0,cnt:0,wins:0,games:0} };
+  const heroFreq={}, patternCount={}, banFreq={};
 
   records.forEach(sm=>{
     const isA = sm.teamA===teamFocus;
@@ -2502,20 +2634,35 @@ function calcMatchupStats(records, teamFocus) {
       if (won) wins++;
       kFor     += Number(isA?g.killsA:g.killsB||0);
       kAgainst += Number(isA?g.killsB:g.killsA||0);
+
+      // side ของ teamFocus
+      const mySide = isA ? (g.sideA||"blue") : (g.sideA==="blue"?"red":"blue");
+      sideStats[mySide].games++;
+      if(won) sideStats[mySide].wins++;
+
       // stats per player
       const stats = isA?(g.statsA||{}):(g.statsB||{});
       Object.values(stats).forEach(ps=>{ if(ps?.kills!==undefined){
-        totK+=Number(ps.kills||0);totD+=Number(ps.deaths||0);
-        totA+=Number(ps.assists||0);totDmg+=Number(ps.damage||0);
-        totDtk+=Number(ps.damageTaken||0);statCnt++;
+        const k=Number(ps.kills||0),d=Number(ps.deaths||0),a=Number(ps.assists||0);
+        const dmg=Number(ps.damage||0),dtk=Number(ps.damageTaken||0),gold=Number(ps.gold||0);
+        totK+=k;totD+=d;totA+=a;totDmg+=dmg;totDtk+=dtk;totGold+=gold;statCnt++;
+        sideStats[mySide].dmg+=dmg;sideStats[mySide].dtk+=dtk;
+        sideStats[mySide].gold+=gold;sideStats[mySide].cnt++;
       }});
-      // hero freq
+
+      // hero freq + ban freq
       const picks = isA?g.picksA:g.picksB;
       (picks||[]).forEach(s=>{ if(s.hero?.name) heroFreq[s.hero.name]=(heroFreq[s.hero.name]||0)+1; });
-      // patterns
+      const bans = isA?(g.bansA||[]):(g.bansB||[]);
+      bans.forEach(h=>{ if(h?.name) banFreq[h.name]=(banFreq[h.name]||0)+1; });
       (g.tags||[]).forEach(t=>{ patternCount[t]=(patternCount[t]||0)+1; });
     });
   });
+
+  // side win rate
+  const blueGames=sideStats.blue.games, blueWins=sideStats.blue.wins;
+  const redGames=sideStats.red.games,   redWins=sideStats.red.wins;
+
   return {
     wins, games, losses:games-wins,
     wr: games?Math.round(wins/games*100):0,
@@ -2526,8 +2673,19 @@ function calcMatchupStats(records, teamFocus) {
     avgA:    statCnt?(totA/statCnt).toFixed(1):"-",
     avgDmg:  statCnt?Math.round(totDmg/statCnt):null,
     avgDtk:  statCnt?Math.round(totDtk/statCnt):null,
+    avgGold: statCnt?Math.round(totGold/statCnt):null,
     statCnt,
-    topHeroes: Object.entries(heroFreq).sort((a,b)=>b[1]-a[1]).slice(0,8),
+    // side breakdown
+    blue: { games:blueGames, wins:blueWins, wr:blueGames?Math.round(blueWins/blueGames*100):null,
+      avgDmg:sideStats.blue.cnt?Math.round(sideStats.blue.dmg/sideStats.blue.cnt):null,
+      avgDtk:sideStats.blue.cnt?Math.round(sideStats.blue.dtk/sideStats.blue.cnt):null,
+      avgGold:sideStats.blue.cnt?Math.round(sideStats.blue.gold/sideStats.blue.cnt):null },
+    red:  { games:redGames,  wins:redWins,  wr:redGames ?Math.round(redWins/redGames*100):null,
+      avgDmg:sideStats.red.cnt?Math.round(sideStats.red.dmg/sideStats.red.cnt):null,
+      avgDtk:sideStats.red.cnt?Math.round(sideStats.red.dtk/sideStats.red.cnt):null,
+      avgGold:sideStats.red.cnt?Math.round(sideStats.red.gold/sideStats.red.cnt):null },
+    topHeroes:   Object.entries(heroFreq).sort((a,b)=>b[1]-a[1]).slice(0,8),
+    topBans:     Object.entries(banFreq).sort((a,b)=>b[1]-a[1]).slice(0,8),
     topPatterns: Object.entries(patternCount).sort((a,b)=>b[1]-a[1]).slice(0,6),
   };
 }
@@ -2626,6 +2784,83 @@ function MatchupDetail({ rivalName, opponent, records, rivals, enemyRosters, onS
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+
+          {/* ── Side Win Rate + Gold/Dmg/DmgTkn Comparison ── */}
+          {(st.blue.games>0||st.red.games>0)&&(
+            <div style={SC.card}>
+              <div style={{fontWeight:700,fontSize:12,color:C.primaryLight,marginBottom:12}}>
+                🔵🔴 สถิติแยกฝั่ง ({rivalName})
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
+                {[{id:"blue",label:"🔵 Blue Side",col:C.blue},{id:"red",label:"🔴 Red Side",col:C.red}].map(s=>{
+                  const sd=st[s.id];
+                  return (
+                    <div key={s.id} style={{background:C.bgCard,borderRadius:10,padding:"12px 14px"}}>
+                      <div style={{fontWeight:800,fontSize:13,color:s.col,marginBottom:8}}>{s.label}</div>
+                      {sd.games===0
+                        ? <div style={{color:C.textMuted,fontSize:11}}>ไม่มีข้อมูล</div>
+                        : <>
+                          <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                            <span style={{fontSize:11,color:C.textMuted}}>Win Rate</span>
+                            <span style={{fontWeight:800,fontSize:13,color:sd.wr>=50?C.win:C.lose}}>
+                              {sd.wr}% ({sd.wins}/{sd.games})
+                            </span>
+                          </div>
+                          {sd.avgDmg&&<div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                            <span style={{fontSize:11,color:C.textMuted}}>Avg Dmg</span>
+                            <span style={{fontWeight:700,fontSize:12,color:"#e17055"}}>{sd.avgDmg?.toLocaleString()}</span>
+                          </div>}
+                          {sd.avgDtk&&<div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                            <span style={{fontSize:11,color:C.textMuted}}>Avg DmgTkn</span>
+                            <span style={{fontWeight:700,fontSize:12,color:C.lose}}>{sd.avgDtk?.toLocaleString()}</span>
+                          </div>}
+                          {sd.avgGold&&<div style={{display:"flex",justifyContent:"space-between"}}>
+                            <span style={{fontSize:11,color:C.textMuted}}>Avg Gold</span>
+                            <span style={{fontWeight:700,fontSize:12,color:"#f9ca24"}}>{sd.avgGold?.toLocaleString()}</span>
+                          </div>}
+                        </>
+                      }
+                    </div>
+                  );
+                })}
+              </div>
+              {/* โดยรวม Gold/Dmg/DmgTkn */}
+              {st.statCnt>0&&(
+                <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
+                  {[{label:"Avg Gold",val:st.avgGold,col:"#f9ca24"},
+                    {label:"Avg Dmg",val:st.avgDmg,col:"#e17055"},
+                    {label:"Avg DmgTkn",val:st.avgDtk,col:C.lose}].map(c=>(
+                    <div key={c.label} style={{background:C.bgCard,borderRadius:8,padding:"8px",textAlign:"center"}}>
+                      <div style={{fontSize:9,color:C.textMuted,marginBottom:2}}>{c.label}</div>
+                      <div style={{fontSize:14,fontWeight:800,color:c.col}}>
+                        {c.val?c.val.toLocaleString():"-"}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Top Bans ── */}
+          {st.topBans.length>0&&(
+            <div style={SC.card}>
+              <div style={{fontWeight:700,fontSize:12,color:"#e17055",marginBottom:10}}>
+                🚫 Hero ที่แบนบ่อย ({rivalName})
+              </div>
+              {st.topBans.map(([h,cnt],i)=>(
+                <div key={h} style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+                  padding:"5px 8px",background:i%2===0?"transparent":C.bgCard,borderRadius:6,marginBottom:2}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <span style={{fontSize:10,color:C.textMuted,width:16}}>#{i+1}</span>
+                    <HeroChip name={h} size={26} accentCol={"#e17055"} fontSize={12}/>
+                  </div>
+                  <span style={{background:"#e17055"+"20",color:"#e17055",fontSize:10,
+                    padding:"1px 8px",borderRadius:99,fontWeight:700}}>×{cnt}</span>
+                </div>
+              ))}
             </div>
           )}
 
@@ -2734,11 +2969,37 @@ function ScoutLogPage({ rivalName, scoutMatches, rivals, enemyRosters, onSaveSco
         </div>
       ) : (
         <>
-          <p style={{margin:"0 0 12px",color:C.textMuted,fontSize:12}}>
-            เลือก matchup เพื่อดูรายละเอียด
-          </p>
-          <div style={{display:"flex",flexDirection:"column",gap:8}}>
-            {matchups.map(mu=>(
+          {/* ── Category filter tabs ── */}
+          {(()=>{
+            const [scoutCatFilter, setScoutCatFilter] = React.useState("all");
+            const scrimCount = related.filter(sm=>!sm.category||sm.category==="scrim").length;
+            const tourneyCount = related.filter(sm=>sm.category==="tournament").length;
+            const filteredMatchups = matchups.filter(mu=>{
+              if(scoutCatFilter==="all") return true;
+              return mu.recs.some(sm=>scoutCatFilter==="tournament"
+                ? sm.category==="tournament"
+                : (!sm.category||sm.category==="scrim"));
+            });
+            return (
+              <>
+                <div style={{display:"flex",gap:6,marginBottom:14}}>
+                  {[{id:"all",label:"ทั้งหมด",count:related.length},
+                    {id:"scrim",label:"🏋️ ซ้อม",count:scrimCount},
+                    {id:"tournament",label:"🏆 แข่ง",count:tourneyCount}].map(t=>(
+                    <button key={t.id} onClick={()=>setScoutCatFilter(t.id)}
+                      style={{background:scoutCatFilter===t.id?C.primary+"30":"transparent",
+                        border:`2px solid ${scoutCatFilter===t.id?C.primary:C.border}`,
+                        color:scoutCatFilter===t.id?C.primaryLight:C.textMuted,
+                        borderRadius:99,padding:"5px 14px",cursor:"pointer",fontWeight:700,fontSize:11}}>
+                      {t.label} <span style={{opacity:0.6,fontWeight:400}}>({t.count})</span>
+                    </button>
+                  ))}
+                </div>
+                <p style={{margin:"0 0 12px",color:C.textMuted,fontSize:12}}>
+                  เลือก matchup เพื่อดูรายละเอียด
+                </p>
+                <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                  {filteredMatchups.map(mu=>(
               <div key={mu.opp}
                 onClick={()=>setSelOpponent(mu.opp)}
                 style={{background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:14,
@@ -2811,7 +3072,10 @@ function ScoutLogPage({ rivalName, scoutMatches, rivals, enemyRosters, onSaveSco
                 <span style={{marginLeft:"auto",color:C.textMuted,fontSize:13}}>→</span>
               </div>
             ))}
-          </div>
+                </div>
+              </>
+            );
+          })()}
         </>
       )}
     </div>
