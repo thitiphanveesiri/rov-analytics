@@ -2908,8 +2908,9 @@ function MatchupDetail({ rivalName, opponent, records, rivals, enemyRosters, onS
 
 // ── Scout Log Page: matchup list ──
 function ScoutLogPage({ rivalName, scoutMatches, rivals, enemyRosters, onSaveScout, onDeleteScout }) {
-  const [creating,    setCreating]    = useState(false);
-  const [selOpponent, setSelOpponent] = useState(null); // ทีมที่เลือก drill-down
+  const [creating,       setCreating]       = useState(false);
+  const [selOpponent,    setSelOpponent]    = useState(null);
+  const [scoutCatFilter, setScoutCatFilter] = useState("all"); // "all" | "scrim" | "tournament"
 
   // records ที่ rivalName เกี่ยวข้อง
   const related = scoutMatches.filter(sm=>sm.teamA===rivalName||sm.teamB===rivalName);
@@ -2971,7 +2972,6 @@ function ScoutLogPage({ rivalName, scoutMatches, rivals, enemyRosters, onSaveSco
         <>
           {/* ── Category filter tabs ── */}
           {(()=>{
-            const [scoutCatFilter, setScoutCatFilter] = React.useState("all");
             const scrimCount = related.filter(sm=>!sm.category||sm.category==="scrim").length;
             const tourneyCount = related.filter(sm=>sm.category==="tournament").length;
             const filteredMatchups = matchups.filter(mu=>{
