@@ -100,6 +100,9 @@ export default function LoginPage() {
           <Link href="/register" style={{ color: C.primaryLight, fontWeight: 700, textDecoration: "none" }}>
             สมัครสมาชิก
           </Link>
+          <Link href="/forgot-password" style={{ color: C.primaryLight, fontWeight: 700, textDecoration: "none" }}>
+            ลืมรหัสผ่าน?
+          </Link>
         </div>
       </div>
     </div>

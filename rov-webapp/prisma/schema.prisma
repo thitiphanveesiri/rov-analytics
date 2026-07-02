@@ -12,21 +12,24 @@ datasource db {
 
 // ── Auth ──
 model User {
-  id         String   @id @default(cuid())
-  email      String   @unique
-  password   String
-  name       String?
-  createdAt  DateTime @default(now())
-  teamId     String?  // null = ยังไม่ได้เข้าทีม
-  role       String   @default("member") // "coach" | "member"
-  team       Team?    @relation(fields: [teamId], references: [id])
+  id               String    @id @default(cuid())
+  email            String    @unique
+  password         String
+  name             String?
+  createdAt        DateTime  @default(now())
+  teamId           String?   // null = ยังไม่ได้เข้าทีม
+  role             String    @default("member") // "admin" | "coach" | "member"
+  team             Team?     @relation(fields: [teamId], references: [id])
+  // Reset password
+  resetToken       String?   @unique
+  resetTokenExpiry DateTime?
 }
 
 // ── Team ──
 model Team {
   id          String    @id @default(cuid())
   name        String
-  inviteCode  String    @unique @default(cuid()) // code สำหรับเชิญเข้าทีม
+  inviteCode  String    @unique @default(cuid())
   createdAt   DateTime  @default(now())
   members     User[]
   data        TeamData?

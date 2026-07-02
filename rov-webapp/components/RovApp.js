@@ -710,7 +710,7 @@ function SingleGameDetail({ g, gameNo, onUpdateStats, playerPhotos={}, rivalName
 // ═══════════════════════════════════════════
 //  MATCH CARD (Match Log page)
 // ═══════════════════════════════════════════
-function MatchCardWithStats({ m, onUpdateStats, playerPhotos={}, onDelete }) {
+function MatchCardWithStats({ m, onUpdateStats, playerPhotos={}, onDelete, onEditMeta }) {
   const [open, setOpen] = useState(false);
   const isBO  = Array.isArray(m.games) && m.games.length > 0;
   const wins  = isBO ? m.games.filter(g=>g.result==="WIN").length : (m.result==="WIN"?1:0);
@@ -722,10 +722,21 @@ function MatchCardWithStats({ m, onUpdateStats, playerPhotos={}, onDelete }) {
   const [gameStats, setGameStats] = useState(m.gameStats || { our:{}, enemy:{} });
   const [saved,     setSaved]     = useState(false);
 
+  // ── Edit meta ──
+  const [editing,   setEditing]   = useState(false);
+  const [editRival, setEditRival] = useState(m.rivalName||"");
+  const [editCat,   setEditCat]   = useState(m.category||"scrim");
+  const [editNote,  setEditNote]  = useState(m.note||"");
+
   function handleSingleSave() {
     onUpdateStats && onUpdateStats(m.id, null, gameStats);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
+  }
+
+  function handleSaveMeta() {
+    onEditMeta && onEditMeta({ id:m.id, rivalName:editRival.trim()||m.rivalName, category:editCat, note:editNote });
+    setEditing(false);
   }
 
   return (
@@ -783,6 +794,13 @@ function MatchCardWithStats({ m, onUpdateStats, playerPhotos={}, onDelete }) {
             </span>
           )}
           {isBO && <span style={{fontSize:12,color:bc,fontWeight:700}}>{wins}W – {total-wins}L</span>}
+          {onEditMeta && (
+            <button onClick={e=>{ e.stopPropagation(); setEditing(v=>!v); }}
+              style={{background:C.primary+"20",border:`1px solid ${C.primary}40`,color:C.primaryLight,
+                borderRadius:7,padding:"3px 10px",cursor:"pointer",fontSize:11,fontWeight:700,flexShrink:0}}>
+              ✏️ แก้ไข
+            </button>
+          )}
           {onDelete && (
             <button onClick={e=>{
               e.stopPropagation();
@@ -797,6 +815,52 @@ function MatchCardWithStats({ m, onUpdateStats, playerPhotos={}, onDelete }) {
           )}
           <span style={{color:C.textMuted,fontSize:14}}>{open?"▲":"▼"}</span>
         </div>
+        {/* ── Edit Meta Panel ── */}
+        {editing && (
+          <div onClick={e=>e.stopPropagation()}
+            style={{padding:"14px 20px",borderTop:`1px solid ${C.border}`,
+              background:C.bgBase,display:"flex",flexWrap:"wrap",gap:12,alignItems:"flex-end"}}>
+            <div>
+              <div style={{fontSize:11,color:C.textMuted,marginBottom:4}}>ชื่อทีมคู่แข่ง</div>
+              <input value={editRival} onChange={e=>setEditRival(e.target.value)}
+                style={{background:C.bgPanel,border:`1px solid ${C.border}`,color:C.textMain,
+                  borderRadius:7,padding:"6px 10px",fontSize:13,outline:"none",width:160}}/>
+            </div>
+            <div>
+              <div style={{fontSize:11,color:C.textMuted,marginBottom:4}}>ประเภท</div>
+              <div style={{display:"flex",gap:6}}>
+                {[{id:"scrim",label:"🏋️ ซ้อม"},{id:"tournament",label:"🏆 แข่ง"}].map(c=>(
+                  <button key={c.id} onClick={()=>setEditCat(c.id)}
+                    style={{background:editCat===c.id?C.primary+"30":"transparent",
+                      border:`2px solid ${editCat===c.id?C.primary:C.border}`,
+                      color:editCat===c.id?C.primaryLight:C.textMuted,
+                      borderRadius:7,padding:"5px 10px",cursor:"pointer",fontWeight:700,fontSize:11}}>
+                    {c.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div style={{flex:1,minWidth:160}}>
+              <div style={{fontSize:11,color:C.textMuted,marginBottom:4}}>โน้ต</div>
+              <input value={editNote} onChange={e=>setEditNote(e.target.value)}
+                style={{background:C.bgPanel,border:`1px solid ${C.border}`,color:C.textMain,
+                  borderRadius:7,padding:"6px 10px",fontSize:13,outline:"none",width:"100%",boxSizing:"border-box"}}/>
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={handleSaveMeta}
+                style={{background:`linear-gradient(135deg,${C.primary},${C.primaryLight})`,
+                  color:"#fff",border:"none",borderRadius:8,padding:"7px 16px",
+                  cursor:"pointer",fontWeight:800,fontSize:12}}>
+                💾 บันทึก
+              </button>
+              <button onClick={()=>setEditing(false)}
+                style={{background:"transparent",border:`1px solid ${C.border}`,
+                  color:C.textMuted,borderRadius:8,padding:"7px 12px",cursor:"pointer",fontSize:12}}>
+                ยกเลิก
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {open && (
@@ -4666,6 +4730,15 @@ function appReducer(state, action) {
     case "DELETE_MATCH":
       return { ...state, matches: state.matches.filter(m => m.id !== action.payload) };
 
+    case "UPDATE_MATCH_META": {
+      // payload: { id, rivalName, category, note }  (ช่วยแก้ข้อมูลพื้นฐานของแมตช์)
+      const { id: mid, ...changes } = action.payload;
+      return {
+        ...state,
+        matches: state.matches.map(m => m.id === mid ? { ...m, ...changes } : m),
+      };
+    }
+
     case "ADD_VIDEO": {
       const today = new Date().toLocaleDateString("th-TH",{day:"numeric",month:"short",year:"numeric"});
       const v = { id: Date.now(), date: action.payload.date || today, ...action.payload };
@@ -4945,6 +5018,9 @@ function draftReducer(state, action) {
 // ═══════════════════════════════════════════
 export default function RovApp() {
   const { data: session } = useSession();
+  const userRole = session?.user?.role || "member"; // "admin" | "coach" | "member"
+  const isAdmin  = userRole === "admin";
+  const isCoach  = userRole === "admin" || userRole === "coach";
   const [app,  dispatchApp]  = useReducer(appReducer,  null, initAppState);
   const [ui,   dispatchUI]   = useReducer(uiReducer,   null, initUIState);
   const [draft, dispatchDraft]= useReducer(draftReducer, null, initDraftState);
@@ -4965,9 +5041,15 @@ export default function RovApp() {
     if (!app._loaded) return; // don't save until initial load completes
     setSaveStatus("saving");
     const timer = setTimeout(async () => {
-      await saveToStorage(app);
-      setSaveStatus("saved");
-      setTimeout(()=>setSaveStatus("idle"), 1500);
+      try {
+        await saveToStorage(app);
+        setSaveStatus("saved");
+        setTimeout(()=>setSaveStatus("idle"), 2000);
+      } catch (err) {
+        console.error("Save failed:", err);
+        setSaveStatus("error");
+        setTimeout(()=>setSaveStatus("idle"), 4000);
+      }
     }, 600); // debounce: wait 600ms after last change before saving
     return () => clearTimeout(timer);
   }, [app]);
@@ -5007,6 +5089,72 @@ export default function RovApp() {
     dispatchApp({ type:"SAVE_MATCH", payload: draftResult });
     dispatchUI({ type:"SET_PAGE", payload:"matches" });
     dispatchDraft({ type:"RESET" });
+  }, []);
+
+  // ── Export Match Summary PDF (ใช้ browser print) ──
+  const handleExportMatchPDF = useCallback((filterCat="all") => {
+    const filtered = filterCat==="all" ? app.matches
+      : app.matches.filter(m=>(filterCat==="tournament"?m.category==="tournament":(!m.category||m.category==="scrim")));
+
+    const totalG = filtered.reduce((s,m)=>s+(Array.isArray(m.games)?m.games.length:1),0);
+    const totalW = filtered.reduce((s,m)=>{
+      if(Array.isArray(m.games)) return s+m.games.filter(g=>g.result==="WIN").length;
+      return s+(m.result==="WIN"?1:0);
+    },0);
+    const wr = totalG?Math.round(totalW/totalG*100):0;
+
+    const rows = filtered.map(m=>{
+      const games = Array.isArray(m.games)?m.games:[];
+      const w = games.filter(g=>g.result==="WIN").length;
+      const t = games.length||1;
+      return `<tr>
+        <td>${m.date||""}</td>
+        <td>${m.category==="tournament"?"🏆 แข่ง":"🏋️ ซ้อม"}</td>
+        <td><strong>vs ${m.rivalName||""}</strong></td>
+        <td>${m.boType||"BO1"}</td>
+        <td style="color:${w>t/2?"#00b894":"#fd79a8"};font-weight:700">${games.length>0?`${w}W-${t-w}L`:m.result}</td>
+        <td>${m.note||""}</td>
+      </tr>`;
+    }).join("");
+
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+    <title>Match Report — ${app.teamName||"RoV Team"}</title>
+    <style>
+      body{font-family:'Segoe UI',sans-serif;padding:24px;color:#1a1a2e}
+      h1{color:#6C5CE7;margin-bottom:4px}
+      .meta{color:#666;font-size:13px;margin-bottom:20px}
+      .summary{display:flex;gap:20px;margin-bottom:20px}
+      .stat{background:#f8f8ff;border-radius:8px;padding:12px 20px;text-align:center}
+      .stat .val{font-size:28px;font-weight:900;color:#6C5CE7}
+      .stat .lbl{font-size:11px;color:#666}
+      table{width:100%;border-collapse:collapse}
+      th{background:#6C5CE7;color:#fff;padding:10px 8px;text-align:left;font-size:12px}
+      td{padding:8px;border-bottom:1px solid #eee;font-size:12px}
+      tr:nth-child(even){background:#f9f9ff}
+      @media print{body{padding:10px}}
+    </style></head><body>
+    <h1>🦅 Match Report — ${app.teamName||"RoV Team"}</h1>
+    <div class="meta">สร้างเมื่อ ${new Date().toLocaleDateString("th-TH",{day:"numeric",month:"long",year:"numeric"})}
+      · ประเภท: ${filterCat==="all"?"ทั้งหมด":filterCat==="tournament"?"เฉพาะแข่ง":"เฉพาะซ้อม"}</div>
+    <div class="summary">
+      <div class="stat"><div class="val">${filtered.length}</div><div class="lbl">แมตช์</div></div>
+      <div class="stat"><div class="val">${totalG}</div><div class="lbl">เกมทั้งหมด</div></div>
+      <div class="stat"><div class="val">${totalW}</div><div class="lbl">ชนะ</div></div>
+      <div class="stat"><div class="val">${wr}%</div><div class="lbl">Win Rate</div></div>
+    </div>
+    <table><thead><tr>
+      <th>วันที่</th><th>ประเภท</th><th>คู่แข่ง</th><th>Format</th><th>ผล</th><th>โน้ต</th>
+    </tr></thead><tbody>${rows}</tbody></table>
+    </body></html>`;
+
+    const w = window.open("","_blank");
+    w.document.write(html);
+    w.document.close();
+    setTimeout(()=>w.print(), 500);
+  }, [app.matches, app.teamName]);
+
+  const handleEditMatchMeta = useCallback(({ id, rivalName, category, note }) => {
+    dispatchApp({ type:"UPDATE_MATCH_META", payload:{ id, rivalName, category, note } });
   }, []);
 
   const handleUpdateStats = useCallback((matchId, gameIdx, gameStats) => {
@@ -5077,7 +5225,7 @@ export default function RovApp() {
 
   const NAV = [
     {id:"overview",icon:"📊",label:"Overview"},
-    {id:"draft",   icon:"⚔️",label:"Live Draft"},
+    {id:"draft",   icon:"⚔️",label:"Live Draft", coachOnly:true},
     {id:"matches", icon:"📋",label:"Match Log"},
     {id:"rivals",  icon:"🎯",label:"Rivals"},
     {id:"roster",  icon:"👥",label:"Roster"},
@@ -5127,9 +5275,10 @@ export default function RovApp() {
           {saveStatus==="saving" && <>☁️ กำลังบันทึก...</>}
           {saveStatus==="saved"  && <>✅ บันทึกแล้ว</>}
           {saveStatus==="idle"   && <>☁️ ซิงค์แล้ว</>}
+          {saveStatus==="error"  && <>❌ บันทึกไม่สำเร็จ</>}
         </span>
         <div style={{flex:1}}/>
-        {NAV.map(n=>(
+        {NAV.filter(n=>!n.coachOnly || isCoach).map(n=>(
           <button key={n.id}
             onClick={()=>dispatchUI({type:"SET_PAGE",payload:n.id})}
             style={{background:page===n.id?C.primary+"30":"transparent",
@@ -5144,6 +5293,11 @@ export default function RovApp() {
             borderLeft:`1px solid ${C.border}`}}>
             <span style={{fontSize:11,color:C.textMuted}}>
               {session.user.name || session.user.email}
+            </span>
+            <span style={{fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:99,
+              background: isAdmin?"#f9ca24"+"30":isCoach?C.primary+"30":C.border+"30",
+              color:       isAdmin?"#f9ca24"  :isCoach?C.primaryLight:C.textMuted}}>
+              {isAdmin?"👑 Admin":isCoach?"🎓 Coach":"👤 Member"}
             </span>
             <button onClick={()=>signOut({ callbackUrl: "/login" })}
               style={{background:"transparent",border:`1px solid ${C.border}`,color:C.textMuted,
@@ -5277,6 +5431,77 @@ export default function RovApp() {
               </div>
               <HeroSynergyCounter allGames={allGames} scoutMatches={scoutMatches}/>
               <PerformanceTrend allGames={allGames}/>
+
+              {/* ── Ban/Pick Rate Panel ── */}
+              {(()=>{
+                // คำนวณ ban/pick rate เปรียบเทียบ ทีมเรา vs คู่แข่ง
+                const ourPickRate  = {};
+                const ourBanRate   = {};
+                const enemyPickRate = {};
+                const enemyBanRate  = {};
+                const total = allGames.length || 1;
+
+                allGames.forEach(g => {
+                  (g.ourPicks||[]).forEach(s => {
+                    if(s.hero?.name){ ourPickRate[s.hero.name] = (ourPickRate[s.hero.name]||0)+1; }
+                  });
+                  (g.ourBans||[]).forEach(h => {
+                    if(h?.name){ ourBanRate[h.name] = (ourBanRate[h.name]||0)+1; }
+                  });
+                  (g.enemyPicks||[]).forEach(s => {
+                    if(s.hero?.name){ enemyPickRate[s.hero.name] = (enemyPickRate[s.hero.name]||0)+1; }
+                  });
+                  (g.enemyBans||[]).forEach(h => {
+                    if(h?.name){ enemyBanRate[h.name] = (enemyBanRate[h.name]||0)+1; }
+                  });
+                });
+
+                const topOurPick   = Object.entries(ourPickRate).sort((a,b)=>b[1]-a[1]).slice(0,8);
+                const topOurBan    = Object.entries(ourBanRate).sort((a,b)=>b[1]-a[1]).slice(0,8);
+                const topEnemyPick = Object.entries(enemyPickRate).sort((a,b)=>b[1]-a[1]).slice(0,8);
+                const topEnemyBan  = Object.entries(enemyBanRate).sort((a,b)=>b[1]-a[1]).slice(0,8);
+
+                const BarRow = ({name,count,max,color}) => (
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+                    <div style={{width:100,fontSize:11,fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{name}</div>
+                    <div style={{flex:1,background:C.bgBase,borderRadius:4,height:14,overflow:"hidden"}}>
+                      <div style={{width:`${Math.round(count/max*100)}%`,background:color,height:"100%",borderRadius:4,
+                        minWidth:4,transition:"width .3s"}}/>
+                    </div>
+                    <div style={{fontSize:11,color:C.textMuted,width:50,textAlign:"right"}}>
+                      {count}x ({Math.round(count/total*100)}%)
+                    </div>
+                  </div>
+                );
+
+                if (allGames.length === 0) return null;
+                return (
+                  <div style={{marginTop:20,background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:14,padding:18}}>
+                    <div style={{fontWeight:800,fontSize:15,color:C.primaryLight,marginBottom:16}}>
+                      📈 Ban/Pick Rate Analysis
+                      <span style={{fontSize:11,fontWeight:400,color:C.textMuted,marginLeft:8}}>จาก {total} เกม</span>
+                    </div>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20}}>
+                      {[
+                        {title:"🤝 เราเลือก (Pick)",  data:topOurPick,   color:C.win},
+                        {title:"🚫 เราแบน (Ban)",    data:topOurBan,    color:C.ban||"#e17055"},
+                        {title:"⚔️ ศัตรูเลือก (Pick)", data:topEnemyPick, color:"#fdcb6e"},
+                        {title:"🛡️ ศัตรูแบน (Ban)",   data:topEnemyBan,  color:C.lose},
+                      ].map(({title,data,color})=>(
+                        <div key={title}>
+                          <div style={{fontSize:12,fontWeight:700,color,marginBottom:10}}>{title}</div>
+                          {data.length===0
+                            ?<div style={{fontSize:11,color:C.textMuted}}>ยังไม่มีข้อมูล</div>
+                            :data.map(([name,cnt])=>(
+                              <BarRow key={name} name={name} count={cnt} max={data[0][1]} color={color}/>
+                            ))
+                          }
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           )}
 
@@ -5286,6 +5511,13 @@ export default function RovApp() {
               <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:6,flexWrap:"wrap",gap:10}}>
                 <h2 style={{margin:0,fontSize:24,fontWeight:800}}>📋 Match Log</h2>
                 <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                  {/* Export PDF */}
+                  <button onClick={()=>handleExportMatchPDF(ui.matchCatFilter||"all")}
+                    style={{background:"#d63031"+"20",border:"1px solid #d63031"+"50",
+                      color:"#d63031",borderRadius:9,padding:"7px 14px",
+                      cursor:"pointer",fontWeight:700,fontSize:12,whiteSpace:"nowrap"}}>
+                    📄 Export PDF
+                  </button>
                   {/* Import JSON */}
                   <label style={{display:"flex",alignItems:"center",gap:6,
                     background:C.primary+"20",border:`1px solid ${C.primary}50`,
@@ -5360,7 +5592,7 @@ export default function RovApp() {
                             : `ยังไม่มีแมตช์ประเภท "${tabs.find(t=>t.id===matchCatFilter)?.label}"`}
                         </div>
                       :filtered.map(m=>(
-                          <MatchCardWithStats key={m.id} m={m} onUpdateStats={handleUpdateStats} playerPhotos={app.playerPhotos} onDelete={id=>dispatchApp({type:"DELETE_MATCH",payload:id})}/>
+                          <MatchCardWithStats key={m.id} m={m} onUpdateStats={handleUpdateStats} playerPhotos={app.playerPhotos} onDelete={id=>dispatchApp({type:"DELETE_MATCH",payload:id})} onEditMeta={handleEditMatchMeta}/>
                         ))
                     }
                   </>
@@ -5558,7 +5790,7 @@ export default function RovApp() {
                         />
                       )}
                       {rivalView==="history" && rm.map(m=>(
-                        <MatchCardWithStats key={m.id} m={m} onUpdateStats={handleUpdateStats} playerPhotos={app.playerPhotos} onDelete={id=>dispatchApp({type:"DELETE_MATCH",payload:id})}/>
+                        <MatchCardWithStats key={m.id} m={m} onUpdateStats={handleUpdateStats} playerPhotos={app.playerPhotos} onDelete={id=>dispatchApp({type:"DELETE_MATCH",payload:id})} onEditMeta={handleEditMatchMeta}/>
                       ))}
                       {rivalView==="overview" && (
                         <div>
