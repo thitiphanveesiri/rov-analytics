@@ -3,12 +3,8 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
-// NOTE: there is no body-size-limit config for App Router Route Handlers —
-// the old Pages Router `export const config = { api: { bodyParser... } }`
-// never worked here and was just dead code (it's what was breaking the build).
-// Vercel also hard-caps request/response bodies at 4.5MB regardless of config,
-// which is why playerPhotos/heroPhotos were moved to Vercel Blob (see
-// app/api/upload/route.js) instead of being sent as base64 in this payload.
+// NOTE: no body-size-limit config for App Router Route Handlers.
+// Photos are stored as Vercel Blob URLs (not base64) so payload stays small.
 
 async function getTeamId(session) {
   const user = await prisma.user.findUnique({
@@ -31,7 +27,6 @@ export async function GET() {
     create: { teamId },
   });
 
-  // ส่ง team info ไปด้วยเพื่อให้แอปแสดงชื่อทีมและ invite code
   const team = await prisma.team.findUnique({
     where: { id: teamId },
     select: { name: true, inviteCode: true }
@@ -52,6 +47,7 @@ export async function PUT(req) {
     const {
       matches, rivals, roster, enemyRosters, scoutMatches,
       playerPhotos, heroPhotos, customHeroes, roleOverrides, videos,
+      teamLogo, rivalLogos,
     } = body;
 
     const updated = await prisma.teamData.upsert({
@@ -59,12 +55,14 @@ export async function PUT(req) {
       update: {
         matches, rivals, roster, enemyRosters, scoutMatches,
         playerPhotos, heroPhotos, customHeroes, roleOverrides, videos,
+        teamLogo, rivalLogos,
         updatedBy: session.user.email,
       },
       create: {
         teamId,
         matches, rivals, roster, enemyRosters, scoutMatches,
         playerPhotos, heroPhotos, customHeroes, roleOverrides, videos,
+        teamLogo, rivalLogos,
         updatedBy: session.user.email,
       },
     });

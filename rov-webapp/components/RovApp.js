@@ -3139,6 +3139,80 @@ function ScoutLogPage({ rivalName, scoutMatches, rivals, enemyRosters, onSaveSco
 }
 
 // ═══════════════════════════════════════════
+//  TEAM / RIVAL LOGO UPLOADER
+// ═══════════════════════════════════════════
+function LogoImg({ url, name, size=48, style={} }) {
+  const [err, setErr] = useState(false);
+  if (!url || err) {
+    // fallback: วงกลมสีพร้อมตัวอักษรแรก
+    const initials = (name||"?").slice(0,2).toUpperCase();
+    return (
+      <div style={{width:size,height:size,borderRadius:"50%",
+        background:`linear-gradient(135deg,${C.primary},${C.primaryLight})`,
+        display:"flex",alignItems:"center",justifyContent:"center",
+        fontWeight:900,fontSize:size*0.35,color:"#fff",flexShrink:0,...style}}>
+        {initials}
+      </div>
+    );
+  }
+  return (
+    <img src={url} alt={name} onError={()=>setErr(true)}
+      style={{width:size,height:size,borderRadius:"50%",
+        objectFit:"cover",flexShrink:0,...style}}/>
+  );
+}
+
+function LogoUploader({ label, currentUrl, onUpload, onRemove, size=64 }) {
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef(null);
+  const toast = useToast();
+
+  async function handleFile(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 1.5*1024*1024) {
+      toast("ไฟล์รูปใหญ่เกินไป (จำกัด 1.5MB)", "error");
+      e.target.value=""; return;
+    }
+    setUploading(true);
+    try {
+      const blob = await upload(file.name, file, { access:"public", handleUploadUrl:"/api/upload" });
+      onUpload(blob.url);
+      toast(`อัพโหลดโลโก้ ${label} สำเร็จ`, "success");
+    } catch {
+      toast("อัพโหลดไม่สำเร็จ ลองใหม่อีกครั้ง", "error");
+    } finally { setUploading(false); e.target.value=""; }
+  }
+
+  return (
+    <div style={{display:"flex",alignItems:"center",gap:12}}>
+      <LogoImg url={currentUrl} name={label} size={size}/>
+      <div>
+        <div style={{fontSize:11,color:C.textMuted,marginBottom:6,fontWeight:700}}>{label}</div>
+        <div style={{display:"flex",gap:6}}>
+          <label style={{background:C.primary+"20",border:`1px solid ${C.primary}40`,
+            color:C.primaryLight,borderRadius:7,padding:"4px 12px",
+            cursor:uploading?"default":"pointer",opacity:uploading?0.6:1,
+            fontSize:11,fontWeight:700}}>
+            {uploading?"⏳...":"📸 อัพโหลดโลโก้"}
+            <input ref={fileRef} type="file" accept="image/*" disabled={uploading}
+              style={{display:"none"}} onChange={handleFile}/>
+          </label>
+          {currentUrl&&(
+            <button onClick={onRemove}
+              style={{background:"transparent",border:`1px solid ${C.lose}40`,
+                color:C.lose,borderRadius:7,padding:"4px 10px",
+                cursor:"pointer",fontSize:11,fontWeight:700}}>
+              ✕
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════
 //  ADMIN PANEL — จัดการสมาชิกในทีม
 // ═══════════════════════════════════════════
 function AdminPanel({ session }) {
@@ -5230,6 +5304,8 @@ function VideoLibrary({ videos=[], onAddVideo, onUpdateVideo, onDeleteVideo }) {
 // ── 1. APP REDUCER — persistent data ──────
 const APP_INIT = {
   matches:      null,   // loaded lazily from localStorage
+  teamLogo:     null,   // URL รูปโลโก้ทีมเรา (Vercel Blob)
+  rivalLogos:   {},     // { [rivalName]: URL }
   rivals:       null,
   roster:       null,
   enemyRosters: null,
@@ -5378,6 +5454,17 @@ function appReducer(state, action) {
 
     case "DELETE_RIVAL":
       return { ...state, rivals: state.rivals.filter(r=>r.name!==action.payload) };
+
+    case "SET_TEAM_LOGO":
+      return { ...state, teamLogo: action.payload };
+
+    case "SET_RIVAL_LOGO":
+      return { ...state, rivalLogos: { ...state.rivalLogos, [action.payload.name]: action.payload.url } };
+
+    case "REMOVE_RIVAL_LOGO": {
+      const { [action.payload]: _, ...rest } = state.rivalLogos || {};
+      return { ...state, rivalLogos: rest };
+    }
 
     case "ADD_CUSTOM_HERO": {
       // payload: { name, role, img? }
@@ -5846,6 +5933,10 @@ export default function RovApp() {
         {session?.user && (
           <div style={{display:"flex",alignItems:"center",gap:8,marginLeft:14,paddingLeft:14,
             borderLeft:`1px solid ${C.border}`}}>
+            {app.teamLogo && (
+              <LogoImg url={app.teamLogo} name={app.teamName||"ทีมเรา"} size={26}
+                style={{border:`2px solid ${C.primary}40`}}/>
+            )}
             <span style={{fontSize:11,color:C.textMuted}}>
               {session.user.name || session.user.email}
             </span>
@@ -6236,9 +6327,12 @@ export default function RovApp() {
                               onClick={()=>dispatchUI({type:"SET_SEL_RIVAL",payload:rv.name})}
                               style={{background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:14,padding:20,cursor:"pointer"}}>
                               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-                                <div>
-                                  <div style={{fontWeight:800,fontSize:18,color:C.primaryLight}}>{rv.name}</div>
-                                  <div style={{fontSize:11,color:C.textMuted,marginTop:2}}>{rm.length} session · {rGames.length} เกม</div>
+                                <div style={{display:"flex",alignItems:"center",gap:12}}>
+                                  <LogoImg url={app.rivalLogos?.[rv.name]} name={rv.name} size={48}/>
+                                  <div>
+                                    <div style={{fontWeight:800,fontSize:18,color:C.primaryLight}}>{rv.name}</div>
+                                    <div style={{fontSize:11,color:C.textMuted,marginTop:2}}>{rm.length} session · {rGames.length} เกม</div>
+                                  </div>
                                 </div>
                                 <div style={{textAlign:"right"}}>
                                   <div style={{fontSize:22,fontWeight:800,color:rwrate>=50?C.win:C.lose}}>
@@ -6247,6 +6341,19 @@ export default function RovApp() {
                                   <div style={{fontSize:11,color:C.textMuted}}>{rw}W {rGames.length-rw}L</div>
                                 </div>
                               </div>
+                              {/* Logo uploader — แสดงเฉพาะ coach/admin */}
+                              {isCoach&&(
+                                <div onClick={e=>e.stopPropagation()}
+                                  style={{marginBottom:10}}>
+                                  <LogoUploader
+                                    label={`โลโก้ ${rv.name}`}
+                                    currentUrl={app.rivalLogos?.[rv.name]}
+                                    onUpload={url=>dispatchApp({type:"SET_RIVAL_LOGO",payload:{name:rv.name,url}})}
+                                    onRemove={()=>dispatchApp({type:"REMOVE_RIVAL_LOGO",payload:rv.name})}
+                                    size={36}
+                                  />
+                                </div>
+                              )}
                               <div style={{height:3,background:C.bgBase,borderRadius:99}}>
                                 <div style={{height:3,borderRadius:99,width:`${rwrate}%`,background:rwrate>=50?C.win:C.lose}}/>
                               </div>
@@ -6478,8 +6585,23 @@ export default function RovApp() {
                 />
               ) : (
                 <>
-                  <h2 style={{margin:"0 0 6px",fontSize:24,fontWeight:800}}>👥 Roster</h2>
-                  <p style={{margin:"0 0 16px",color:C.textMuted,fontSize:13}}>คลิกที่ผู้เล่นเพื่อดู Player Profile</p>
+                  <div style={{display:"flex",alignItems:"center",gap:16,marginBottom:16}}>
+                    <LogoImg url={app.teamLogo} name={app.teamName||"ทีมเรา"} size={72}
+                      style={{border:`3px solid ${C.primary}40`}}/>
+                    <div>
+                      <h2 style={{margin:"0 0 4px",fontSize:24,fontWeight:800}}>👥 Roster</h2>
+                      <p style={{margin:"0 0 8px",color:C.textMuted,fontSize:13}}>คลิกที่ผู้เล่นเพื่อดู Player Profile</p>
+                      {isCoach&&(
+                        <LogoUploader
+                          label="โลโก้ทีมเรา"
+                          currentUrl={app.teamLogo}
+                          onUpload={url=>dispatchApp({type:"SET_TEAM_LOGO",payload:url})}
+                          onRemove={()=>dispatchApp({type:"SET_TEAM_LOGO",payload:null})}
+                          size={36}
+                        />
+                      )}
+                    </div>
+                  </div>
                   <div style={{display:"flex",gap:4,background:C.bgBase,borderRadius:10,padding:4,
                     marginBottom:20,width:"fit-content",border:`1px solid ${C.border}`}}>
                     {[{id:"our",label:"🛡️ ทีมเรา"},{id:"enemy",label:"⚔️ คู่แข่ง"}].map(t=>(

@@ -50,6 +50,8 @@ model TeamData {
   customHeroes  Json     @default("[]")
   roleOverrides Json     @default("{}")
   videos        Json     @default("[]")
+  teamLogo      String?  // URL โลโก้ทีม (Vercel Blob)
+  rivalLogos    Json     @default("{}") // { [rivalName]: URL }
   updatedAt     DateTime @updatedAt
   updatedBy     String?
 }
