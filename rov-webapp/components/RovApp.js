@@ -114,6 +114,56 @@ const PATTERN_TAGS = [
 const HeroPhotosContext = createContext({});
 
 // ═══════════════════════════════════════════
+//  TOAST NOTIFICATION SYSTEM
+// ═══════════════════════════════════════════
+const ToastContext = createContext(null);
+
+function ToastProvider({ children }) {
+  const [toasts, setToasts] = useState([]);
+
+  const toast = useCallback((msg, type="info", duration=3000) => {
+    const id = Date.now() + Math.random();
+    setToasts(prev => [...prev, { id, msg, type }]);
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), duration);
+  }, []);
+
+  const colors = {
+    success: { bg:"#00b894", text:"#fff" },
+    error:   { bg:"#fd79a8", text:"#fff" },
+    info:    { bg:"#6C5CE7", text:"#fff" },
+    warning: { bg:"#fdcb6e", text:"#1a1a2e" },
+  };
+
+  return (
+    <ToastContext.Provider value={toast}>
+      {children}
+      <div style={{position:"fixed",bottom:24,right:24,zIndex:9999,
+        display:"flex",flexDirection:"column",gap:8,pointerEvents:"none"}}>
+        {toasts.map(t => {
+          const c = colors[t.type] || colors.info;
+          return (
+            <div key={t.id} style={{
+              background:c.bg, color:c.text,
+              padding:"10px 18px", borderRadius:10,
+              fontWeight:700, fontSize:13,
+              boxShadow:"0 4px 20px rgba(0,0,0,0.4)",
+              animation:"slideIn 0.2s ease",
+              maxWidth:320,
+            }}>
+              {t.type==="success"?"✅ ":t.type==="error"?"❌ ":t.type==="warning"?"⚠️ ":"ℹ️ "}
+              {t.msg}
+            </div>
+          );
+        })}
+      </div>
+      <style>{`@keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:none;opacity:1}}`}</style>
+    </ToastContext.Provider>
+  );
+}
+
+function useToast() { return useContext(ToastContext); }
+
+// ═══════════════════════════════════════════
 //  HERO IMAGE RESOLVER
 //  Fandom (arenaofvalor.fandom.com) uses hash-based image URLs that can't
 //  be guessed from hero name. We resolve the real URL at runtime via the
@@ -762,6 +812,12 @@ function MatchCardWithStats({ m, onUpdateStats, playerPhotos={}, onDelete, onEdi
           <span style={{background:C.primary+"20",border:`1px solid ${C.primary}40`,
             color:C.textMuted,borderRadius:99,padding:"2px 10px",fontSize:10,fontWeight:700}}>
             🏋️ ซ้อม
+          </span>
+        )}
+        {m.patch && (
+          <span style={{background:"#0984e3"+"20",border:"1px solid #0984e3"+"50",
+            color:"#74b9ff",borderRadius:99,padding:"2px 10px",fontSize:10,fontWeight:700}}>
+            🗂️ {m.patch}
           </span>
         )}
         <span style={{fontSize:13,color:C.textMuted}}>{m.date}</span>
@@ -3083,6 +3139,181 @@ function ScoutLogPage({ rivalName, scoutMatches, rivals, enemyRosters, onSaveSco
 }
 
 // ═══════════════════════════════════════════
+//  ADMIN PANEL — จัดการสมาชิกในทีม
+// ═══════════════════════════════════════════
+function AdminPanel({ session }) {
+  const [members,    setMembers]    = useState([]);
+  const [loading,    setLoading]    = useState(true);
+  const [updating,   setUpdating]   = useState(null); // userId กำลัง update
+  const toast = useToast();
+
+  const ROLES = [
+    { id:"admin",  label:"👑 Admin",   desc:"จัดการสมาชิก + ใช้ได้ทุกอย่าง" },
+    { id:"coach",  label:"🎓 Coach",   desc:"ใช้ Live Draft + บันทึกแมตช์" },
+    { id:"member", label:"👤 Member",  desc:"ดูข้อมูลได้อย่างเดียว" },
+  ];
+
+  useEffect(() => { fetchMembers(); }, []);
+
+  async function fetchMembers() {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/admin/members");
+      if (!res.ok) throw new Error();
+      setMembers(await res.json());
+    } catch {
+      toast("โหลดข้อมูลสมาชิกไม่สำเร็จ", "error");
+    } finally { setLoading(false); }
+  }
+
+  async function updateRole(userId, newRole) {
+    setUpdating(userId);
+    try {
+      const res = await fetch("/api/admin/members", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId, role: newRole }),
+      });
+      if (!res.ok) {
+        const d = await res.json();
+        throw new Error(d.error || "เกิดข้อผิดพลาด");
+      }
+      setMembers(prev => prev.map(m => m.id===userId ? {...m, role:newRole} : m));
+      toast("เปลี่ยน Role สำเร็จ ✅", "success");
+    } catch (err) {
+      toast(err.message || "เปลี่ยน Role ไม่สำเร็จ", "error");
+    } finally { setUpdating(null); }
+  }
+
+  async function removeMember(userId, email) {
+    if (!window.confirm(`ลบ ${email} ออกจากทีม?`)) return;
+    setUpdating(userId);
+    try {
+      const res = await fetch(`/api/admin/members?userId=${userId}`, { method:"DELETE" });
+      if (!res.ok) throw new Error();
+      setMembers(prev => prev.filter(m => m.id!==userId));
+      toast("ลบสมาชิกสำเร็จ", "success");
+    } catch {
+      toast("ลบสมาชิกไม่สำเร็จ", "error");
+    } finally { setUpdating(null); }
+  }
+
+  const roleColor = { admin:"#f9ca24", coach:C.primaryLight, member:C.textMuted };
+
+  return (
+    <div style={{padding:"0 24px 40px",maxWidth:900,margin:"0 auto"}}>
+      <h2 style={{margin:"0 0 6px",fontSize:24,fontWeight:800}}>⚙️ Admin Panel</h2>
+      <p style={{margin:"0 0 24px",color:C.textMuted,fontSize:13}}>
+        จัดการสมาชิกในทีม · เฉพาะ Admin เท่านั้น
+      </p>
+
+      {loading ? (
+        <div style={{textAlign:"center",padding:40,color:C.textMuted}}>กำลังโหลด...</div>
+      ) : (
+        <div style={{background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:14,overflow:"hidden"}}>
+          {/* header */}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 120px 200px 80px",
+            gap:12,padding:"10px 20px",background:C.bgBase,
+            fontSize:11,color:C.textMuted,fontWeight:700,letterSpacing:0.5}}>
+            <div>สมาชิก</div>
+            <div>เข้าร่วม</div>
+            <div>Role</div>
+            <div></div>
+          </div>
+
+          {members.map((m, i) => {
+            const isSelf = m.id === session?.user?.id;
+            const isLast = members.filter(x=>x.role==="admin").length===1 && m.role==="admin";
+            return (
+              <div key={m.id} style={{display:"grid",gridTemplateColumns:"1fr 120px 200px 80px",
+                gap:12,padding:"14px 20px",alignItems:"center",
+                borderTop:`1px solid ${C.border}`,
+                background:isSelf?C.primary+"08":"transparent"}}>
+
+                {/* name + email */}
+                <div>
+                  <div style={{fontWeight:700,fontSize:13,color:C.textMain}}>
+                    {m.name || "—"}
+                    {isSelf && <span style={{marginLeft:6,fontSize:10,color:C.primaryLight,
+                      background:C.primary+"20",padding:"1px 7px",borderRadius:99}}>คุณ</span>}
+                  </div>
+                  <div style={{fontSize:11,color:C.textMuted,marginTop:2}}>{m.email}</div>
+                </div>
+
+                {/* join date */}
+                <div style={{fontSize:11,color:C.textMuted}}>
+                  {new Date(m.createdAt).toLocaleDateString("th-TH",{day:"numeric",month:"short",year:"numeric"})}
+                </div>
+
+                {/* role selector */}
+                <div style={{display:"flex",gap:4}}>
+                  {ROLES.map(r => (
+                    <button key={r.id}
+                      disabled={updating===m.id || (isSelf && isLast && r.id!=="admin")}
+                      onClick={()=>{ if(m.role!==r.id) updateRole(m.id, r.id); }}
+                      title={r.desc}
+                      style={{padding:"4px 10px",borderRadius:99,cursor:"pointer",fontSize:10,fontWeight:700,
+                        border:`2px solid ${m.role===r.id?roleColor[r.id]:C.border}`,
+                        background:m.role===r.id?roleColor[r.id]+"25":"transparent",
+                        color:m.role===r.id?roleColor[r.id]:C.textMuted,
+                        opacity:updating===m.id?0.5:1}}>
+                      {r.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* remove */}
+                <div>
+                  {!isSelf && !isLast && (
+                    <button onClick={()=>removeMember(m.id, m.email)}
+                      disabled={updating===m.id}
+                      style={{background:"transparent",border:`1px solid ${C.lose}40`,
+                        color:C.lose,borderRadius:7,padding:"4px 10px",
+                        cursor:"pointer",fontSize:11,fontWeight:700,
+                        opacity:updating===m.id?0.5:1}}>
+                      🗑️
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+
+          {members.length===0&&(
+            <div style={{textAlign:"center",padding:40,color:C.textMuted}}>ไม่พบสมาชิก</div>
+          )}
+        </div>
+      )}
+
+      {/* Invite Code */}
+      <div style={{marginTop:20,background:C.bgPanel,border:`1px solid ${C.border}`,
+        borderRadius:14,padding:"16px 20px"}}>
+        <div style={{fontWeight:700,fontSize:13,color:C.primaryLight,marginBottom:6}}>
+          🔗 Invite Code ของทีม
+        </div>
+        <div style={{display:"flex",gap:10,alignItems:"center"}}>
+          <code style={{background:C.bgBase,padding:"8px 14px",borderRadius:8,
+            fontSize:14,fontWeight:700,color:C.textMain,letterSpacing:2,flex:1}}>
+            {session?.user?.inviteCode || "..."}
+          </code>
+          <button onClick={()=>{
+            navigator.clipboard.writeText(session?.user?.inviteCode||"");
+            toast("คัดลอก Invite Code แล้ว!", "success");
+          }} style={{background:C.primary+"20",border:`1px solid ${C.primary}40`,
+            color:C.primaryLight,borderRadius:8,padding:"8px 14px",
+            cursor:"pointer",fontWeight:700,fontSize:12}}>
+            📋 Copy
+          </button>
+        </div>
+        <div style={{fontSize:11,color:C.textMuted,marginTop:6}}>
+          แชร์ code นี้ให้ทีมใช้ตอน Register เพื่อเข้าร่วมทีม
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════
 //  PERFORMANCE TREND
 // ═══════════════════════════════════════════
 function PerformanceTrend({ allGames }) {
@@ -5214,7 +5445,8 @@ function uiReducer(state, action) {
     case "SET_NEW_ENEMY_NAME":  return { ...state, newEnemyName: action.payload };
     case "CLEAR_NEW_NAME":      return { ...state, newName: "" };
     case "CLEAR_NEW_ENEMY_NAME":return { ...state, newEnemyName: "" };
-    case "SET_MATCH_CAT_FILTER":return { ...state, matchCatFilter: action.payload };
+    case "SET_MATCH_CAT_FILTER":  return { ...state, matchCatFilter: action.payload };
+    case "SET_MATCH_PATCH_FILTER": return { ...state, matchPatchFilter: action.payload };
     default: return state;
   }
 }
@@ -5226,6 +5458,7 @@ function initDraftState() {
     boType:         "BO3",
     rivalName:      "",
     category:       "scrim",  // "scrim" | "tournament"
+    patch:          "",       // patch version เช่น "4.21"
     ourSide:        null,
     currentGame:    1,
     completedGames: [],
@@ -5247,6 +5480,7 @@ function draftReducer(state, action) {
     case "SETUP_SET_BO":       return { ...state, boType: action.payload };
     case "SETUP_SET_RIVAL":    return { ...state, rivalName: action.payload };
     case "SETUP_SET_CATEGORY": return { ...state, category: action.payload };
+    case "SETUP_SET_PATCH":    return { ...state, patch: action.payload };
     case "SETUP_NEXT":         return { ...state, stage: "chooseSide" };
 
     case "CHOOSE_SIDE":
@@ -5333,6 +5567,7 @@ function draftReducer(state, action) {
 // ═══════════════════════════════════════════
 export default function RovApp() {
   const { data: session } = useSession();
+  const toast = useToast();
   const userRole = session?.user?.role || "member"; // "admin" | "coach" | "member"
   const isAdmin  = userRole === "admin";
   const isCoach  = userRole === "admin" || userRole === "coach";
@@ -5363,6 +5598,7 @@ export default function RovApp() {
       } catch (err) {
         console.error("Save failed:", err);
         setSaveStatus("error");
+        toast("บันทึกไม่สำเร็จ กรุณาลองใหม่", "error", 5000);
         setTimeout(()=>setSaveStatus("idle"), 4000);
       }
     }, 600); // debounce: wait 600ms after last change before saving
@@ -5404,7 +5640,8 @@ export default function RovApp() {
     dispatchApp({ type:"SAVE_MATCH", payload: draftResult });
     dispatchUI({ type:"SET_PAGE", payload:"matches" });
     dispatchDraft({ type:"RESET" });
-  }, []);
+    toast("บันทึกแมตช์สำเร็จ! 🎉", "success");
+  }, [toast]);
 
   // ── Export Match Summary PDF (ใช้ browser print) ──
   const handleExportMatchPDF = useCallback((filterCat="all") => {
@@ -5470,7 +5707,8 @@ export default function RovApp() {
 
   const handleEditMatchMeta = useCallback(({ id, rivalName, category, note }) => {
     dispatchApp({ type:"UPDATE_MATCH_META", payload:{ id, rivalName, category, note } });
-  }, []);
+    toast("แก้ไขแมตช์สำเร็จ", "success");
+  }, [toast]);
 
   const handleUpdateStats = useCallback((matchId, gameIdx, gameStats) => {
     dispatchApp({ type:"UPDATE_STATS", payload:{ matchId, gameIdx, gameStats } });
@@ -5514,7 +5752,7 @@ export default function RovApp() {
   // ── draft: finish session ──
   function finishSession(games) {
     if (!games.length) { dispatchDraft({ type:"RESET" }); return; }
-    handleSaveMatch({ rivalName:draft.rivalName, boType:draft.boType, category:draft.category, games, ourSide:games[0].ourSide });
+    handleSaveMatch({ rivalName:draft.rivalName, boType:draft.boType, category:draft.category, patch:draft.patch, games, ourSide:games[0].ourSide });
   }
 
   // ── overview stats ──
@@ -5548,6 +5786,7 @@ export default function RovApp() {
     {id:"video",   icon:"🎬",label:"Video"},
     {id:"board",   icon:"🗺️",label:"Whiteboard"},
     {id:"heroimg", icon:"🦸",label:"Hero Images"},
+    {id:"admin",   icon:"⚙️",label:"Admin",    adminOnly:true},
   ];
 
   // ── short aliases for readability ──
@@ -5573,6 +5812,7 @@ export default function RovApp() {
   }
 
   return (
+    <ToastProvider>
     <HeroPhotosContext.Provider value={app.heroPhotos || {}}>
     <div style={{minHeight:"100vh",background:C.bgBase,color:C.textMain,fontFamily:"'Segoe UI',sans-serif"}}>
 
@@ -5593,7 +5833,7 @@ export default function RovApp() {
           {saveStatus==="error"  && <>❌ บันทึกไม่สำเร็จ</>}
         </span>
         <div style={{flex:1}}/>
-        {NAV.filter(n=>!n.coachOnly || isCoach).map(n=>(
+        {NAV.filter(n=>(!n.coachOnly || isCoach) && (!n.adminOnly || isAdmin)).map(n=>(
           <button key={n.id}
             onClick={()=>dispatchUI({type:"SET_PAGE",payload:n.id})}
             style={{background:page===n.id?C.primary+"30":"transparent",
@@ -5639,6 +5879,7 @@ export default function RovApp() {
 
       {/* ── WHITEBOARD PAGE (full-screen, no padding) ── */}
       {page==="board" && <TacticalWhiteboard/>}
+      {page==="admin" && isAdmin && <AdminPanel session={session}/>}
 
       {page!=="draft" && page!=="board" && (
         <div style={{padding:28,maxWidth:1300,margin:"0 auto"}}>
@@ -5877,20 +6118,24 @@ export default function RovApp() {
               </p>
               {/* ── Filter tabs ── */}
               {(() => {
-                const [matchCatFilter, setMatchCatFilter] = [ui.matchCatFilter||"all", v=>dispatchUI({type:"SET_MATCH_CAT_FILTER",payload:v})];
+                const matchCatFilter = ui.matchCatFilter||"all";
+                const matchPatchFilter = ui.matchPatchFilter||"all";
+                // รวม patch ทั้งหมด
+                const patches = [...new Set(matches.filter(m=>m.patch).map(m=>m.patch))].sort().reverse();
                 const tabs = [
-                  {id:"all",    label:"ทั้งหมด",  count: matches.length},
-                  {id:"scrim",  label:"🏋️ ซ้อม",  count: matches.filter(m=>!m.category||m.category==="scrim").length},
-                  {id:"tournament", label:"🏆 แข่ง", count: matches.filter(m=>m.category==="tournament").length},
+                  {id:"all",        label:"ทั้งหมด",  count: matches.length},
+                  {id:"scrim",      label:"🏋️ ซ้อม",  count: matches.filter(m=>!m.category||m.category==="scrim").length},
+                  {id:"tournament", label:"🏆 แข่ง",   count: matches.filter(m=>m.category==="tournament").length},
                 ];
-                const filtered = matchCatFilter==="all" ? matches
+                let filtered = matchCatFilter==="all" ? matches
                   : matchCatFilter==="tournament" ? matches.filter(m=>m.category==="tournament")
                   : matches.filter(m=>!m.category||m.category==="scrim");
+                if (matchPatchFilter!=="all") filtered = filtered.filter(m=>m.patch===matchPatchFilter);
                 return (
                   <>
-                    <div style={{display:"flex",gap:6,marginBottom:16}}>
+                    <div style={{display:"flex",gap:6,marginBottom:10,flexWrap:"wrap",alignItems:"center"}}>
                       {tabs.map(t=>(
-                        <button key={t.id} onClick={()=>setMatchCatFilter(t.id)}
+                        <button key={t.id} onClick={()=>dispatchUI({type:"SET_MATCH_CAT_FILTER",payload:t.id})}
                           style={{background:matchCatFilter===t.id?C.primary+"30":"transparent",
                             border:`2px solid ${matchCatFilter===t.id?C.primary:C.border}`,
                             color:matchCatFilter===t.id?C.primaryLight:C.textMuted,
@@ -5899,6 +6144,16 @@ export default function RovApp() {
                           {t.label} <span style={{opacity:0.6,fontWeight:400}}>({t.count})</span>
                         </button>
                       ))}
+                      {patches.length>0&&(
+                        <select value={matchPatchFilter}
+                          onChange={e=>dispatchUI({type:"SET_MATCH_PATCH_FILTER",payload:e.target.value})}
+                          style={{background:"#1a1535",border:`1px solid ${C.border}`,
+                            color:C.textMain,borderRadius:8,padding:"5px 10px",
+                            fontSize:12,cursor:"pointer",marginLeft:4}}>
+                          <option value="all">🗂️ ทุก Patch</option>
+                          {patches.map(p=><option key={p} value={p}>🗂️ {p}</option>)}
+                        </select>
+                      )}
                     </div>
                     {filtered.length===0
                       ?<div style={{textAlign:"center",padding:60,background:C.bgPanel,borderRadius:14,color:C.textMuted}}>
@@ -6444,6 +6699,7 @@ export default function RovApp() {
       )}
     </div>
     </HeroPhotosContext.Provider>
+    </ToastProvider>
   );
 }
 
@@ -6591,6 +6847,20 @@ function DraftPageR({ draft, dispatch, roster, rivals, enemyRosters, onFinishSes
             ))}
           </div>
         </div>
+        {/* ── Patch Version ── */}
+        <div style={{marginBottom:16}}>
+          <div style={{fontSize:12,color:C.textMuted,marginBottom:8,fontWeight:700}}>
+            🗂️ Patch Version <span style={{fontWeight:400,fontSize:11}}>(ไม่บังคับ)</span>
+          </div>
+          <input
+            value={draft.patch||""}
+            onChange={e=>dispatch({type:"SETUP_SET_PATCH",payload:e.target.value})}
+            placeholder="เช่น 4.21, 4.22 ..."
+            style={{width:"100%",boxSizing:"border-box",background:"#1a1535",
+              border:`1px solid ${C.border}`,color:C.textMain,borderRadius:9,
+              padding:"9px 14px",fontSize:13,outline:"none"}}/>
+        </div>
+
         {/* ── Category: ซ้อม / แข่ง ── */}
         <div style={{marginBottom:28}}>
           <div style={{fontSize:12,color:C.textMuted,marginBottom:10,fontWeight:700}}>ประเภทแมตช์</div>
