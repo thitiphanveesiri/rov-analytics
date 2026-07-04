@@ -52,6 +52,7 @@ model TeamData {
   videos        Json     @default("[]")
   teamLogo      String?  // URL โลโก้ทีม (Vercel Blob)
   rivalLogos    Json     @default("{}") // { [rivalName]: URL }
+  schedules     Json     @default("[]") // [{ id, date, time, rival, tournament, note, category }]
   updatedAt     DateTime @updatedAt
   updatedBy     String?
 }

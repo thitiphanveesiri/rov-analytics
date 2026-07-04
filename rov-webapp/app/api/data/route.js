@@ -47,7 +47,7 @@ export async function PUT(req) {
     const {
       matches, rivals, roster, enemyRosters, scoutMatches,
       playerPhotos, heroPhotos, customHeroes, roleOverrides, videos,
-      teamLogo, rivalLogos,
+      teamLogo, rivalLogos, schedules,
     } = body;
 
     const updated = await prisma.teamData.upsert({
@@ -55,14 +55,14 @@ export async function PUT(req) {
       update: {
         matches, rivals, roster, enemyRosters, scoutMatches,
         playerPhotos, heroPhotos, customHeroes, roleOverrides, videos,
-        teamLogo, rivalLogos,
+        teamLogo, rivalLogos, schedules,
         updatedBy: session.user.email,
       },
       create: {
         teamId,
         matches, rivals, roster, enemyRosters, scoutMatches,
         playerPhotos, heroPhotos, customHeroes, roleOverrides, videos,
-        teamLogo, rivalLogos,
+        teamLogo, rivalLogos, schedules,
         updatedBy: session.user.email,
       },
     });
