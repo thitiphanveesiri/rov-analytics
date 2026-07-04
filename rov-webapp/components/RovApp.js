@@ -6691,78 +6691,60 @@ export default function RovApp() {
                             <div key={rv.id}
                               style={{background:C.bgPanel,border:`1px solid ${C.border}`,
                                 borderRadius:16,overflow:"hidden",
-                                transition:"border-color 0.2s",
-                              }}
-                              onMouseEnter={e=>e.currentTarget.style.borderColor=C.primary+"60"}
-                              onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
+                                transition:"border-color 0.2s, box-shadow 0.2s"}}
+                              onMouseEnter={e=>{e.currentTarget.style.borderColor=C.primary+"70";e.currentTarget.style.boxShadow=`0 4px 24px ${C.primary}20`;}}
+                              onMouseLeave={e=>{e.currentTarget.style.borderColor=C.border;e.currentTarget.style.boxShadow="none";}}>
 
-                              {/* ── Icon Zone — คลิกเข้าหน้า detail ── */}
+                              {/* ── TOP: คลิกเข้าหน้า detail ── */}
                               <div onClick={()=>dispatchUI({type:"SET_SEL_RIVAL",payload:rv.name})}
-                                style={{cursor:"pointer",padding:"20px 20px 14px",
+                                style={{cursor:"pointer",padding:"20px 16px 16px",
                                   display:"flex",flexDirection:"column",alignItems:"center",
-                                  background:C.bgBase,borderBottom:`1px solid ${C.border}`,
-                                  position:"relative"}}>
-                                {/* Win rate badge */}
-                                {rGames.length>0&&(
-                                  <div style={{position:"absolute",top:10,right:12,
-                                    background:rwrate>=50?C.win+"25":C.lose+"25",
-                                    border:`1px solid ${rwrate>=50?C.win:C.lose}50`,
-                                    color:rwrate>=50?C.win:C.lose,
-                                    borderRadius:99,padding:"2px 9px",fontSize:10,fontWeight:800}}>
-                                    {rwrate}%
-                                  </div>
-                                )}
-                                {/* Big logo */}
-                                <div style={{
-                                  width:80,height:80,borderRadius:"50%",
-                                  border:`3px solid ${C.primary}50`,
-                                  marginBottom:10,overflow:"hidden",flexShrink:0,
-                                  boxShadow:`0 0 20px ${C.primary}30`}}>
-                                  <LogoImg url={app.rivalLogos?.[rv.name]} name={rv.name} size={80}
-                                    style={{border:"none",borderRadius:"50%"}}/>
+                                  position:"relative",userSelect:"none"}}>
+
+                                {/* Win rate badge มุมขวาบน */}
+                                <div style={{position:"absolute",top:10,right:10,
+                                  background:rGames.length===0?"#ffffff10":rwrate>=50?C.win+"30":C.lose+"30",
+                                  border:`1px solid ${rGames.length===0?C.border:rwrate>=50?C.win+"60":C.lose+"60"}`,
+                                  color:rGames.length===0?C.textMuted:rwrate>=50?C.win:C.lose,
+                                  borderRadius:99,padding:"3px 10px",fontSize:11,fontWeight:800}}>
+                                  {rGames.length===0?"—":`${rwrate}%`}
                                 </div>
+
+                                {/* Logo 120px */}
+                                <div style={{width:120,height:120,borderRadius:"50%",
+                                  border:`3px solid ${C.primary}40`,
+                                  marginBottom:14,overflow:"hidden",flexShrink:0,
+                                  boxShadow:`0 2px 16px ${C.primary}25`}}>
+                                  <LogoImg url={app.rivalLogos?.[rv.name]} name={rv.name} size={120}
+                                    style={{border:"none",borderRadius:"50%",width:120,height:120}}/>
+                                </div>
+
                                 {/* Team name */}
                                 <div style={{fontWeight:900,fontSize:15,color:C.textMain,
-                                  textAlign:"center",marginBottom:4,lineHeight:1.2}}>
+                                  textAlign:"center",lineHeight:1.3,
+                                  wordBreak:"break-word",maxWidth:"100%"}}>
                                   {rv.name}
                                 </div>
-                                <div style={{fontSize:10,color:C.textMuted,marginBottom:6}}>
-                                  {rm.length} session · {rGames.length} เกม
-                                  {rGames.length>0&&` · ${rw}W ${rGames.length-rw}L`}
-                                </div>
-                                {/* WinRate bar */}
-                                {rGames.length>0&&(
-                                  <div style={{width:"80%",height:3,background:C.bgPanel,borderRadius:99}}>
-                                    <div style={{height:3,borderRadius:99,
-                                      width:`${rwrate}%`,
-                                      background:rwrate>=50?C.win:C.lose,
-                                      transition:"width 0.5s"}}/>
-                                  </div>
-                                )}
-                                {/* Enter hint */}
-                                <div style={{marginTop:8,fontSize:10,color:C.primaryLight,
-                                  opacity:0.7}}>แตะเพื่อดูรายละเอียด ➔</div>
                               </div>
 
-                              {/* ── Bottom action zone ── */}
-                              <div style={{padding:"10px 14px"}}>
-                                {/* Logo uploader */}
+                              {/* ── BOTTOM: actions ── */}
+                              <div style={{borderTop:`1px solid ${C.border}`,padding:"10px 12px",
+                                display:"flex",flexDirection:"column",gap:6}}>
                                 {isCoach&&(
-                                  <div onClick={e=>e.stopPropagation()} style={{marginBottom:8}}>
+                                  <div onClick={e=>e.stopPropagation()}>
                                     <LogoUploader
                                       label={`โลโก้ ${rv.name}`}
                                       currentUrl={app.rivalLogos?.[rv.name]}
                                       onUpload={url=>dispatchApp({type:"SET_RIVAL_LOGO",payload:{name:rv.name,url}})}
                                       onRemove={()=>dispatchApp({type:"REMOVE_RIVAL_LOGO",payload:rv.name})}
-                                      size={28}
+                                      size={24}
                                     />
                                   </div>
                                 )}
-                                {/* Delete */}
                                 <button
                                   onClick={e=>{
                                     e.stopPropagation();
-                                    if(window.confirm(`ลบทีม "${rv.name}" ออกจาก Rivals?\nประวัติ Match/Scout จะยังอยู่`))
+                                    if(window.confirm(`ลบทีม "${rv.name}" ออกจาก Rivals?`))
                                       dispatchApp({type:"DELETE_RIVAL",payload:rv.name});
                                   }}
                                   style={{width:"100%",background:"transparent",
