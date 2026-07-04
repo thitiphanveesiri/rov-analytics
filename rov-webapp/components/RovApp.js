@@ -6756,8 +6756,7 @@ export default function RovApp() {
                                           if(!file) return;
                                           if(file.size>1.5*1024*1024){alert("ไฟล์ใหญ่เกิน 1.5MB");e.target.value="";return;}
                                           try{
-                                            const {upload:up}=await import("@vercel/blob/client");
-                                            const blob=await up(file.name,file,{access:"public",handleUploadUrl:"/api/upload"});
+                                            const blob=await upload(file.name,file,{access:"public",handleUploadUrl:"/api/upload"});
                                             dispatchApp({type:"SET_RIVAL_LOGO",payload:{name:rv.name,url:blob.url}});
                                           }catch{alert("อัพโหลดไม่สำเร็จ");}
                                           e.target.value="";
