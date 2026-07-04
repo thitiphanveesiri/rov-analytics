@@ -3,6 +3,8 @@ import { useState, useEffect, useReducer, useCallback, useRef, createContext, us
 import { useSession, signOut } from "next-auth/react";
 import { upload } from "@vercel/blob/client";
 import { loadFromStorage, saveToStorage } from "@/lib/storage";
+import { deleteBlobUrls } from "@/lib/blobCleanup";
+import { compressImage } from "@/lib/imageCompress";
 
 // ═══════════════════════════════════════════
 //  CONSTANTS
@@ -360,14 +362,16 @@ function PhotoPicker({ value, onChange, size=72, team="our" }) {
   async function handleFile(e) {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 1.5*1024*1024) {
-      alert("ไฟล์รูปใหญ่เกินไป (จำกัด 1.5MB) — กรุณาเลือกรูปที่เล็กกว่านี้");
-      e.target.value=""; return;
-    }
     setUploading(true);
     try {
-      const blob = await upload(file.name, file, { access: "public", handleUploadUrl: "/api/upload" });
+      const compressed = await compressImage(file);
+      if (compressed.size > 1.5*1024*1024) {
+        alert("ไฟล์รูปใหญ่เกินไป (จำกัด 1.5MB) — กรุณาเลือกรูปที่เล็กกว่านี้");
+        return;
+      }
+      const blob = await upload(compressed.name || file.name, compressed, { access: "public", handleUploadUrl: "/api/upload" });
       onChange(blob.url);
+      if (value && value !== blob.url) deleteBlobUrls(value); // clean up the old photo
     } catch (err) {
       console.error("Photo upload failed:", err);
       alert("อัพโหลดรูปไม่สำเร็จ ลองใหม่อีกครั้ง");
@@ -382,7 +386,7 @@ function PhotoPicker({ value, onChange, size=72, team="our" }) {
       <div style={{position:"relative"}}>
         <PlayerAvatar name="?" photoUrl={value} size={size} team={team}/>
         {value && (
-          <button onClick={()=>{onChange(null);setUrlVal("");}}
+          <button onClick={()=>{deleteBlobUrls(value);onChange(null);setUrlVal("");}}
             style={{position:"absolute",top:-4,right:-4,width:20,height:20,borderRadius:"50%",
               background:C.lose,border:"none",color:"#fff",cursor:"pointer",fontSize:11,
               display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800}}>
@@ -3469,14 +3473,16 @@ function LogoUploader({ label, currentUrl, onUpload, onRemove, size=64 }) {
   async function handleFile(e) {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 1.5*1024*1024) {
-      toast("ไฟล์รูปใหญ่เกินไป (จำกัด 1.5MB)", "error");
-      e.target.value=""; return;
-    }
     setUploading(true);
     try {
-      const blob = await upload(file.name, file, { access:"public", handleUploadUrl:"/api/upload" });
+      const compressed = await compressImage(file);
+      if (compressed.size > 1.5*1024*1024) {
+        toast("ไฟล์รูปใหญ่เกินไป (จำกัด 1.5MB)", "error");
+        return;
+      }
+      const blob = await upload(compressed.name || file.name, compressed, { access:"public", handleUploadUrl:"/api/upload" });
       onUpload(blob.url);
+      if (currentUrl && currentUrl !== blob.url) deleteBlobUrls(currentUrl); // clean up the old logo
       toast(`อัพโหลดโลโก้ ${label} สำเร็จ`, "success");
     } catch {
       toast("อัพโหลดไม่สำเร็จ ลองใหม่อีกครั้ง", "error");
@@ -3498,7 +3504,7 @@ function LogoUploader({ label, currentUrl, onUpload, onRemove, size=64 }) {
               style={{display:"none"}} onChange={handleFile}/>
           </label>
           {currentUrl&&(
-            <button onClick={onRemove}
+            <button onClick={()=>{deleteBlobUrls(currentUrl);onRemove();}}
               style={{background:"transparent",border:`1px solid ${C.lose}40`,
                 color:C.lose,borderRadius:7,padding:"4px 10px",
                 cursor:"pointer",fontSize:11,fontWeight:700}}>
@@ -3527,6 +3533,32 @@ function AdminPanel({ session }) {
   ];
 
   useEffect(() => { fetchMembers(); }, []);
+
+  const [auditLog, setAuditLog] = useState([]);
+  const [showAuditLog, setShowAuditLog] = useState(false);
+  const [auditLoading, setAuditLoading] = useState(false);
+
+  async function fetchAuditLog() {
+    setAuditLoading(true);
+    try {
+      const res = await fetch("/api/admin/audit-log");
+      if (!res.ok) throw new Error();
+      setAuditLog(await res.json());
+    } catch {
+      toast("โหลดประวัติไม่สำเร็จ", "error");
+    } finally { setAuditLoading(false); }
+  }
+
+  function toggleAuditLog() {
+    const next = !showAuditLog;
+    setShowAuditLog(next);
+    if (next && auditLog.length === 0) fetchAuditLog();
+  }
+
+  const AUDIT_ACTION_LABEL = {
+    role_change: "🔄 เปลี่ยน Role",
+    member_removed: "🚫 ลบสมาชิกออกจากทีม",
+  };
 
   async function fetchMembers() {
     setLoading(true);
@@ -3573,12 +3605,44 @@ function AdminPanel({ session }) {
 
   const roleColor = { admin:"#f9ca24", coach:C.primaryLight, member:C.textMuted };
 
+  const [exporting, setExporting] = useState(false);
+  async function exportData() {
+    setExporting(true);
+    try {
+      const res = await fetch("/api/admin/export");
+      if (!res.ok) throw new Error();
+      const blob = await res.blob();
+      // ดึงชื่อไฟล์จาก header ที่ server ตั้งไว้ ถ้าหาไม่เจอก็ fallback
+      const disposition = res.headers.get("Content-Disposition") || "";
+      const match = disposition.match(/filename="(.+)"/);
+      const filename = match?.[1] || `rov-backup-${new Date().toISOString().slice(0,10)}.json`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+      toast("Export ข้อมูลสำเร็จ ✅", "success");
+    } catch {
+      toast("Export ข้อมูลไม่สำเร็จ", "error");
+    } finally { setExporting(false); }
+  }
+
   return (
     <div style={{padding:"0 24px 40px",maxWidth:900,margin:"0 auto"}}>
-      <h2 style={{margin:"0 0 6px",fontSize:24,fontWeight:800}}>⚙️ Admin Panel</h2>
-      <p style={{margin:"0 0 24px",color:C.textMuted,fontSize:13}}>
-        จัดการสมาชิกในทีม · เฉพาะ Admin เท่านั้น
-      </p>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:12}}>
+        <div>
+          <h2 style={{margin:"0 0 6px",fontSize:24,fontWeight:800}}>⚙️ Admin Panel</h2>
+          <p style={{margin:"0 0 24px",color:C.textMuted,fontSize:13}}>
+            จัดการสมาชิกในทีม · เฉพาะ Admin เท่านั้น
+          </p>
+        </div>
+        <button onClick={exportData} disabled={exporting}
+          style={{background:C.bgPanel,border:`1px solid ${C.border}`,color:C.textMain,
+            borderRadius:9,padding:"9px 16px",cursor:exporting?"default":"pointer",
+            fontWeight:700,fontSize:12.5,opacity:exporting?0.6:1,whiteSpace:"nowrap"}}>
+          {exporting ? "⏳ กำลัง Export..." : "💾 Export ข้อมูลทีม (Backup)"}
+        </button>
+      </div>
 
       {loading ? (
         <div style={{textAlign:"center",padding:40,color:C.textMuted}}>กำลังโหลด...</div>
@@ -3681,6 +3745,42 @@ function AdminPanel({ session }) {
         <div style={{fontSize:11,color:C.textMuted,marginTop:6}}>
           แชร์ code นี้ให้ทีมใช้ตอน Register เพื่อเข้าร่วมทีม
         </div>
+      </div>
+
+      {/* Audit Log */}
+      <div style={{marginTop:20,background:C.bgPanel,border:`1px solid ${C.border}`,
+        borderRadius:14,overflow:"hidden"}}>
+        <button onClick={toggleAuditLog}
+          style={{width:"100%",background:"transparent",border:"none",cursor:"pointer",
+            padding:"14px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",
+            fontWeight:700,fontSize:13,color:C.primaryLight}}>
+          <span>📜 ประวัติการกระทำของ Admin</span>
+          <span style={{fontSize:11,color:C.textMuted}}>{showAuditLog?"ซ่อน ▲":"แสดง ▼"}</span>
+        </button>
+        {showAuditLog && (
+          <div style={{borderTop:`1px solid ${C.border}`,padding:"8px 0"}}>
+            {auditLoading ? (
+              <div style={{textAlign:"center",padding:24,color:C.textMuted,fontSize:12}}>กำลังโหลด...</div>
+            ) : auditLog.length===0 ? (
+              <div style={{textAlign:"center",padding:24,color:C.textMuted,fontSize:12}}>ยังไม่มีประวัติ</div>
+            ) : (
+              auditLog.map(entry => (
+                <div key={entry.id} style={{padding:"9px 20px",fontSize:12,
+                  borderBottom:`1px solid ${C.border}30`,display:"flex",
+                  justifyContent:"space-between",gap:10,flexWrap:"wrap"}}>
+                  <div>
+                    <span style={{fontWeight:700}}>{AUDIT_ACTION_LABEL[entry.action]||entry.action}</span>
+                    {entry.targetEmail && <span style={{color:C.textMuted}}> — {entry.targetEmail}</span>}
+                    {entry.detail && <span style={{color:C.textMuted}}> ({entry.detail})</span>}
+                  </div>
+                  <div style={{color:C.textMuted,fontSize:11,whiteSpace:"nowrap"}}>
+                    โดย {entry.actorEmail} · {new Date(entry.createdAt).toLocaleString("th-TH")}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -3966,9 +4066,10 @@ function HeroImageManager({ heroPhotos, onSetPhoto, onSetPhotosBulk, onRemovePho
       const norm = normalize(file.name);
       const heroName = heroByNorm[norm];
       if (!heroName) { unmatched.push(file.name); return; }
-      if (file.size > 1.5*1024*1024) { unmatched.push(`${file.name} (ใหญ่เกิน 1.5MB)`); return; }
       try {
-        const blob = await upload(file.name, file, { access: "public", handleUploadUrl: "/api/upload" });
+        const compressed = await compressImage(file);
+        if (compressed.size > 1.5*1024*1024) { unmatched.push(`${file.name} (ใหญ่เกิน 1.5MB)`); return; }
+        const blob = await upload(file.name, compressed, { access: "public", handleUploadUrl: "/api/upload" });
         updates[heroName] = blob.url;
         matched.push({ file: file.name, hero: heroName });
       } catch (err) {
@@ -3977,7 +4078,14 @@ function HeroImageManager({ heroPhotos, onSetPhoto, onSetPhotosBulk, onRemovePho
       }
     }));
 
-    if (Object.keys(updates).length > 0) onSetPhotosBulk(updates);
+    if (Object.keys(updates).length > 0) {
+      onSetPhotosBulk(updates);
+      // clean up old photos for any hero that just got a replacement
+      const oldUrls = Object.keys(updates)
+        .map(heroName => heroPhotos[heroName])
+        .filter(Boolean);
+      deleteBlobUrls(oldUrls);
+    }
     setMatchLog({ matched, unmatched });
     setBulkUploading(false);
   }
@@ -4197,14 +4305,16 @@ function HeroImageSlot({ hero, photoUrl, onSet, onRemove, onSetRole }) {
   async function handleFile(e) {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 1.5*1024*1024) {
-      alert("ไฟล์รูปใหญ่เกินไป (จำกัด 1.5MB)");
-      e.target.value=""; return;
-    }
     setUploading(true);
     try {
-      const blob = await upload(file.name, file, { access: "public", handleUploadUrl: "/api/upload" });
+      const compressed = await compressImage(file);
+      if (compressed.size > 1.5*1024*1024) {
+        alert("ไฟล์รูปใหญ่เกินไป (จำกัด 1.5MB)");
+        return;
+      }
+      const blob = await upload(compressed.name || file.name, compressed, { access: "public", handleUploadUrl: "/api/upload" });
       onSet(blob.url);
+      if (photoUrl && photoUrl !== blob.url) deleteBlobUrls(photoUrl); // clean up the old photo
     } catch (err) {
       console.error("Hero photo upload failed:", err);
       alert("อัพโหลดรูปไม่สำเร็จ ลองใหม่อีกครั้ง");
@@ -4268,7 +4378,7 @@ function HeroImageSlot({ hero, photoUrl, onSet, onRemove, onSetRole }) {
           <input ref={fileRef} type="file" accept="image/*" style={{display:"none"}} onChange={handleFile}/>
         </label>
         {photoUrl && (
-          <button onClick={onRemove}
+          <button onClick={()=>{deleteBlobUrls(photoUrl);onRemove();}}
             style={{background:C.lose+"20",border:`1px solid ${C.lose}40`,color:C.lose,
               borderRadius:6,padding:"3px 8px",cursor:"pointer",fontSize:10,fontWeight:700}}>
             ✕
@@ -6754,10 +6864,13 @@ export default function RovApp() {
                                         onChange={async e=>{
                                           const file=e.target.files?.[0];
                                           if(!file) return;
-                                          if(file.size>1.5*1024*1024){alert("ไฟล์ใหญ่เกิน 1.5MB");e.target.value="";return;}
                                           try{
-                                            const blob=await upload(file.name,file,{access:"public",handleUploadUrl:"/api/upload"});
+                                            const compressed=await compressImage(file);
+                                            if(compressed.size>1.5*1024*1024){alert("ไฟล์ใหญ่เกิน 1.5MB");e.target.value="";return;}
+                                            const blob=await upload(file.name,compressed,{access:"public",handleUploadUrl:"/api/upload"});
                                             dispatchApp({type:"SET_RIVAL_LOGO",payload:{name:rv.name,url:blob.url}});
+                                            const oldUrl=app.rivalLogos?.[rv.name];
+                                            if(oldUrl && oldUrl!==blob.url) deleteBlobUrls(oldUrl);
                                           }catch{alert("อัพโหลดไม่สำเร็จ");}
                                           e.target.value="";
                                         }}/>

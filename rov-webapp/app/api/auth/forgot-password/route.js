@@ -3,19 +3,10 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { Resend } from "resend";
 import crypto from "crypto";
+import { checkRateLimit } from "@/lib/rateLimit";
 
 // ป้องกัน brute force: จำกัด 3 request ต่อ email ต่อ 15 นาที
-const rateLimitMap = new Map();
-
-function checkRateLimit(email) {
-  const now = Date.now();
-  const window = 15 * 60 * 1000;
-  const max = 3;
-  const prev = (rateLimitMap.get(email) || []).filter(t => now - t < window);
-  if (prev.length >= max) return false;
-  rateLimitMap.set(email, [...prev, now]);
-  return true;
-}
+// (ใช้ Upstash Redis ถ้าตั้งค่าไว้ ไม่งั้น fallback เป็น in-memory ต่อ instance)
 
 export async function POST(req) {
   try {
@@ -24,7 +15,7 @@ export async function POST(req) {
 
     const normalizedEmail = email.toLowerCase().trim();
 
-    if (!checkRateLimit(normalizedEmail)) {
+    if (!(await checkRateLimit(`reset:${normalizedEmail}`, 3, 15 * 60))) {
       return NextResponse.json(
         { error: "ส่ง request บ่อยเกินไป กรุณารอ 15 นาทีแล้วลองใหม่" },
         { status: 429 }

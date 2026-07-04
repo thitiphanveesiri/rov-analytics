@@ -2,21 +2,10 @@
 import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
+import { checkRateLimit } from "@/lib/rateLimit";
 
-// ── Rate limiting (in-memory, resets on redeploy) ──
 // จำกัด 5 register request ต่อ IP ต่อ 15 นาที
-const ipRateMap = new Map(); // ip → [timestamps]
-
-function checkRegisterRateLimit(ip) {
-  const now    = Date.now();
-  const window = 15 * 60 * 1000; // 15 นาที
-  const max    = 5;
-  const prev   = (ipRateMap.get(ip) || []).filter(t => now - t < window);
-  if (prev.length >= max) return false;
-  ipRateMap.set(ip, [...prev, now]);
-  return true;
-}
-
+// (ใช้ Upstash Redis ถ้าตั้งค่าไว้ ไม่งั้น fallback เป็น in-memory ต่อ instance)
 function getIP(req) {
   return (
     req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
@@ -30,7 +19,7 @@ export async function POST(req) {
     const ip = getIP(req);
 
     // Rate limit check
-    if (!checkRegisterRateLimit(ip)) {
+    if (!(await checkRateLimit(`register:${ip}`, 5, 15 * 60))) {
       return NextResponse.json(
         { error: "สมัครสมาชิกบ่อยเกินไป กรุณารอ 15 นาทีแล้วลองใหม่" },
         { status: 429 }

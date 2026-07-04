@@ -11,7 +11,7 @@ async function requireAdmin() {
 
   const user = await prisma.user.findUnique({
     where: { email: session.user.email },
-    select: { id: true, teamId: true, role: true },
+    select: { id: true, email: true, teamId: true, role: true },
   });
   if (!user?.teamId) return { error: "ยังไม่ได้เข้าทีม", status: 403 };
   if (user.role !== "admin") return { error: "ต้องเป็น Admin เท่านั้น", status: 403 };
@@ -62,6 +62,17 @@ export async function PATCH(req) {
   }
 
   await prisma.user.update({ where: { id: userId }, data: { role } });
+
+  await prisma.adminAuditLog.create({
+    data: {
+      teamId: auth.user.teamId,
+      actorEmail: auth.user.email,
+      action: "role_change",
+      targetEmail: target.email,
+      detail: `${target.role} → ${role}`,
+    },
+  }).catch(err => console.error("Audit log write failed (non-fatal):", err));
+
   return NextResponse.json({ ok: true });
 }
 
@@ -85,5 +96,15 @@ export async function DELETE(req) {
 
   // เอา teamId ออก (user ยังมี account แต่ไม่อยู่ในทีมแล้ว)
   await prisma.user.update({ where: { id: userId }, data: { teamId: null, role: "member" } });
+
+  await prisma.adminAuditLog.create({
+    data: {
+      teamId: auth.user.teamId,
+      actorEmail: auth.user.email,
+      action: "member_removed",
+      targetEmail: target.email,
+    },
+  }).catch(err => console.error("Audit log write failed (non-fatal):", err));
+
   return NextResponse.json({ ok: true });
 }

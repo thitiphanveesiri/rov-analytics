@@ -33,6 +33,21 @@ model Team {
   createdAt   DateTime  @default(now())
   members     User[]
   data        TeamData?
+  auditLogs   AdminAuditLog[]
+}
+
+// ── Admin action history (role changes, member removals) ──
+model AdminAuditLog {
+  id          String   @id @default(cuid())
+  teamId      String
+  team        Team     @relation(fields: [teamId], references: [id])
+  actorEmail  String   // admin who performed the action
+  action      String   // "role_change" | "member_removed"
+  targetEmail String?  // who the action was performed on
+  detail      String?  // e.g. "member → admin"
+  createdAt   DateTime @default(now())
+
+  @@index([teamId, createdAt])
 }
 
 // ── Team Data (1 row per team) ──
