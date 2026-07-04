@@ -6681,7 +6681,7 @@ export default function RovApp() {
                     ?<div style={{textAlign:"center",padding:60,background:C.bgPanel,borderRadius:14,color:C.textMuted}}>
                         ยังไม่มีคู่แข่ง — กด "+ เพิ่มทีมคู่แข่งใหม่" หรือบันทึกแมตช์เพื่อเพิ่มคู่แข่ง
                       </div>
-                    :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(300px,1fr))",gap:16}}>
+                    :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(190px,1fr))",gap:14}}>
                         {rivals.map(rv=>{
                           const rm=matches.filter(m=>m.rivalName===rv.name);
                           const rGames=rm.flatMap(m=>Array.isArray(m.games)&&m.games.length?m.games:[m]);
@@ -6689,55 +6689,89 @@ export default function RovApp() {
                           const rwrate=rGames.length?Math.round(rw/rGames.length*100):0;
                           return (
                             <div key={rv.id}
-                              onClick={()=>dispatchUI({type:"SET_SEL_RIVAL",payload:rv.name})}
-                              style={{background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:14,padding:20,cursor:"pointer"}}>
-                              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-                                <div style={{display:"flex",alignItems:"center",gap:12}}>
-                                  <LogoImg url={app.rivalLogos?.[rv.name]} name={rv.name} size={48}/>
-                                  <div>
-                                    <div style={{fontWeight:800,fontSize:18,color:C.primaryLight}}>{rv.name}</div>
-                                    <div style={{fontSize:11,color:C.textMuted,marginTop:2}}>{rm.length} session · {rGames.length} เกม</div>
+                              style={{background:C.bgPanel,border:`1px solid ${C.border}`,
+                                borderRadius:16,overflow:"hidden",
+                                transition:"border-color 0.2s",
+                              }}
+                              onMouseEnter={e=>e.currentTarget.style.borderColor=C.primary+"60"}
+                              onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
+
+                              {/* ── Icon Zone — คลิกเข้าหน้า detail ── */}
+                              <div onClick={()=>dispatchUI({type:"SET_SEL_RIVAL",payload:rv.name})}
+                                style={{cursor:"pointer",padding:"20px 20px 14px",
+                                  display:"flex",flexDirection:"column",alignItems:"center",
+                                  background:C.bgBase,borderBottom:`1px solid ${C.border}`,
+                                  position:"relative"}}>
+                                {/* Win rate badge */}
+                                {rGames.length>0&&(
+                                  <div style={{position:"absolute",top:10,right:12,
+                                    background:rwrate>=50?C.win+"25":C.lose+"25",
+                                    border:`1px solid ${rwrate>=50?C.win:C.lose}50`,
+                                    color:rwrate>=50?C.win:C.lose,
+                                    borderRadius:99,padding:"2px 9px",fontSize:10,fontWeight:800}}>
+                                    {rwrate}%
                                   </div>
+                                )}
+                                {/* Big logo */}
+                                <div style={{
+                                  width:80,height:80,borderRadius:"50%",
+                                  border:`3px solid ${C.primary}50`,
+                                  marginBottom:10,overflow:"hidden",flexShrink:0,
+                                  boxShadow:`0 0 20px ${C.primary}30`}}>
+                                  <LogoImg url={app.rivalLogos?.[rv.name]} name={rv.name} size={80}
+                                    style={{border:"none",borderRadius:"50%"}}/>
                                 </div>
-                                <div style={{textAlign:"right"}}>
-                                  <div style={{fontSize:22,fontWeight:800,color:rwrate>=50?C.win:C.lose}}>
-                                    {rGames.length?`${rwrate}%`:"-"}
+                                {/* Team name */}
+                                <div style={{fontWeight:900,fontSize:15,color:C.textMain,
+                                  textAlign:"center",marginBottom:4,lineHeight:1.2}}>
+                                  {rv.name}
+                                </div>
+                                <div style={{fontSize:10,color:C.textMuted,marginBottom:6}}>
+                                  {rm.length} session · {rGames.length} เกม
+                                  {rGames.length>0&&` · ${rw}W ${rGames.length-rw}L`}
+                                </div>
+                                {/* WinRate bar */}
+                                {rGames.length>0&&(
+                                  <div style={{width:"80%",height:3,background:C.bgPanel,borderRadius:99}}>
+                                    <div style={{height:3,borderRadius:99,
+                                      width:`${rwrate}%`,
+                                      background:rwrate>=50?C.win:C.lose,
+                                      transition:"width 0.5s"}}/>
                                   </div>
-                                  <div style={{fontSize:11,color:C.textMuted}}>{rw}W {rGames.length-rw}L</div>
-                                </div>
+                                )}
+                                {/* Enter hint */}
+                                <div style={{marginTop:8,fontSize:10,color:C.primaryLight,
+                                  opacity:0.7}}>แตะเพื่อดูรายละเอียด ➔</div>
                               </div>
-                              {/* Logo uploader — แสดงเฉพาะ coach/admin */}
-                              {isCoach&&(
-                                <div onClick={e=>e.stopPropagation()}
-                                  style={{marginBottom:10}}>
-                                  <LogoUploader
-                                    label={`โลโก้ ${rv.name}`}
-                                    currentUrl={app.rivalLogos?.[rv.name]}
-                                    onUpload={url=>dispatchApp({type:"SET_RIVAL_LOGO",payload:{name:rv.name,url}})}
-                                    onRemove={()=>dispatchApp({type:"REMOVE_RIVAL_LOGO",payload:rv.name})}
-                                    size={36}
-                                  />
-                                </div>
-                              )}
-                              <div style={{height:3,background:C.bgBase,borderRadius:99}}>
-                                <div style={{height:3,borderRadius:99,width:`${rwrate}%`,background:rwrate>=50?C.win:C.lose}}/>
+
+                              {/* ── Bottom action zone ── */}
+                              <div style={{padding:"10px 14px"}}>
+                                {/* Logo uploader */}
+                                {isCoach&&(
+                                  <div onClick={e=>e.stopPropagation()} style={{marginBottom:8}}>
+                                    <LogoUploader
+                                      label={`โลโก้ ${rv.name}`}
+                                      currentUrl={app.rivalLogos?.[rv.name]}
+                                      onUpload={url=>dispatchApp({type:"SET_RIVAL_LOGO",payload:{name:rv.name,url}})}
+                                      onRemove={()=>dispatchApp({type:"REMOVE_RIVAL_LOGO",payload:rv.name})}
+                                      size={28}
+                                    />
+                                  </div>
+                                )}
+                                {/* Delete */}
+                                <button
+                                  onClick={e=>{
+                                    e.stopPropagation();
+                                    if(window.confirm(`ลบทีม "${rv.name}" ออกจาก Rivals?\nประวัติ Match/Scout จะยังอยู่`))
+                                      dispatchApp({type:"DELETE_RIVAL",payload:rv.name});
+                                  }}
+                                  style={{width:"100%",background:"transparent",
+                                    border:`1px solid ${C.lose}30`,color:C.lose,
+                                    borderRadius:8,padding:"5px 0",cursor:"pointer",
+                                    fontSize:10,fontWeight:700,opacity:0.6}}>
+                                  🗑️ ลบทีมนี้
+                                </button>
                               </div>
-                              <div style={{marginTop:12,fontSize:12,color:C.primaryLight,textAlign:"center",
-                                background:C.bgBase,padding:"6px",borderRadius:8,border:`1px solid ${C.border}`}}>
-                                ดูประวัติการดราฟต์ ➔
-                              </div>
-                              <button
-                                onClick={e=>{
-                                  e.stopPropagation();
-                                  if(window.confirm(`ลบทีม "${rv.name}" ออกจาก Rivals?\nประวัติ Match/Scout จะยังอยู่ แต่ไม่แสดงในหน้านี้อีกต่อไป`))
-                                    dispatchApp({type:"DELETE_RIVAL",payload:rv.name});
-                                }}
-                                style={{marginTop:8,width:"100%",background:"transparent",
-                                  border:`1px solid ${C.lose}40`,color:C.lose,
-                                  borderRadius:8,padding:"5px 0",cursor:"pointer",
-                                  fontSize:11,fontWeight:700,opacity:0.7}}>
-                                🗑️ ลบทีมนี้
-                              </button>
                             </div>
                           );
                         })}
