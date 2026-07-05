@@ -68,6 +68,8 @@ model TeamData {
   teamLogo      String?  // URL โลโก้ทีม (Vercel Blob)
   rivalLogos    Json     @default("{}") // { [rivalName]: URL }
   schedules     Json     @default("[]") // [{ id, date, time, rival, tournament, note, category }]
+  patchInfo     Json     @default("{}") // { version, notes, updatedAt }
+  heroTiers     Json     @default("{}") // { [heroName]: "S+"|"S"|"A"|"B"|"C" }
   updatedAt     DateTime @updatedAt
   updatedBy     String?
 }

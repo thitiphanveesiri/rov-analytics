@@ -1,0 +1,40 @@
+/* Base resets + mobile-friendly defaults.
+   The app itself is styled with inline styles (no Tailwind/CSS framework),
+   so this file only covers things inline styles can't: global resets,
+   scrollbars, tap-highlight, and safe-area padding for notched phones. */
+
+* {
+  -webkit-tap-highlight-color: transparent;
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  /* iOS Safari: prevent the whole page from rubber-band scrolling
+     sideways when a fixed-width element overflows. */
+  overflow-x: hidden;
+  /* respect the iPhone notch / home-indicator safe areas when installed
+     as a standalone PWA */
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Inputs/selects/textareas default to 16px on mobile below — iOS Safari
+   auto-zooms the page on focus if a form field's font-size is under 16px,
+   which is jarring inside a data-entry-heavy app like this one. */
+input, select, textarea, button {
+  font-size: 16px;
+}
+
+/* thin, unobtrusive scrollbars on desktop; native on mobile */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #3a3a5c; border-radius: 99px; }
+
+/* horizontally-scrollable containers (used for tables/draft boards on
+   narrow screens) get a visible-but-subtle scrollbar + momentum scroll */
+.h-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}

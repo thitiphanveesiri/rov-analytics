@@ -165,6 +165,19 @@ function ToastProvider({ children }) {
 
 function useToast() { return useContext(ToastContext); }
 
+// ── Simple responsive breakpoint hook (phones + tablets in portrait) ──
+function useIsMobile(breakpoint = 860) {
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${breakpoint}px)`);
+    const update = () => setIsMobile(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, [breakpoint]);
+  return isMobile;
+}
+
 // ═══════════════════════════════════════════
 //  HERO IMAGE RESOLVER
 //  Fandom (arenaofvalor.fandom.com) uses hash-based image URLs that can't
@@ -522,12 +535,75 @@ function UnifiedStatsEditor({ ourPicks, enemyPicks, gameStats, onChangeStats }) 
 }
 
 // ═══════════════════════════════════════════
+//  OBJECTIVE CONTROL EDITOR (Dragon/Turret/First Blood)
+// ═══════════════════════════════════════════
+const OBJ_DEFAULT = { firstBlood:null, firstTower:null, ourDragons:0, enemyDragons:0, ourTurrets:0, enemyTurrets:0 };
+
+function ObjectiveEditor({ objectives, onChange }) {
+  const obj = { ...OBJ_DEFAULT, ...(objectives||{}) };
+  function set(k,v){ onChange({ ...obj, [k]:v }); }
+
+  const FirstPicker = ({ field, label, icon }) => (
+    <div>
+      <div style={{fontSize:10,color:C.textMuted,marginBottom:4}}>{icon} {label}</div>
+      <div style={{display:"flex",gap:5}}>
+        {[{v:"our",l:"🛡️ เรา",c:C.win},{v:"enemy",l:"⚔️ คู่แข่ง",c:C.lose},{v:null,l:"—",c:C.textMuted}].map(o=>(
+          <button key={String(o.v)} onClick={()=>set(field,o.v)}
+            style={{background:obj[field]===o.v?o.c+"30":"transparent",
+              border:`1px solid ${obj[field]===o.v?o.c:C.border}`,color:obj[field]===o.v?o.c:C.textMuted,
+              borderRadius:7,padding:"4px 10px",cursor:"pointer",fontSize:11,fontWeight:700}}>
+            {o.l}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
+  const CountField = ({ field, label, col }) => (
+    <div>
+      <div style={{fontSize:10,color:C.textMuted,marginBottom:4}}>{label}</div>
+      <input type="number" min="0" value={obj[field]}
+        onChange={e=>set(field, Math.max(0, Number(e.target.value)||0))}
+        style={{width:60,background:"#0a0816",border:`1px solid ${C.border}`,color:col,
+          borderRadius:6,padding:"5px 8px",fontSize:13,fontWeight:700,textAlign:"center",outline:"none"}}/>
+    </div>
+  );
+
+  return (
+    <div style={{background:"#080614",borderRadius:10,padding:"12px 14px",marginTop:8}}>
+      <div style={{fontSize:11,fontWeight:800,color:C.primaryLight,marginBottom:12}}>
+        🐉 Objective Control
+      </div>
+      <div style={{display:"flex",gap:20,flexWrap:"wrap",marginBottom:12}}>
+        <FirstPicker field="firstBlood" label="First Blood" icon="🩸"/>
+        <FirstPicker field="firstTower" label="First Tower"  icon="🏯"/>
+      </div>
+      <div style={{display:"flex",gap:20,flexWrap:"wrap"}}>
+        <CountField field="ourDragons"   label="🐉 Dragon (เรา)"     col={C.win}/>
+        <CountField field="enemyDragons" label="🐉 Dragon (คู่แข่ง)" col={C.lose}/>
+        <CountField field="ourTurrets"   label="🏯 Turret พัง (เรา)"     col={C.win}/>
+        <CountField field="enemyTurrets" label="🏯 Turret พัง (คู่แข่ง)" col={C.lose}/>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════
 //  SINGLE GAME DETAIL (Match Log)
 // ═══════════════════════════════════════════
-function SingleGameDetail({ g, gameNo, onUpdateStats, playerPhotos={}, rivalName }) {
+function SingleGameDetail({ g, gameNo, onUpdateStats, onUpdateObjectives, playerPhotos={}, rivalName }) {
   const [showStats, setShowStats] = useState(false);
   const [gameStats, setGameStats] = useState(g.gameStats || { our:{}, enemy:{} });
   const [saved, setSaved] = useState(false);
+  const [showObj, setShowObj] = useState(false);
+  const [objectives, setObjectives] = useState(g.objectives || OBJ_DEFAULT);
+  const [objSaved, setObjSaved] = useState(false);
+
+  function handleSaveObjectives() {
+    onUpdateObjectives && onUpdateObjectives(gameNo - 1, objectives);
+    setObjSaved(true);
+    setTimeout(() => setObjSaved(false), 2000);
+  }
 
   function handleSave() {
     onUpdateStats && onUpdateStats(gameNo - 1, gameStats);
@@ -615,7 +691,7 @@ function SingleGameDetail({ g, gameNo, onUpdateStats, playerPhotos={}, rivalName
       )}
 
       {/* Stats toggle */}
-      <div style={{display:"flex",alignItems:"center",gap:8}}>
+      <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
         <button onClick={()=>setShowStats(v=>!v)} style={{
           background:showStats?C.primary+"30":"transparent",
           border:`1px solid ${showStats?C.primary:C.border}`,
@@ -630,7 +706,24 @@ function SingleGameDetail({ g, gameNo, onUpdateStats, playerPhotos={}, rivalName
             {saved?"✅ บันทึกแล้ว!":"💾 บันทึก Stats"}
           </button>
         )}
+        <button onClick={()=>setShowObj(v=>!v)} style={{
+          background:showObj?C.primary+"30":"transparent",
+          border:`1px solid ${showObj?C.primary:C.border}`,
+          color:showObj?C.primaryLight:C.textMuted,
+          borderRadius:7,padding:"4px 12px",cursor:"pointer",fontSize:11,fontWeight:700}}>
+          {showObj?"▲ ซ่อน Objective":"🐉 Objective Control"}
+        </button>
+        {showObj && (
+          <button onClick={handleSaveObjectives} style={{
+            background:objSaved?C.win+"30":C.primary,color:"#fff",border:"none",
+            borderRadius:7,padding:"4px 14px",cursor:"pointer",fontSize:11,fontWeight:700}}>
+            {objSaved?"✅ บันทึกแล้ว!":"💾 บันทึก Objective"}
+          </button>
+        )}
       </div>
+
+      {showObj && <ObjectiveEditor objectives={objectives} onChange={setObjectives}/>}
+
 
       {showStats && (
         <div style={{marginTop:8}}>
@@ -764,7 +857,7 @@ function SingleGameDetail({ g, gameNo, onUpdateStats, playerPhotos={}, rivalName
 // ═══════════════════════════════════════════
 //  MATCH CARD (Match Log page)
 // ═══════════════════════════════════════════
-function MatchCardWithStats({ m, onUpdateStats, playerPhotos={}, onDelete, onEditMeta }) {
+function MatchCardWithStats({ m, onUpdateStats, onUpdateObjectives, playerPhotos={}, onDelete, onEditMeta }) {
   const [open, setOpen] = useState(false);
   const isBO  = Array.isArray(m.games) && m.games.length > 0;
   const wins  = isBO ? m.games.filter(g=>g.result==="WIN").length : (m.result==="WIN"?1:0);
@@ -775,6 +868,15 @@ function MatchCardWithStats({ m, onUpdateStats, playerPhotos={}, onDelete, onEdi
   const [showStats, setShowStats] = useState(false);
   const [gameStats, setGameStats] = useState(m.gameStats || { our:{}, enemy:{} });
   const [saved,     setSaved]     = useState(false);
+  const [showObj,   setShowObj]   = useState(false);
+  const [objectives,setObjectives]= useState(m.objectives || OBJ_DEFAULT);
+  const [objSaved,  setObjSaved]  = useState(false);
+
+  function handleSaveObjectives() {
+    onUpdateObjectives && onUpdateObjectives(m.id, null, objectives);
+    setObjSaved(true);
+    setTimeout(() => setObjSaved(false), 2000);
+  }
 
   // ── Edit meta ──
   const [editing,   setEditing]   = useState(false);
@@ -931,6 +1033,7 @@ function MatchCardWithStats({ m, onUpdateStats, playerPhotos={}, onDelete, onEdi
                 <SingleGameDetail
                   key={i} g={g} gameNo={i+1}
                   onUpdateStats={(gameIdx, gs) => onUpdateStats(m.id, gameIdx, gs)}
+                  onUpdateObjectives={(gameIdx, obj) => onUpdateObjectives(m.id, gameIdx, obj)}
                   playerPhotos={playerPhotos} rivalName={m.rivalName}
                 />
               ))}
@@ -991,7 +1094,7 @@ function MatchCardWithStats({ m, onUpdateStats, playerPhotos={}, onDelete, onEdi
               )}
 
               {/* Stats รวม */}
-              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,flexWrap:"wrap"}}>
                 <button onClick={()=>setShowStats(v=>!v)} style={{
                   background:showStats?C.primary+"30":"transparent",
                   border:`1px solid ${showStats?C.primary:C.border}`,
@@ -1006,7 +1109,22 @@ function MatchCardWithStats({ m, onUpdateStats, playerPhotos={}, onDelete, onEdi
                     {saved?"✅ บันทึกแล้ว!":"💾 บันทึก Stats"}
                   </button>
                 )}
+                <button onClick={()=>setShowObj(v=>!v)} style={{
+                  background:showObj?C.primary+"30":"transparent",
+                  border:`1px solid ${showObj?C.primary:C.border}`,
+                  color:showObj?C.primaryLight:C.textMuted,
+                  borderRadius:7,padding:"4px 12px",cursor:"pointer",fontSize:11,fontWeight:700}}>
+                  {showObj?"▲ ซ่อน Objective":"🐉 Objective Control"}
+                </button>
+                {showObj && (
+                  <button onClick={handleSaveObjectives} style={{
+                    background:objSaved?C.win+"30":C.primary,color:"#fff",border:"none",
+                    borderRadius:7,padding:"4px 14px",cursor:"pointer",fontSize:11,fontWeight:700}}>
+                    {objSaved?"✅ บันทึกแล้ว!":"💾 บันทึก Objective"}
+                  </button>
+                )}
               </div>
+              {showObj && <ObjectiveEditor objectives={objectives} onChange={setObjectives}/>}
               {showStats && (
                 <UnifiedStatsEditor
                   ourPicks={m.ourPicks}
@@ -1019,6 +1137,129 @@ function MatchCardWithStats({ m, onUpdateStats, playerPhotos={}, onDelete, onEdi
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════
+//  PATCH & META TRACKER
+// ═══════════════════════════════════════════
+const TIER_CONFIG = [
+  {id:"S+", col:"#ff6b6b"}, {id:"S", col:"#feca57"}, {id:"A", col:"#1dd1a1"},
+  {id:"B", col:"#54a0ff"}, {id:"C", col:"#8395a7"},
+];
+
+function PatchMetaCard({ patchInfo, heroTiers, onSavePatch, onSetTier }) {
+  const [editing, setEditing] = useState(false);
+  const [version, setVersion] = useState(patchInfo?.version || "");
+  const [notes,   setNotes]   = useState(patchInfo?.notes   || "");
+  const [showTiers, setShowTiers] = useState(false);
+  const [search, setSearch] = useState("");
+
+  function save() {
+    onSavePatch({ version: version.trim(), notes: notes.trim() });
+    setEditing(false);
+  }
+
+  const filteredHeroes = HERO_DATA.filter(h =>
+    h.name.toLowerCase().includes(search.toLowerCase())
+  );
+
+  return (
+    <div style={{background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:14,padding:18,marginBottom:16}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:10}}>
+        <div style={{flex:1,minWidth:220}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+            <span style={{fontWeight:800,fontSize:14,color:C.primaryLight}}>🗂️ Patch ปัจจุบัน</span>
+            {patchInfo?.version && (
+              <span style={{background:"#0984e3"+"20",border:"1px solid #0984e3"+"50",
+                color:"#74b9ff",borderRadius:99,padding:"2px 10px",fontSize:11,fontWeight:700}}>
+                {patchInfo.version}
+              </span>
+            )}
+          </div>
+          {!editing ? (
+            <div style={{fontSize:12,color:C.textMuted,lineHeight:1.6,whiteSpace:"pre-wrap"}}>
+              {patchInfo?.notes || "ยังไม่ได้ใส่โน้ต patch — กด แก้ไข เพื่อบันทึกความเปลี่ยนแปลงของ patch นี้"}
+            </div>
+          ) : (
+            <div style={{display:"flex",flexDirection:"column",gap:8,marginTop:6}}>
+              <input value={version} onChange={e=>setVersion(e.target.value)}
+                placeholder="เช่น 1.52.2.9" style={{background:C.bgCard,border:`1px solid ${C.border}`,
+                  color:C.textMain,borderRadius:7,padding:"6px 10px",fontSize:12,outline:"none",maxWidth:200}}/>
+              <textarea value={notes} onChange={e=>setNotes(e.target.value)} rows={3}
+                placeholder="สรุป patch notes / meta ที่เปลี่ยนไป..."
+                style={{background:C.bgCard,border:`1px solid ${C.border}`,color:C.textMain,
+                  borderRadius:7,padding:"8px 10px",fontSize:12,outline:"none",resize:"vertical"}}/>
+            </div>
+          )}
+          {patchInfo?.updatedAt && !editing && (
+            <div style={{fontSize:10,color:C.textMuted,marginTop:6}}>
+              อัปเดตล่าสุด {new Date(patchInfo.updatedAt).toLocaleString("th-TH")}
+            </div>
+          )}
+        </div>
+        <div style={{display:"flex",gap:8,flexShrink:0}}>
+          {editing ? (
+            <>
+              <button onClick={save} style={{background:C.primary,color:"#fff",border:"none",
+                borderRadius:7,padding:"6px 14px",cursor:"pointer",fontWeight:700,fontSize:11}}>💾 บันทึก</button>
+              <button onClick={()=>setEditing(false)} style={{background:"transparent",
+                border:`1px solid ${C.border}`,color:C.textMuted,borderRadius:7,padding:"6px 12px",
+                cursor:"pointer",fontSize:11}}>ยกเลิก</button>
+            </>
+          ) : (
+            <button onClick={()=>{setVersion(patchInfo?.version||"");setNotes(patchInfo?.notes||"");setEditing(true);}}
+              style={{background:"transparent",border:`1px solid ${C.border}`,color:C.textMuted,
+                borderRadius:7,padding:"6px 12px",cursor:"pointer",fontSize:11,fontWeight:700}}>
+              ✏️ แก้ไข
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div style={{marginTop:14,paddingTop:12,borderTop:`1px solid ${C.border}`}}>
+        <button onClick={()=>setShowTiers(v=>!v)} style={{
+          background:showTiers?C.primary+"30":"transparent",
+          border:`1px solid ${showTiers?C.primary:C.border}`,color:showTiers?C.primaryLight:C.textMuted,
+          borderRadius:7,padding:"5px 14px",cursor:"pointer",fontSize:11,fontWeight:700}}>
+          {showTiers?"▲ ซ่อน Tier List":"🏆 Meta Tier List"}
+        </button>
+
+        {showTiers && (
+          <div style={{marginTop:12}}>
+            <input value={search} onChange={e=>setSearch(e.target.value)}
+              placeholder="ค้นหา hero..." style={{width:"100%",boxSizing:"border-box",
+                background:C.bgCard,border:`1px solid ${C.border}`,color:C.textMain,
+                borderRadius:7,padding:"6px 10px",fontSize:12,outline:"none",marginBottom:10}}/>
+            <div style={{maxHeight:340,overflowY:"auto",display:"flex",flexDirection:"column",gap:4}}>
+              {filteredHeroes.map(h=>{
+                const tier = heroTiers?.[h.name];
+                return (
+                  <div key={h.name} style={{display:"flex",alignItems:"center",gap:8,
+                    padding:"5px 8px",borderRadius:7,background:C.bgCard}}>
+                    <HeroChip name={h.name} size={26} fontSize={12} bold={false}/>
+                    <div style={{display:"flex",gap:4,marginLeft:"auto"}}>
+                      {TIER_CONFIG.map(t=>(
+                        <button key={t.id} onClick={()=>onSetTier(h.name, tier===t.id?null:t.id)}
+                          style={{width:26,height:22,borderRadius:5,cursor:"pointer",fontSize:10,fontWeight:800,
+                            background:tier===t.id?t.col:"transparent",
+                            border:`1px solid ${tier===t.id?t.col:C.border}`,
+                            color:tier===t.id?"#1a1a2e":C.textMuted}}>
+                          {t.id}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+              {filteredHeroes.length===0 && (
+                <div style={{textAlign:"center",color:C.textMuted,fontSize:12,padding:16}}>ไม่พบ hero</div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -1157,7 +1398,7 @@ function PlayerProfile({ player, isEnemy, allGames, onBack, photoUrl }) {
         </div>
       </div>
 
-      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:16}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(100px,1fr))",gap:12,marginBottom:16}}>
         {[
           {icon:"🎮",label:"Games",    val:pGames.length,       col:C.primaryLight},
           {icon:"🏆",label:"Win Rate", val:`${pWR}%`,           col:pWR>=50?accentCol:C.lose},
@@ -1171,7 +1412,7 @@ function PlayerProfile({ player, isEnemy, allGames, onBack, photoUrl }) {
         ))}
       </div>
 
-      <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:10,marginBottom:16}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(70px,1fr))",gap:10,marginBottom:16}}>
         {[
           {label:"Avg K",      val:avgK,                                col:"#00cec9"},
           {label:"Avg D",      val:avgD,                                col:C.lose},
@@ -1288,6 +1529,95 @@ function PlayerProfile({ player, isEnemy, allGames, onBack, photoUrl }) {
 // ═══════════════════════════════════════════
 //  RIVAL STATS SECTION (Rivals > Overview)
 // ═══════════════════════════════════════════
+// ═══════════════════════════════════════════
+//  PICK / BAN ORDER FILTER
+//  (ban slot index 0-3 = 1st-4th ban, pick slot index 0-4 = 1st-5th pick
+//   ต่อทีม — ลำดับนี้ถูกบันทึกไว้แล้วตอน Draft เพราะแต่ละทีมจะ ban/pick
+//   เรียงตาม slot 0→1→2... เสมอ)
+// ═══════════════════════════════════════════
+const PICK_BAN_FILTERS = [
+  {id:"ban0", label:"🚫 Ban ที่ 1", type:"ban",  idx:0},
+  {id:"ban1", label:"🚫 Ban ที่ 2", type:"ban",  idx:1},
+  {id:"ban2", label:"🚫 Ban ที่ 3", type:"ban",  idx:2},
+  {id:"ban3", label:"🚫 Ban ที่ 4", type:"ban",  idx:3},
+  {id:"pick0",label:"🦸 Pick ที่ 1",type:"pick", idx:0},
+  {id:"pick1",label:"🦸 Pick ที่ 2",type:"pick", idx:1},
+  {id:"pick2",label:"🦸 Pick ที่ 3",type:"pick", idx:2},
+  {id:"pick3",label:"🦸 Pick ที่ 4",type:"pick", idx:3},
+  {id:"pick4",label:"🦸 Pick ที่ 5",type:"pick", idx:4},
+];
+
+function PickBanOrderPanel({ games, getBans, getPicks, getWon, title }) {
+  const [filter, setFilter] = useState(null);
+  const active = PICK_BAN_FILTERS.find(f=>f.id===filter);
+
+  const rows = {};
+  if (active) {
+    games.forEach(g=>{
+      let heroName = null;
+      if (active.type==="ban") {
+        const b = (getBans(g)||[])[active.idx];
+        heroName = b?.name || (typeof b==="string" ? b : null);
+      } else {
+        const slot = (getPicks(g)||[])[active.idx];
+        heroName = slot?.hero?.name || null;
+      }
+      if (!heroName) return;
+      if (!rows[heroName]) rows[heroName] = { count:0, wins:0 };
+      rows[heroName].count++;
+      if (getWon(g)) rows[heroName].wins++;
+    });
+  }
+  const arr = Object.entries(rows)
+    .map(([hero,s]) => ({ hero, count:s.count, wr:Math.round(s.wins/s.count*100) }))
+    .sort((a,b)=>b.count-a.count);
+
+  return (
+    <div style={{background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:12,padding:"14px 16px"}}>
+      <div style={{fontWeight:700,fontSize:12,color:C.primaryLight,marginBottom:10}}>
+        {title || "🎯 Pick / Ban ตามลำดับ"}
+      </div>
+      <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:12}}>
+        {PICK_BAN_FILTERS.map(f=>(
+          <button key={f.id} onClick={()=>setFilter(filter===f.id?null:f.id)}
+            style={{background:filter===f.id?(f.type==="ban"?C.ban:C.lose)+"30":"transparent",
+              border:`1px solid ${filter===f.id?(f.type==="ban"?C.ban:C.lose):C.border}`,
+              color:filter===f.id?(f.type==="ban"?C.ban:C.lose):C.textMuted,
+              borderRadius:99,padding:"4px 12px",cursor:"pointer",fontSize:11,fontWeight:700,whiteSpace:"nowrap"}}>
+            {f.label}
+          </button>
+        ))}
+      </div>
+      {!active ? (
+        <div style={{textAlign:"center",padding:"16px 0",color:C.textMuted,fontSize:12}}>
+          💡 เลือกลำดับด้านบน เพื่อดูว่ามักหยิบ/แบนฮีโร่ตัวไหนในจังหวะนั้น
+        </div>
+      ) : arr.length===0 ? (
+        <div style={{textAlign:"center",padding:"16px 0",color:C.textMuted,fontSize:12}}>ยังไม่มีข้อมูล</div>
+      ) : (
+        <div style={{display:"flex",flexDirection:"column",gap:4}}>
+          {arr.map((r,i)=>(
+            <div key={r.hero} style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+              padding:"6px 10px",background:i%2===0?"transparent":C.bgCard,borderRadius:7}}>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontSize:10,color:C.textMuted,width:16}}>#{i+1}</span>
+                <HeroChip name={r.hero} size={26} accentCol={active.type==="ban"?C.ban:C.lose} fontSize={12}/>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <span style={{fontSize:10,color:C.textMuted}}>{r.count} ครั้ง</span>
+                <span style={{fontSize:11,fontWeight:700,padding:"1px 8px",borderRadius:5,
+                  background:r.wr>=50?C.lose+"20":C.win+"20",color:r.wr>=50?C.lose:C.win}}>
+                  ชนะ {r.wr}%
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function RivalStatsSection({ selRival, rGames, enemyRosters }) {
   const SC = { card:{background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:12,padding:"16px 18px"} };
   const enemyRoster = enemyRosters[selRival] || [];
@@ -1520,6 +1850,15 @@ function RivalStatsSection({ selRival, rGames, enemyRosters }) {
           </div>
         )}
       </div>
+
+      {/* ── Pick/Ban ตามลำดับ ── */}
+      <PickBanOrderPanel
+        games={rGames}
+        getBans={g=>g.enemyBans}
+        getPicks={g=>g.enemyPicks}
+        getWon={g=>g.result==="LOSE"}
+        title={`🎯 Pick / Ban ตามลำดับ ของ ${selRival}`}
+      />
 
       {/* ── KDA ต่อ Hero คู่แข่ง ── */}
       <div style={SC.card}>
@@ -2399,7 +2738,7 @@ function ScoutSessionCreator({ rivals, enemyRosters, onSave, onCancel }) {
         {mode==="bo"&&(
           <div style={{marginTop:10}}>
             <div style={{fontSize:10,color:C.textMuted,marginBottom:6}}>BO format</div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:5}}>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(70px,1fr))",gap:5}}>
               {BO_OPTIONS.map(b=>(
                 <button key={b.label} onClick={()=>setBoType(b.label)} style={{
                   background:boType===b.label?C.primary+"30":"transparent",
@@ -2757,6 +3096,16 @@ function MatchupDetail({ rivalName, opponent, records, rivals, enemyRosters, onS
   const st = calcMatchupStats(records, rivalName);
   const SC = { card:{background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:12,padding:"14px 16px"} };
 
+  // flatten scout games into rivalName's perspective for pick/ban-order analysis
+  const rivalGames = records.flatMap(sm => {
+    const isA = sm.teamA === rivalName;
+    return (sm.games||[]).map(g => ({
+      bans:  isA ? (g.bansA||[])  : (g.bansB||[]),
+      picks: isA ? (g.picksA||[]) : (g.picksB||[]),
+      won:   isA ? g.teamAResult==="WIN" : g.teamAResult==="LOSE",
+    }));
+  });
+
   if (creating) return (
     <ScoutSessionCreator rivals={rivals} enemyRosters={enemyRosters}
       onSave={data=>{onSaveScout(data);setCreating(false);}}
@@ -2808,7 +3157,7 @@ function MatchupDetail({ rivalName, opponent, records, rivals, enemyRosters, onS
       ) : (
         <div style={{display:"flex",flexDirection:"column",gap:14}}>
           {/* summary cards */}
-          <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:10}}>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(90px,1fr))",gap:10}}>
             {[
               {label:"🎮 เกม",        val:st.games,                              col:C.primaryLight},
               {label:"🏆 Win Rate",   val:st.games?`${st.wr}%`:"-",             col:st.wr>=50?C.win:C.lose},
@@ -2829,7 +3178,7 @@ function MatchupDetail({ rivalName, opponent, records, rivals, enemyRosters, onS
               <div style={{fontWeight:700,fontSize:12,color:C.primaryLight,marginBottom:10}}>
                 📈 KDA เฉลี่ยต่อผู้เล่น ({rivalName})
               </div>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:8}}>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(80px,1fr))",gap:8}}>
                 {[
                   {label:"Avg K",      val:st.avgK,                              col:"#00cec9"},
                   {label:"Avg D",      val:st.avgD,                              col:C.lose},
@@ -2888,7 +3237,7 @@ function MatchupDetail({ rivalName, opponent, records, rivals, enemyRosters, onS
               </div>
               {/* โดยรวม Gold/Dmg/DmgTkn */}
               {st.statCnt>0&&(
-                <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(110px,1fr))",gap:8}}>
                   {[{label:"Avg Gold",val:st.avgGold,col:"#f9ca24"},
                     {label:"Avg Dmg",val:st.avgDmg,col:"#e17055"},
                     {label:"Avg DmgTkn",val:st.avgDtk,col:C.lose}].map(c=>(
@@ -2923,6 +3272,15 @@ function MatchupDetail({ rivalName, opponent, records, rivals, enemyRosters, onS
               ))}
             </div>
           )}
+
+          {/* ── Pick/Ban ตามลำดับ ── */}
+          <PickBanOrderPanel
+            games={rivalGames}
+            getBans={g=>g.bans}
+            getPicks={g=>g.picks}
+            getWon={g=>g.won}
+            title={`🎯 Pick / Ban ตามลำดับ ของ ${rivalName}`}
+          />
 
           {/* Hero pool + patterns */}
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
@@ -5143,7 +5501,7 @@ function TacticalWhiteboard() {
               placeholder="🔍 ค้นหา Hero..." autoFocus
               style={{background:C.card,border:`1px solid ${C.border}`,color:C.textMain,
                 borderRadius:8,padding:"7px 12px",fontSize:13,outline:"none",marginBottom:10}}/>
-            <div style={{overflowY:"auto",display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6}}>
+            <div style={{overflowY:"auto",display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(100px,1fr))",gap:6}}>
               {filteredHeroes.map(h=>(
                 <button key={h.name} onClick={()=>placeHero(h.name)}
                   style={{background:C.card,border:`1px solid ${C.border}`,
@@ -5662,7 +6020,7 @@ function VideoLibrary({ videos=[], onAddVideo, onUpdateVideo, onDeleteVideo }) {
 
         {/* STATS ROW */}
         {videos.length>0&&(
-          <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:10,marginBottom:16}}>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(90px,1fr))",gap:10,marginBottom:16}}>
             {[
               {label:"🎬 ทั้งหมด",  val:videos.length,                            col:C.primaryLight},
               ...TAGS.map(t=>({
@@ -5738,6 +6096,8 @@ function defaultAppState() {
     schedules:     [], // { id, date, time, rival, tournament, note, matchId? }
     teamLogo:      null,
     rivalLogos:    {},
+    patchInfo:     {version:"",notes:"",updatedAt:null}, // ข้อมูล patch ปัจจุบัน
+    heroTiers:     {}, // { [heroName]: "S+"|"S"|"A"|"B"|"C" } — meta tier list
   };
 }
 
@@ -5795,6 +6155,20 @@ function appReducer(state, action) {
           return { ...m, games };
         }
         return { ...m, gameStats };
+      });
+      return { ...state, matches };
+    }
+
+    case "UPDATE_OBJECTIVES": {
+      const { matchId, gameIdx, objectives } = action.payload;
+      const matches = state.matches.map(m => {
+        if (m.id !== matchId) return m;
+        if (gameIdx != null && Array.isArray(m.games)) {
+          const games = [...m.games];
+          games[gameIdx] = { ...games[gameIdx], objectives };
+          return { ...m, games };
+        }
+        return { ...m, objectives };
       });
       return { ...state, matches };
     }
@@ -5892,6 +6266,16 @@ function appReducer(state, action) {
     case "REMOVE_RIVAL_LOGO": {
       const { [action.payload]: _, ...rest } = state.rivalLogos || {};
       return { ...state, rivalLogos: rest };
+    }
+
+    case "SET_PATCH_INFO":
+      return { ...state, patchInfo: { ...state.patchInfo, ...action.payload, updatedAt: new Date().toISOString() } };
+
+    case "SET_HERO_TIER": {
+      const { hero, tier } = action.payload;
+      const heroTiers = { ...(state.heroTiers||{}) };
+      if (!tier) delete heroTiers[hero]; else heroTiers[hero] = tier;
+      return { ...state, heroTiers };
     }
 
     case "ADD_CUSTOM_HERO": {
@@ -6091,6 +6475,8 @@ export default function RovApp() {
   const [draft, dispatchDraft]= useReducer(draftReducer, null, initDraftState);
   const [saveStatus, setSaveStatus] = useState("idle"); // idle | saving | saved | error
   const [heroDataVersion, setHeroDataVersion] = useState(0); // bump to force re-render after HERO_DATA mutation
+  const isMobile = useIsMobile();
+  const [showMobileMenu, setShowMobileMenu] = useState(false);
 
   // ── load from Database on mount ──
   useEffect(() => {
@@ -6229,6 +6615,10 @@ export default function RovApp() {
     dispatchApp({ type:"UPDATE_STATS", payload:{ matchId, gameIdx, gameStats } });
   }, []);
 
+  const handleUpdateObjectives = useCallback((matchId, gameIdx, objectives) => {
+    dispatchApp({ type:"UPDATE_OBJECTIVES", payload:{ matchId, gameIdx, objectives } });
+  }, []);
+
   const [newPlayerPhoto,      setNewPlayerPhoto]      = useState(null);
   const [newEnemyPlayerPhoto, setNewEnemyPlayerPhoto]  = useState(null);
   const [showAddRival,        setShowAddRival]         = useState(false);
@@ -6291,6 +6681,35 @@ export default function RovApp() {
     .map(([h,s])=>({hero:h,picks:s.picks,wr:Math.round(s.wins/s.picks*100)}))
     .sort((a,b)=>b.picks-a.picks);
 
+  // ── Objective control aggregate ──
+  const gamesWithObj = allGames.filter(g=>g.objectives);
+  const objSummary = (() => {
+    let fbOur=0, fbEnemy=0, ftOur=0, ftEnemy=0, dragOur=0, dragEnemy=0, turOur=0, turEnemy=0;
+    let winsWithFT=0, gamesWithFT=0, winsWithFirstDrag=0, gamesWithDragEdge=0;
+    gamesWithObj.forEach(g=>{
+      const o=g.objectives;
+      if(o.firstBlood==="our") fbOur++; else if(o.firstBlood==="enemy") fbEnemy++;
+      if(o.firstTower==="our") { ftOur++; gamesWithFT++; if(g.result==="WIN") winsWithFT++; }
+      else if(o.firstTower==="enemy") { ftEnemy++; gamesWithFT++; }
+      dragOur   += Number(o.ourDragons||0);
+      dragEnemy += Number(o.enemyDragons||0);
+      turOur    += Number(o.ourTurrets||0);
+      turEnemy  += Number(o.enemyTurrets||0);
+      if(Number(o.ourDragons||0) > Number(o.enemyDragons||0)) {
+        gamesWithDragEdge++; if(g.result==="WIN") winsWithFirstDrag++;
+      }
+    });
+    return {
+      total: gamesWithObj.length,
+      fbOur, fbEnemy,
+      ftOur, ftEnemy,
+      ftWinRate: gamesWithFT ? Math.round(winsWithFT/gamesWithFT*100) : null,
+      dragOur, dragEnemy,
+      turOur, turEnemy,
+      dragEdgeWinRate: gamesWithDragEdge ? Math.round(winsWithFirstDrag/gamesWithDragEdge*100) : null,
+    };
+  })();
+
   const NAV = [
     {id:"overview",icon:"📊",label:"Overview"},
     {id:"draft",   icon:"⚔️",label:"Live Draft", coachOnly:true},
@@ -6334,54 +6753,122 @@ export default function RovApp() {
 
       {/* NAV */}
       <div style={{background:"linear-gradient(90deg,#12072a,#0a0a16)",borderBottom:`1px solid ${C.border}`,
-        padding:"0 24px",display:"flex",alignItems:"center",height:60,position:"sticky",top:0,zIndex:200}}>
-        <span style={{fontSize:22,marginRight:10}}>🦅</span>
-        <span style={{fontWeight:900,fontSize:17,letterSpacing:2,color:C.primaryLight}}>PRO TEAM ANALYTICS</span>
-        <span style={{background:C.primary,color:"#fff",fontSize:10,padding:"2px 8px",borderRadius:99,fontWeight:700,marginLeft:10}}>V7</span>
+        padding:isMobile?"0 12px":"0 24px",display:"flex",alignItems:"center",height:56,position:"sticky",top:0,zIndex:200}}>
+        <span style={{fontSize:20,marginRight:8}}>🦅</span>
+        <span style={{fontWeight:900,fontSize:isMobile?13:17,letterSpacing:isMobile?1:2,color:C.primaryLight,
+          whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+          {isMobile?"RoV ANALYTICS":"PRO TEAM ANALYTICS"}
+        </span>
+        {!isMobile && (
+          <span style={{background:C.primary,color:"#fff",fontSize:10,padding:"2px 8px",borderRadius:99,fontWeight:700,marginLeft:10}}>V7</span>
+        )}
         {/* save status indicator */}
-        <span style={{marginLeft:12,fontSize:11,color:
+        <span style={{marginLeft:isMobile?8:12,fontSize:isMobile?14:11,color:
           saveStatus==="saving"?C.primaryLight:saveStatus==="saved"?"#00b894":saveStatus==="error"?"#ff4757":C.textMuted,
-          display:"flex",alignItems:"center",gap:4,transition:"opacity .3s",
+          display:"flex",alignItems:"center",gap:4,transition:"opacity .3s",flexShrink:0,
           opacity:saveStatus==="idle"?0.4:1}}>
-          {saveStatus==="saving" && <>☁️ กำลังบันทึก...</>}
-          {saveStatus==="saved"  && <>✅ บันทึกแล้ว</>}
-          {saveStatus==="idle"   && <>☁️ ซิงค์แล้ว</>}
-          {saveStatus==="error"  && <>❌ บันทึกไม่สำเร็จ</>}
+          {isMobile ? (
+            saveStatus==="saving"?"☁️":saveStatus==="saved"?"✅":saveStatus==="error"?"❌":"☁️"
+          ) : (
+            <>
+              {saveStatus==="saving" && <>☁️ กำลังบันทึก...</>}
+              {saveStatus==="saved"  && <>✅ บันทึกแล้ว</>}
+              {saveStatus==="idle"   && <>☁️ ซิงค์แล้ว</>}
+              {saveStatus==="error"  && <>❌ บันทึกไม่สำเร็จ</>}
+            </>
+          )}
         </span>
         <div style={{flex:1}}/>
-        {NAV.filter(n=>(!n.coachOnly || isCoach) && (!n.adminOnly || isAdmin)).map(n=>(
-          <button key={n.id}
-            onClick={()=>dispatchUI({type:"SET_PAGE",payload:n.id})}
-            style={{background:page===n.id?C.primary+"30":"transparent",
-              border:"none",color:page===n.id?C.primaryLight:C.textMuted,
-              padding:"6px 14px",cursor:"pointer",fontSize:13,
-              fontWeight:page===n.id?700:400,borderRadius:8}}>
-            {n.icon} {n.label}
+
+        {isMobile ? (
+          // ── Mobile: hamburger button opens a slide-down menu ──
+          <button onClick={()=>setShowMobileMenu(v=>!v)}
+            style={{background:showMobileMenu?C.primary+"30":"transparent",border:`1px solid ${C.border}`,
+              color:C.textMain,borderRadius:8,padding:"8px 12px",cursor:"pointer",fontSize:16,
+              minWidth:44,minHeight:44,display:"flex",alignItems:"center",justifyContent:"center"}}>
+            {showMobileMenu?"✕":"☰"}
           </button>
-        ))}
-        {session?.user && (
-          <div style={{display:"flex",alignItems:"center",gap:8,marginLeft:14,paddingLeft:14,
-            borderLeft:`1px solid ${C.border}`}}>
-            {app.teamLogo && (
-              <LogoImg url={app.teamLogo} name={app.teamName||"ทีมเรา"} size={26}
-                style={{border:`2px solid ${C.primary}40`}}/>
+        ) : (
+          // ── Desktop: inline nav buttons + user info ──
+          <>
+            {NAV.filter(n=>(!n.coachOnly || isCoach) && (!n.adminOnly || isAdmin)).map(n=>(
+              <button key={n.id}
+                onClick={()=>dispatchUI({type:"SET_PAGE",payload:n.id})}
+                style={{background:page===n.id?C.primary+"30":"transparent",
+                  border:"none",color:page===n.id?C.primaryLight:C.textMuted,
+                  padding:"6px 14px",cursor:"pointer",fontSize:13,
+                  fontWeight:page===n.id?700:400,borderRadius:8}}>
+                {n.icon} {n.label}
+              </button>
+            ))}
+            {session?.user && (
+              <div style={{display:"flex",alignItems:"center",gap:8,marginLeft:14,paddingLeft:14,
+                borderLeft:`1px solid ${C.border}`}}>
+                {app.teamLogo && (
+                  <LogoImg url={app.teamLogo} name={app.teamName||"ทีมเรา"} size={26}
+                    style={{border:`2px solid ${C.primary}40`}}/>
+                )}
+                <span style={{fontSize:11,color:C.textMuted}}>
+                  {session.user.name || session.user.email}
+                </span>
+                <span style={{fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:99,
+                  background: isAdmin?"#f9ca24"+"30":isCoach?C.primary+"30":C.border+"30",
+                  color:       isAdmin?"#f9ca24"  :isCoach?C.primaryLight:C.textMuted}}>
+                  {isAdmin?"👑 Admin":isCoach?"🎓 Coach":"👤 Member"}
+                </span>
+                <button onClick={()=>signOut({ callbackUrl: "/login" })}
+                  style={{background:"transparent",border:`1px solid ${C.border}`,color:C.textMuted,
+                    borderRadius:7,padding:"4px 10px",cursor:"pointer",fontSize:11,fontWeight:600}}>
+                  ออกจากระบบ
+                </button>
+              </div>
             )}
-            <span style={{fontSize:11,color:C.textMuted}}>
-              {session.user.name || session.user.email}
-            </span>
-            <span style={{fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:99,
-              background: isAdmin?"#f9ca24"+"30":isCoach?C.primary+"30":C.border+"30",
-              color:       isAdmin?"#f9ca24"  :isCoach?C.primaryLight:C.textMuted}}>
-              {isAdmin?"👑 Admin":isCoach?"🎓 Coach":"👤 Member"}
-            </span>
-            <button onClick={()=>signOut({ callbackUrl: "/login" })}
-              style={{background:"transparent",border:`1px solid ${C.border}`,color:C.textMuted,
-                borderRadius:7,padding:"4px 10px",cursor:"pointer",fontSize:11,fontWeight:600}}>
-              ออกจากระบบ
-            </button>
-          </div>
+          </>
         )}
       </div>
+
+      {/* ── Mobile slide-down menu ── */}
+      {isMobile && showMobileMenu && (
+        <div style={{position:"sticky",top:56,zIndex:199,background:"#0d0a1e",
+          borderBottom:`1px solid ${C.border}`,padding:"10px 12px",
+          display:"flex",flexDirection:"column",gap:4,
+          maxHeight:"calc(100vh - 56px)",overflowY:"auto"}}>
+          {NAV.filter(n=>(!n.coachOnly || isCoach) && (!n.adminOnly || isAdmin)).map(n=>(
+            <button key={n.id}
+              onClick={()=>{dispatchUI({type:"SET_PAGE",payload:n.id});setShowMobileMenu(false);}}
+              style={{background:page===n.id?C.primary+"30":"transparent",
+                border:"none",color:page===n.id?C.primaryLight:C.textMain,textAlign:"left",
+                padding:"12px 14px",cursor:"pointer",fontSize:15,minHeight:44,
+                fontWeight:page===n.id?700:400,borderRadius:9}}>
+              {n.icon} {n.label}
+            </button>
+          ))}
+          {session?.user && (
+            <div style={{marginTop:8,paddingTop:12,borderTop:`1px solid ${C.border}`,
+              display:"flex",alignItems:"center",gap:10}}>
+              {app.teamLogo && (
+                <LogoImg url={app.teamLogo} name={app.teamName||"ทีมเรา"} size={32}
+                  style={{border:`2px solid ${C.primary}40`}}/>
+              )}
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13,color:C.textMain,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                  {session.user.name || session.user.email}
+                </div>
+                <span style={{fontSize:10,fontWeight:700,padding:"2px 7px",borderRadius:99,
+                  background: isAdmin?"#f9ca24"+"30":isCoach?C.primary+"30":C.border+"30",
+                  color:       isAdmin?"#f9ca24"  :isCoach?C.primaryLight:C.textMuted}}>
+                  {isAdmin?"👑 Admin":isCoach?"🎓 Coach":"👤 Member"}
+                </span>
+              </div>
+              <button onClick={()=>signOut({ callbackUrl: "/login" })}
+                style={{background:"transparent",border:`1px solid ${C.border}`,color:C.textMuted,
+                  borderRadius:7,padding:"8px 14px",cursor:"pointer",fontSize:12,fontWeight:600,minHeight:40}}>
+                ออกจากระบบ
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── DRAFT PAGE ── */}
       {page==="draft" && (
@@ -6418,6 +6905,12 @@ export default function RovApp() {
             <div>
               <h2 style={{margin:"0 0 6px",fontSize:24,fontWeight:800}}>📊 Team Overview</h2>
               <p style={{margin:"0 0 12px",color:C.textMuted,fontSize:13}}>สรุปภาพรวมสถิติการซ้อมทั้งหมด</p>
+              <PatchMetaCard
+                patchInfo={app.patchInfo}
+                heroTiers={app.heroTiers}
+                onSavePatch={info=>dispatchApp({type:"SET_PATCH_INFO",payload:info})}
+                onSetTier={(hero,tier)=>dispatchApp({type:"SET_HERO_TIER",payload:{hero,tier}})}
+              />
               {/* ── Upcoming match reminder ── */}
               {(()=>{
                 const now = new Date();
@@ -6464,7 +6957,7 @@ export default function RovApp() {
                 const redWR =redG.length ?Math.round(redW/redG.length*100):0;
                 return (
                   <>
-                    <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:14,marginBottom:16}}>
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(90px,1fr))",gap:14,marginBottom:16}}>
                       {[
                         {label:"🏆 Win Rate",   val:`${wr}%`,     col:wr>=50?C.win:C.lose, sub:`${tW}W — ${tG-tW}L`},
                         {label:"🎮 เกมทั้งหมด", val:tG,           col:C.primaryLight,       sub:`${matches.length} sessions`},
@@ -6553,6 +7046,49 @@ export default function RovApp() {
               </div>
               <HeroSynergyCounter allGames={allGames} scoutMatches={scoutMatches}/>
               <PerformanceTrend allGames={allGames}/>
+
+              {/* ── Objective Control Summary ── */}
+              {objSummary.total > 0 && (
+                <div style={{background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:14,padding:18,marginBottom:16}}>
+                  <div style={{fontWeight:800,fontSize:14,color:C.primaryLight,marginBottom:4}}>
+                    🐉 Objective Control
+                  </div>
+                  <div style={{fontSize:11,color:C.textMuted,marginBottom:14}}>
+                    จาก {objSummary.total} เกมที่กรอกข้อมูล Objective ไว้
+                  </div>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(100px,1fr))",gap:12}}>
+                    {[
+                      {icon:"🩸",label:"First Blood",our:objSummary.fbOur,enemy:objSummary.fbEnemy},
+                      {icon:"🏯",label:"First Tower",our:objSummary.ftOur,enemy:objSummary.ftEnemy},
+                      {icon:"🐉",label:"Dragon รวม",our:objSummary.dragOur,enemy:objSummary.dragEnemy},
+                      {icon:"🏰",label:"Turret พัง",our:objSummary.turOur,enemy:objSummary.turEnemy},
+                    ].map(c=>(
+                      <div key={c.label} style={{background:C.bgCard,borderRadius:10,padding:"12px 10px",textAlign:"center"}}>
+                        <div style={{fontSize:10,color:C.textMuted,marginBottom:6}}>{c.icon} {c.label}</div>
+                        <div style={{fontSize:18,fontWeight:800}}>
+                          <span style={{color:C.win}}>{c.our}</span>
+                          <span style={{color:C.textMuted,fontSize:13}}> : </span>
+                          <span style={{color:C.lose}}>{c.enemy}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{display:"flex",gap:12,marginTop:14,flexWrap:"wrap"}}>
+                    {objSummary.ftWinRate!==null && (
+                      <div style={{background:C.primary+"12",borderRadius:8,padding:"8px 14px",fontSize:12,
+                        color:C.primaryLight,borderLeft:`3px solid ${C.primary}`}}>
+                        💡 เกมที่เราได้ First Tower ก่อน → ชนะ <b>{objSummary.ftWinRate}%</b>
+                      </div>
+                    )}
+                    {objSummary.dragEdgeWinRate!==null && (
+                      <div style={{background:C.primary+"12",borderRadius:8,padding:"8px 14px",fontSize:12,
+                        color:C.primaryLight,borderLeft:`3px solid ${C.primary}`}}>
+                        💡 เกมที่เราคุม Dragon ได้มากกว่า → ชนะ <b>{objSummary.dragEdgeWinRate}%</b>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {/* ── Ban/Pick Rate Panel ── */}
               {(()=>{
@@ -6728,7 +7264,7 @@ export default function RovApp() {
                             : `ยังไม่มีแมตช์ประเภท "${tabs.find(t=>t.id===matchCatFilter)?.label}"`}
                         </div>
                       :filtered.map(m=>(
-                          <MatchCardWithStats key={m.id} m={m} onUpdateStats={handleUpdateStats} playerPhotos={app.playerPhotos} onDelete={id=>dispatchApp({type:"DELETE_MATCH",payload:id})} onEditMeta={handleEditMatchMeta}/>
+                          <MatchCardWithStats key={m.id} m={m} onUpdateStats={handleUpdateStats} onUpdateObjectives={handleUpdateObjectives} playerPhotos={app.playerPhotos} onDelete={id=>dispatchApp({type:"DELETE_MATCH",payload:id})} onEditMeta={handleEditMatchMeta}/>
                         ))
                     }
                   </>
@@ -6984,11 +7520,11 @@ export default function RovApp() {
                         />
                       )}
                       {rivalView==="history" && rm.map(m=>(
-                        <MatchCardWithStats key={m.id} m={m} onUpdateStats={handleUpdateStats} playerPhotos={app.playerPhotos} onDelete={id=>dispatchApp({type:"DELETE_MATCH",payload:id})} onEditMeta={handleEditMatchMeta}/>
+                        <MatchCardWithStats key={m.id} m={m} onUpdateStats={handleUpdateStats} onUpdateObjectives={handleUpdateObjectives} playerPhotos={app.playerPhotos} onDelete={id=>dispatchApp({type:"DELETE_MATCH",payload:id})} onEditMeta={handleEditMatchMeta}/>
                       ))}
                       {rivalView==="overview" && (
                         <div>
-                          <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:14,marginBottom:16}}>
+                          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(100px,1fr))",gap:14,marginBottom:16}}>
                             {[
                               {icon:"🔵",label:"Blue Side (คู่แข่ง)",val:`${eBlueWR}%`,col:C.blue,sub:`${eBlueG.length} เกม · ${eBlueW}W`},
                               {icon:"🔴",label:"Red Side (คู่แข่ง)", val:`${eRedWR}%`, col:C.red, sub:`${eRedG.length} เกม · ${eRedW}W`},
@@ -7473,7 +8009,7 @@ function DraftPageR({ draft, dispatch, roster, rivals, enemyRosters, onFinishSes
         </div>
         <div style={{marginBottom:28}}>
           <div style={{fontSize:12,color:C.textMuted,marginBottom:10,fontWeight:700}}>รูปแบบ BO</div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:6}}>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(70px,1fr))",gap:6}}>
             {BO_OPTIONS.map(b=>(
               <button key={b.label}
                 onClick={()=>dispatch({type:"SETUP_SET_BO",payload:b.label})}
