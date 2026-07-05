@@ -18,6 +18,7 @@ function ResetPasswordForm() {
 
   const [password,  setPassword]  = useState("");
   const [confirm,   setConfirm]   = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [status,    setStatus]    = useState(null);
   const [errMsg,    setErrMsg]    = useState("");
 
@@ -68,16 +69,25 @@ function ResetPasswordForm() {
     <>
       <div style={{ marginBottom:14 }}>
         <div style={{ fontSize:11, color:C.textMuted, marginBottom:5 }}>รหัสผ่านใหม่</div>
-        <input type="password" value={password}
-          onChange={e=>setPassword(e.target.value)} placeholder="อย่างน้อย 6 ตัวอักษร"
-          disabled={status==="loading"}
-          style={{ width:"100%", background:C.card, border:`1px solid ${C.border}`,
-            color:C.textMain, borderRadius:8, padding:"10px 12px",
-            fontSize:14, outline:"none", boxSizing:"border-box" }}/>
+        <div style={{ position:"relative" }}>
+          <input type={showPassword ? "text" : "password"} value={password}
+            onChange={e=>setPassword(e.target.value)} placeholder="อย่างน้อย 6 ตัวอักษร"
+            disabled={status==="loading"}
+            style={{ width:"100%", background:C.card, border:`1px solid ${C.border}`,
+              color:C.textMain, borderRadius:8, padding:"10px 40px 10px 12px",
+              fontSize:14, outline:"none", boxSizing:"border-box" }}/>
+          <button type="button" onClick={()=>setShowPassword(v=>!v)}
+            aria-label={showPassword ? "ซ่อนรหัสผ่าน" : "แสดงรหัสผ่าน"}
+            style={{ position:"absolute", right:4, top:"50%", transform:"translateY(-50%)",
+              background:"none", border:"none", cursor:"pointer", color:C.textMuted,
+              fontSize:16, padding:8, display:"flex", alignItems:"center" }}>
+            {showPassword ? "🙈" : "👁️"}
+          </button>
+        </div>
       </div>
       <div style={{ marginBottom:18 }}>
         <div style={{ fontSize:11, color:C.textMuted, marginBottom:5 }}>ยืนยันรหัสผ่านใหม่</div>
-        <input type="password" value={confirm}
+        <input type={showPassword ? "text" : "password"} value={confirm}
           onChange={e=>setConfirm(e.target.value)} placeholder="พิมพ์อีกครั้ง"
           onKeyDown={e=>e.key==="Enter"&&handleSubmit()}
           disabled={status==="loading"}

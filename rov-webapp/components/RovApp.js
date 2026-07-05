@@ -7138,6 +7138,7 @@ export default function RovApp() {
           onFinishSession={finishSession}
           allGames={allGames}
           scoutMatches={scoutMatches}
+          heroTiers={app.heroTiers}
         />
       )}
 
@@ -8142,38 +8143,160 @@ export default function RovApp() {
 //  MOCK DRAFT TRAINER — ฝึกซ้อม draft กับ AI ที่จำลอง
 //  พฤติกรรม pick/ban ของคู่แข่งจากข้อมูลจริง (ไม่นับเป็นแมตช์จริง)
 // ═══════════════════════════════════════════
-function buildRivalFrequencies(rivalName, allGames, scoutMatches) {
+// ── ความน่าเชื่อถือของข้อมูลลดลงครึ่งหนึ่งทุกๆ 60 วัน กัน meta เก่า/patch เก่า
+//    มาครอบงำการทำนายพฤติกรรมปัจจุบันของคู่แข่ง ──
+const RECENCY_HALF_LIFE_DAYS = 60;
+function recencyWeight(idMs) {
+  if (!idMs) return 1;
+  const ageDays = Math.max(0, (Date.now() - idMs) / (1000*60*60*24));
+  return Math.pow(0.5, ageDays / RECENCY_HALF_LIFE_DAYS);
+}
+
+// เก็บความถี่ ban/pick แยกตามตำแหน่ง (slot) — ถ่วงน้ำหนักตามความใหม่ของข้อมูล
+// rivalFilter = null → เก็บภาพรวม "meta" จากทุกทีม (ทั้งเราและคู่แข่งทุกคน)
+// rivalFilter = "ชื่อทีม" → เก็บเฉพาะพฤติกรรมของทีมนั้นทีมเดียว
+function collectFrequencies(allGames, scoutMatches, rivalFilter) {
   const bans  = [new Map(), new Map(), new Map(), new Map()];
   const picks = [new Map(), new Map(), new Map(), new Map(), new Map()];
-  const add = (map, name) => { if (name) map.set(name, (map.get(name)||0)+1); };
+  const add = (map, name, w) => { if (name && map) map.set(name, (map.get(name)||0) + w); };
 
-  allGames.filter(g=>g.rivalName===rivalName).forEach(g=>{
-    (g.enemyBans||[]).forEach((b,i)=>{ if (bans[i]) add(bans[i], b?.name || (typeof b==="string"?b:null)); });
-    (g.enemyPicks||[]).forEach((s,i)=>{ if (picks[i]) add(picks[i], s?.hero?.name); });
+  allGames.forEach(g=>{
+    const w = recencyWeight(g._matchId);
+    if (!rivalFilter) {
+      // meta ภาพรวม: นับทั้งฝั่งเราและฝั่งคู่แข่งทุกทีมที่เคยเจอ
+      (g.ourBans||[]).forEach((b,i)=>add(bans[i], b?.name || (typeof b==="string"?b:null), w));
+      (g.ourPicks||[]).forEach((s,i)=>add(picks[i], s?.hero?.name, w));
+    }
+    if (!rivalFilter || g.rivalName===rivalFilter) {
+      (g.enemyBans||[]).forEach((b,i)=>add(bans[i], b?.name || (typeof b==="string"?b:null), w));
+      (g.enemyPicks||[]).forEach((s,i)=>add(picks[i], s?.hero?.name, w));
+    }
   });
 
   (scoutMatches||[]).forEach(sm=>{
-    const isA = sm.teamA===rivalName, isB = sm.teamB===rivalName;
-    if (!isA && !isB) return;
+    const w = recencyWeight(sm.id);
+    const isA = sm.teamA===rivalFilter, isB = sm.teamB===rivalFilter;
+    if (rivalFilter && !isA && !isB) return;
     (sm.games||[]).forEach(g=>{
-      const gb = isA ? (g.bansA||[])  : (g.bansB||[]);
-      const gp = isA ? (g.picksA||[]) : (g.picksB||[]);
-      gb.forEach((b,i)=>{ if (bans[i]) add(bans[i], b?.name || (typeof b==="string"?b:null)); });
-      gp.forEach((s,i)=>{ if (picks[i]) add(picks[i], s?.hero?.name); });
+      if (!rivalFilter) {
+        // meta ภาพรวม: นับทั้ง 2 ฝั่งของ scout log
+        [["bansA","picksA"],["bansB","picksB"]].forEach(([bk,pk])=>{
+          (g[bk]||[]).forEach((b,i)=>add(bans[i], b?.name || (typeof b==="string"?b:null), w));
+          (g[pk]||[]).forEach((s,i)=>add(picks[i], s?.hero?.name, w));
+        });
+      } else {
+        const gb = isA ? (g.bansA||[])  : (g.bansB||[]);
+        const gp = isA ? (g.picksA||[]) : (g.picksB||[]);
+        gb.forEach((b,i)=>add(bans[i], b?.name || (typeof b==="string"?b:null), w));
+        gp.forEach((s,i)=>add(picks[i], s?.hero?.name, w));
+      }
     });
   });
 
   return { bans, picks };
 }
 
-function weightedChoice(freqMap, exclude) {
-  if (!freqMap) return null;
-  const entries = [...freqMap.entries()].filter(([h])=>!exclude.has(h));
-  if (!entries.length) return null;
+// นับจำนวนเกม "ดิบ" (ไม่ถ่วงน้ำหนัก) ที่มีข้อมูลของทีมนี้ — ใช้โชว์ความน่าเชื่อถือให้โค้ชเห็น
+function countRivalSamples(rivalName, allGames, scoutMatches) {
+  const fromMatches = allGames.filter(g=>g.rivalName===rivalName).length;
+  const fromScout = (scoutMatches||[]).reduce((sum,sm)=>{
+    if (sm.teamA===rivalName || sm.teamB===rivalName) return sum + (sm.games||[]).length;
+    return sum;
+  }, 0);
+  return { fromMatches, fromScout, total: fromMatches + fromScout };
+}
+
+const TIER_BONUS = { "S+":5, "S":3, "A":1, "B":0, "C":0 };
+const RIVAL_DATA_MULTIPLIER   = 4; // ให้น้ำหนักข้อมูล "เฉพาะทีมนี้" มากกว่าภาพรวม meta ทั่วไป
+const COUNTER_DATA_MULTIPLIER = 5; // "เขาชอบตอบโต้ตัวนี้เวลาเราหยิบตัวนั้น" คือข้อมูลจำเพาะที่สุด ให้น้ำหนักสูงสุด
+
+// ── สร้างสถิติ "counter-response": เมื่อเราหยิบฮีโร่ X ไปแล้ว คู่แข่งมักเลือก/แบนฮีโร่ Y
+//    ตอบโต้บ่อยแค่ไหน — รีคอนสตรัคลำดับ draft แบบเต็มจาก DRAFT_ORDER + ourSide ของแต่ละเกมจริง
+//    (ใช้เฉพาะแมตช์จริงของเราเท่านั้น เพราะ scout log ไม่ได้บันทึกฝั่ง blue/red ไว้แน่ชัดพอจะ
+//    รีคอนสตรัคลำดับเป๊ะๆ ได้ — ถ้าเดาผิดจะให้ข้อมูลที่ผิดยิ่งกว่าไม่มีข้อมูล)
+function collectCounterResponses(allGames, rivalFilter) {
+  const banResponses  = new Map(); // ourHero -> Map(enemyHero -> weight)
+  const pickResponses = new Map();
+
+  allGames.forEach(g=>{
+    if (rivalFilter && g.rivalName !== rivalFilter) return;
+    if (!g.ourSide) return; // ข้อมูลเก่าที่ไม่ได้เก็บฝั่งไว้ ข้ามไปกันข้อมูลผิด
+    const w = recencyWeight(g._matchId);
+
+    const sequence = DRAFT_ORDER.map(step=>{
+      const isOur = step.team === g.ourSide;
+      const hero = step.action==="ban"
+        ? (isOur ? g.ourBans : g.enemyBans)?.[step.slot]?.name || null
+        : (isOur ? g.ourPicks : g.enemyPicks)?.[step.slot]?.hero?.name || null;
+      return { isOur, action: step.action, hero };
+    });
+
+    const revealedOurPicks = [];
+    sequence.forEach(({ isOur, action, hero }) => {
+      if (!isOur && hero) {
+        const targetMap = action==="ban" ? banResponses : pickResponses;
+        revealedOurPicks.forEach(ourHero=>{
+          if (!targetMap.has(ourHero)) targetMap.set(ourHero, new Map());
+          const m = targetMap.get(ourHero);
+          m.set(hero, (m.get(hero)||0) + w);
+        });
+      }
+      if (isOur && action==="pick" && hero) revealedOurPicks.push(hero);
+    });
+  });
+
+  return { banResponses, pickResponses };
+}
+
+// รวม counter-response ของ "ฮีโร่ที่เรา reveal ไปแล้วในดราฟต์ปัจจุบัน" เข้าด้วยกัน
+// พร้อมจำไว้ว่าฮีโร่เราตัวไหนเป็นตัว "กระตุ้น" การตอบโต้นั้นมากที่สุด (ไว้โชว์เหตุผล)
+function buildCounterBonus(responseTable, revealedOurHeroes) {
+  const combined = new Map();
+  const triggeredBy = new Map(); // enemyHero -> { ourHero, weight }
+  revealedOurHeroes.forEach(ourHero=>{
+    const m = responseTable.get(ourHero);
+    if (!m) return;
+    m.forEach((w,enemyHero)=>{
+      combined.set(enemyHero, (combined.get(enemyHero)||0) + w);
+      const best = triggeredBy.get(enemyHero);
+      if (!best || w > best.weight) triggeredBy.set(enemyHero, { ourHero, weight: w });
+    });
+  });
+  return { combined, triggeredBy };
+}
+
+// รวม 4 ชั้นข้อมูลเข้าด้วยกัน แล้วสุ่มแบบถ่วงน้ำหนัก พร้อมบอกว่าผลลัพธ์มาจากชั้นไหน
+// (เพื่อโชว์เหตุผลให้โค้ชเห็น ไม่ใช่ black box)
+function weightedChoiceWithSource(rivalMap, globalMap, counterMap, counterTriggers, heroTiers, type, exclude) {
+  const combined = new Map();
+  (rivalMap||new Map()).forEach((w,h)=>{ if(!exclude.has(h)) combined.set(h, (combined.get(h)||0) + w*RIVAL_DATA_MULTIPLIER); });
+  (globalMap||new Map()).forEach((w,h)=>{ if(!exclude.has(h)) combined.set(h, (combined.get(h)||0) + w); });
+  (counterMap||new Map()).forEach((w,h)=>{ if(!exclude.has(h)) combined.set(h, (combined.get(h)||0) + w*COUNTER_DATA_MULTIPLIER); });
+  if (type==="picks" && heroTiers) {
+    Object.entries(heroTiers).forEach(([hero,tier])=>{
+      if (exclude.has(hero)) return;
+      const bonus = TIER_BONUS[tier] || 0;
+      if (bonus) combined.set(hero, (combined.get(hero)||0) + bonus);
+    });
+  }
+
+  const entries = [...combined.entries()];
+  if (!entries.length) {
+    return { hero: randomHeroExcluding(exclude), source: "random" };
+  }
   const total = entries.reduce((s,[,c])=>s+c, 0);
   let r = Math.random() * total;
-  for (const [h,c] of entries) { r -= c; if (r<=0) return h; }
-  return entries[entries.length-1][0];
+  let picked = entries[entries.length-1][0];
+  for (const [h,c] of entries) { r -= c; if (r<=0) { picked = h; break; } }
+
+  if (counterMap?.has(picked) && counterMap.get(picked)>0) {
+    const trigger = counterTriggers?.get(picked);
+    return { hero: picked, source: "counter", trigger };
+  }
+  const source = (rivalMap?.has(picked) && rivalMap.get(picked)>0) ? "rival"
+               : (globalMap?.has(picked) && globalMap.get(picked)>0) ? "global"
+               : "tier";
+  return { hero: picked, source };
 }
 
 function randomHeroExcluding(exclude) {
@@ -8182,22 +8305,34 @@ function randomHeroExcluding(exclude) {
   return pool[Math.floor(Math.random()*pool.length)].name;
 }
 
-function MockDraftTrainer({ rivals, allGames, scoutMatches, onExit }) {
+const SOURCE_LABEL = {
+  counter:{ icon:"🔁", text:"counter-pick ที่คู่แข่งชอบตอบโต้" },
+  rival:  { icon:"🎯", text:"ข้อมูลเฉพาะทีมนี้" },
+  global: { icon:"🌐", text:"ภาพรวม meta ทั่วไป" },
+  tier:   { icon:"⭐", text:"Tier List ที่โค้ชตั้งไว้" },
+  random: { icon:"🎲", text:"สุ่ม (ไม่มีข้อมูลอ้างอิง)" },
+};
+
+function MockDraftTrainer({ rivals, allGames, scoutMatches, heroTiers, onExit }) {
   const [phase, setPhase]         = useState("setup"); // setup | drafting | done
   const [rivalName, setRivalName] = useState(rivals[0]?.name || "");
   const [ourSide, setOurSide]     = useState("blue");
-  const [freq, setFreq]           = useState(null);
+  const [freq, setFreq]           = useState(null); // { rival:{bans,picks}, global:{bans,picks} }
   const [state, setState]         = useState(null);
   const [thinking, setThinking]   = useState(false);
   const [search, setSearch]       = useState("");
+  const [lastSource, setLastSource] = useState(null); // { hero, source } — เหตุผลของการเลือกล่าสุด
 
-  const hasData = rivalName && (
-    allGames.some(g=>g.rivalName===rivalName) ||
-    (scoutMatches||[]).some(sm=>sm.teamA===rivalName||sm.teamB===rivalName)
-  );
+  const sampleCounts = rivalName ? countRivalSamples(rivalName, allGames, scoutMatches) : {fromMatches:0,fromScout:0,total:0};
+  const hasData = sampleCounts.total > 0;
 
   function start() {
-    setFreq(buildRivalFrequencies(rivalName, allGames, scoutMatches));
+    setFreq({
+      rival:   collectFrequencies(allGames, scoutMatches, rivalName),
+      global:  collectFrequencies(allGames, scoutMatches, null),
+      counter: collectCounterResponses(allGames, rivalName),
+    });
+    setLastSource(null);
     setState({
       step: 0,
       blueBans: Array(4).fill(null), redBans: Array(4).fill(null),
@@ -8235,14 +8370,24 @@ function MockDraftTrainer({ rivals, allGames, scoutMatches, onExit }) {
     });
   }
 
-  // ── ให้ "คู่แข่งจำลอง" เดินเองอัตโนมัติตามความถี่จริง ──
+  // ── ให้ "คู่แข่งจำลอง" เดินเองอัตโนมัติ โดยผสม 3 ชั้นข้อมูล:
+  //    1) พฤติกรรมเฉพาะทีมนี้ (น้ำหนักสูงสุด) 2) ภาพรวม meta ปัจจุบัน 3) Tier List ที่โค้ชตั้งไว้ ──
   useEffect(() => {
     if (phase!=="drafting" || !cur || isOurTurn || thinking) return;
     setThinking(true);
     const t = setTimeout(() => {
-      const table = cur.action==="ban" ? freq?.bans?.[cur.slot] : freq?.picks?.[cur.slot];
-      const choice = weightedChoice(table, usedNames) || randomHeroExcluding(usedNames);
-      placeHero(choice);
+      const type = cur.action==="ban" ? "bans" : "picks";
+      const rivalMap  = freq?.rival?.[type]?.[cur.slot];
+      const globalMap = freq?.global?.[type]?.[cur.slot];
+
+      const ourPicksArr = ourSide==="blue" ? state.bluePicks : state.redPicks;
+      const revealedOurHeroes = ourPicksArr.filter(p=>p.hero).map(p=>p.hero.name);
+      const counterTable = cur.action==="ban" ? freq?.counter?.banResponses : freq?.counter?.pickResponses;
+      const { combined: counterMap, triggeredBy } = buildCounterBonus(counterTable || new Map(), revealedOurHeroes);
+
+      const result = weightedChoiceWithSource(rivalMap, globalMap, counterMap, triggeredBy, heroTiers, type, usedNames);
+      setLastSource(result);
+      placeHero(result.hero);
       setThinking(false);
     }, 650);
     return () => clearTimeout(t);
@@ -8260,6 +8405,9 @@ function MockDraftTrainer({ rivals, allGames, scoutMatches, onExit }) {
           <p style={{margin:"6px 0 0",fontSize:12,color:C.textMuted}}>
             ระบบจะจำลองคู่แข่งเลือก/แบนฮีโร่ตามแพทเทิร์นจริงที่เคยเจอมา — ไม่นับเป็นแมตช์จริง
           </p>
+          <p style={{margin:"6px 0 0",fontSize:11,color:C.textMuted,opacity:0.8}}>
+            รวมถึง "counter-pick" ที่คู่แข่งเคยตอบโต้เวลาเราหยิบฮีโร่บางตัว (จากแมตช์จริงเท่านั้น)
+          </p>
         </div>
         <div style={{marginBottom:16}}>
           <div style={{fontSize:12,color:C.textMuted,marginBottom:6,fontWeight:700}}>ฝึกซ้อมกับทีมไหน</div>
@@ -8271,7 +8419,14 @@ function MockDraftTrainer({ rivals, allGames, scoutMatches, onExit }) {
           </select>
           {rivalName && !hasData && (
             <div style={{marginTop:8,fontSize:11,color:"#feca57"}}>
-              ⚠️ ยังไม่มีข้อมูลแมตช์/scout ของทีมนี้ — ระบบจะสุ่มฮีโร่แทนการใช้แพทเทิร์นจริง
+              ⚠️ ยังไม่มีข้อมูลแมตช์/scout ของทีมนี้เลย — จะใช้ภาพรวม meta ทั่วไปกับ Tier List แทน
+            </div>
+          )}
+          {rivalName && hasData && (
+            <div style={{marginTop:8,padding:"8px 12px",background:C.primary+"10",
+              border:`1px solid ${C.primary}30`,borderRadius:8,fontSize:11,color:C.primaryLight}}>
+              ✅ มีข้อมูล {sampleCounts.total} เกม ({sampleCounts.fromMatches} จากแมตช์จริง, {sampleCounts.fromScout} จาก scout log)
+              — ยิ่งเยอะ AI ยิ่งแม่นยำขึ้น (ข้อมูลเก่ากว่า 60 วันจะถูกลดน้ำหนักลงเรื่อยๆ)
             </div>
           )}
         </div>
@@ -8366,6 +8521,14 @@ function MockDraftTrainer({ rivals, allGames, scoutMatches, onExit }) {
                 🤖 คู่แข่งจำลองกำลังเลือก{cur?.action==="ban"?"ฮีโร่ที่จะแบน":"ฮีโร่"}...
               </span>
             )}
+            {lastSource && !thinking && (
+              <div style={{marginTop:6,fontSize:11,color:C.textMuted}}>
+                ↳ เลือก <b style={{color:C.textMain}}>{lastSource.hero}</b> จาก {SOURCE_LABEL[lastSource.source].icon} {SOURCE_LABEL[lastSource.source].text}
+                {lastSource.source==="counter" && lastSource.trigger && (
+                  <> — เพราะเราหยิบ <b style={{color:C.textMain}}>{lastSource.trigger.ourHero}</b> ไปก่อนหน้านี้</>
+                )}
+              </div>
+            )}
           </div>
 
           <div style={{display:"flex",gap:16,flexWrap:"wrap",marginBottom:16}}>
@@ -8420,10 +8583,10 @@ function MockDraftTrainer({ rivals, allGames, scoutMatches, onExit }) {
   );
 }
 
-function DraftPageR({ draft, dispatch, roster, rivals, enemyRosters, onFinishSession, allGames, scoutMatches }) {
+function DraftPageR({ draft, dispatch, roster, rivals, enemyRosters, onFinishSession, allGames, scoutMatches, heroTiers }) {
   const [mockMode, setMockMode] = useState(false);
   if (mockMode) return (
-    <MockDraftTrainer rivals={rivals} allGames={allGames} scoutMatches={scoutMatches}
+    <MockDraftTrainer rivals={rivals} allGames={allGames} scoutMatches={scoutMatches} heroTiers={heroTiers}
       onExit={()=>setMockMode(false)}/>
   );
 

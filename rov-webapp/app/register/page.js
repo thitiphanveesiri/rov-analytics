@@ -22,6 +22,7 @@ export default function RegisterPage() {
   const [name,       setName]       = useState("");
   const [email,      setEmail]      = useState("");
   const [password,   setPassword]   = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [teamName,   setTeamName]   = useState("");
   const [inviteCode, setInviteCode] = useState("");
   const [error,      setError]      = useState("");
@@ -89,9 +90,18 @@ export default function RegisterPage() {
 
           <div style={{ marginBottom:12 }}>
             <div style={{ fontSize:11, color:C.textMuted, marginBottom:5 }}>รหัสผ่าน (อย่างน้อย 6 ตัว)</div>
-            <input type="password" required minLength={6} value={password}
-              onChange={e=>setPassword(e.target.value)}
-              placeholder="••••••••" style={inputStyle}/>
+            <div style={{ position:"relative" }}>
+              <input type={showPassword ? "text" : "password"} required minLength={6} value={password}
+                onChange={e=>setPassword(e.target.value)}
+                placeholder="••••••••" style={{...inputStyle, padding:"10px 40px 10px 12px"}}/>
+              <button type="button" onClick={()=>setShowPassword(v=>!v)}
+                aria-label={showPassword ? "ซ่อนรหัสผ่าน" : "แสดงรหัสผ่าน"}
+                style={{ position:"absolute", right:4, top:"50%", transform:"translateY(-50%)",
+                  background:"none", border:"none", cursor:"pointer", color:C.textMuted,
+                  fontSize:16, padding:8, display:"flex", alignItems:"center" }}>
+                {showPassword ? "🙈" : "👁️"}
+              </button>
+            </div>
           </div>
 
           {action==="create" ? (
