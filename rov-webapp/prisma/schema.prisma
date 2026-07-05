@@ -19,6 +19,7 @@ model User {
   createdAt        DateTime  @default(now())
   teamId           String?   // null = ยังไม่ได้เข้าทีม
   role             String    @default("member") // "admin" | "coach" | "member"
+  playerName       String?   // ผูกกับชื่อใน roster เพื่อใช้หน้า "My Stats"
   team             Team?     @relation(fields: [teamId], references: [id])
   // Reset password
   resetToken       String?   @unique

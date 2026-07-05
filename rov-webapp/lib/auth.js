@@ -30,6 +30,7 @@ export const authOptions = {
           teamName:   user.team?.name,
           inviteCode: user.team?.inviteCode,
           role:       user.role,
+          playerName: user.playerName,
         };
       },
     }),
@@ -37,7 +38,7 @@ export const authOptions = {
   session: { strategy: "jwt", maxAge: 30 * 24 * 60 * 60 },
   pages:   { signIn: "/login" },
   callbacks: {
-    async jwt({ token, user }) {
+    async jwt({ token, user, trigger, session }) {
       if (user) {
         token.id         = user.id;
         token.email      = user.email;
@@ -46,6 +47,12 @@ export const authOptions = {
         token.teamName   = user.teamName;
         token.inviteCode = user.inviteCode;
         token.role       = user.role;
+        token.playerName = user.playerName;
+      }
+      // เมื่อฝั่ง client เรียก useSession().update({ playerName }) เพื่ออัปเดตทันที
+      // โดยไม่ต้อง login ใหม่
+      if (trigger === "update" && session?.playerName !== undefined) {
+        token.playerName = session.playerName;
       }
       return token;
     },
@@ -58,6 +65,7 @@ export const authOptions = {
         session.user.teamName   = token.teamName;
         session.user.inviteCode = token.inviteCode;
         session.user.role       = token.role;
+        session.user.playerName = token.playerName;
       }
       return session;
     },
