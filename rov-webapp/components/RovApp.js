@@ -3024,6 +3024,8 @@ function calcMatchupStats(records, teamFocus) {
   // แยกตาม side (blue/red)
   const sideStats = { blue:{dmg:0,dtk:0,gold:0,cnt:0,wins:0,games:0}, red:{dmg:0,dtk:0,gold:0,cnt:0,wins:0,games:0} };
   const heroFreq={}, patternCount={}, banFreq={};
+  const heroStats={};   // heroName -> {picks,wins,losses,k,d,a,statCnt}
+  const playerStats={}; // playerName -> {games,wins,losses,k,d,a,statCnt,heroes:{}}
 
   records.forEach(sm=>{
     const isA = sm.teamA===teamFocus;
@@ -3039,9 +3041,9 @@ function calcMatchupStats(records, teamFocus) {
       sideStats[mySide].games++;
       if(won) sideStats[mySide].wins++;
 
-      // stats per player
-      const stats = isA?(g.statsA||{}):(g.statsB||{});
-      Object.values(stats).forEach(ps=>{ if(ps?.kills!==undefined){
+      // stats per player (raw, index-based — เก็บไว้ใช้จับคู่กับ picks ด้านล่าง)
+      const statsObj = isA?(g.statsA||{}):(g.statsB||{});
+      Object.values(statsObj).forEach(ps=>{ if(ps?.kills!==undefined){
         const k=Number(ps.kills||0),d=Number(ps.deaths||0),a=Number(ps.assists||0);
         const dmg=Number(ps.damage||0),dtk=Number(ps.damageTaken||0),gold=Number(ps.gold||0);
         totK+=k;totD+=d;totA+=a;totDmg+=dmg;totDtk+=dtk;totGold+=gold;statCnt++;
@@ -3049,10 +3051,34 @@ function calcMatchupStats(records, teamFocus) {
         sideStats[mySide].gold+=gold;sideStats[mySide].cnt++;
       }});
 
-      // hero freq + ban freq
+      // hero freq + ban freq + hero-level & player-level breakdown
       const picks = isA?g.picksA:g.picksB;
-      (picks||[]).forEach(s=>{ if(s.hero?.name) heroFreq[s.hero.name]=(heroFreq[s.hero.name]||0)+1; });
-      const bans = isA?(g.bansA||[]):(g.bansB||[]);
+      const bans  = isA?(g.bansA||[]):(g.bansB||[]);
+      (picks||[]).forEach((slot,idx)=>{
+        if (!slot?.hero?.name) return;
+        const heroName = slot.hero.name;
+        const playerName = (slot.player||"").trim();
+        heroFreq[heroName] = (heroFreq[heroName]||0)+1;
+
+        if (!heroStats[heroName]) heroStats[heroName] = {picks:0,wins:0,losses:0,k:0,d:0,a:0,statCnt:0};
+        const hs = heroStats[heroName];
+        hs.picks++; if (won) hs.wins++; else hs.losses++;
+
+        const ps = statsObj[idx];
+        if (ps?.kills!==undefined) {
+          hs.k += Number(ps.kills||0); hs.d += Number(ps.deaths||0); hs.a += Number(ps.assists||0); hs.statCnt++;
+        }
+
+        if (playerName) {
+          if (!playerStats[playerName]) playerStats[playerName] = {games:0,wins:0,losses:0,k:0,d:0,a:0,statCnt:0,heroes:{}};
+          const pst = playerStats[playerName];
+          pst.games++; if (won) pst.wins++; else pst.losses++;
+          pst.heroes[heroName] = (pst.heroes[heroName]||0)+1;
+          if (ps?.kills!==undefined) {
+            pst.k += Number(ps.kills||0); pst.d += Number(ps.deaths||0); pst.a += Number(ps.assists||0); pst.statCnt++;
+          }
+        }
+      });
       bans.forEach(h=>{ if(h?.name) banFreq[h.name]=(banFreq[h.name]||0)+1; });
       (g.tags||[]).forEach(t=>{ patternCount[t]=(patternCount[t]||0)+1; });
     });
@@ -3086,6 +3112,25 @@ function calcMatchupStats(records, teamFocus) {
     topHeroes:   Object.entries(heroFreq).sort((a,b)=>b[1]-a[1]).slice(0,8),
     topBans:     Object.entries(banFreq).sort((a,b)=>b[1]-a[1]).slice(0,8),
     topPatterns: Object.entries(patternCount).sort((a,b)=>b[1]-a[1]).slice(0,6),
+    // ── Hero Pool แบบเต็ม พร้อม win rate / W-L / KDA ──
+    heroPool: Object.entries(heroStats).map(([hero,s])=>({
+      hero, picks:s.picks, wins:s.wins, losses:s.losses,
+      wr: s.picks ? Math.round(s.wins/s.picks*100) : 0,
+      avgK: s.statCnt ? (s.k/s.statCnt).toFixed(1) : null,
+      avgD: s.statCnt ? (s.d/s.statCnt).toFixed(1) : null,
+      avgA: s.statCnt ? (s.a/s.statCnt).toFixed(1) : null,
+      hasStats: s.statCnt>0,
+    })).sort((a,b)=>b.picks-a.picks),
+    // ── สถิติส่วนตัวของแต่ละผู้เล่นที่ scout ไว้ ──
+    playerPool: Object.entries(playerStats).map(([player,s])=>({
+      player, games:s.games, wins:s.wins, losses:s.losses,
+      wr: s.games ? Math.round(s.wins/s.games*100) : 0,
+      avgK: s.statCnt ? (s.k/s.statCnt).toFixed(1) : null,
+      avgD: s.statCnt ? (s.d/s.statCnt).toFixed(1) : null,
+      avgA: s.statCnt ? (s.a/s.statCnt).toFixed(1) : null,
+      hasStats: s.statCnt>0,
+      topHeroes: Object.entries(s.heroes).sort((a,b)=>b[1]-a[1]).map(([h])=>h),
+    })).sort((a,b)=>b.games-a.games),
   };
 }
 
@@ -3282,26 +3327,103 @@ function MatchupDetail({ rivalName, opponent, records, rivals, enemyRosters, onS
             title={`🎯 Pick / Ban ตามลำดับ ของ ${rivalName}`}
           />
 
-          {/* Hero pool + patterns */}
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-            {st.topHeroes.length>0&&(
-              <div style={SC.card}>
-                <div style={{fontWeight:700,fontSize:12,color:C.lose,marginBottom:10}}>
-                  🦸 Hero Pool ของ {rivalName}
-                </div>
-                {st.topHeroes.map(([h,cnt],i)=>(
-                  <div key={h} style={{display:"flex",justifyContent:"space-between",alignItems:"center",
-                    padding:"5px 8px",background:i%2===0?"transparent":C.bgCard,borderRadius:6,marginBottom:2}}>
-                    <div style={{display:"flex",alignItems:"center",gap:8}}>
-                      <span style={{fontSize:10,color:C.textMuted,width:16}}>#{i+1}</span>
-                      <HeroChip name={h} size={26} accentCol={C.lose} fontSize={12}/>
-                    </div>
-                    <span style={{background:C.lose+"20",color:C.lose,fontSize:10,
-                      padding:"1px 8px",borderRadius:99,fontWeight:700}}>×{cnt}</span>
-                  </div>
-                ))}
+          {/* Hero Pool แบบเต็ม พร้อม win rate / W-L / KDA */}
+          {st.heroPool.length>0 && (
+            <div style={{...SC.card, marginBottom:12}}>
+              <div style={{fontWeight:700,fontSize:12,color:C.lose,marginBottom:10}}>
+                🦸 Hero Pool ของ {rivalName} ({st.heroPool.length} ตัว)
               </div>
-            )}
+              <div style={{overflowX:"auto"}} className="h-scroll">
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:420}}>
+                  <thead>
+                    <tr style={{color:C.textMuted,fontSize:10,textAlign:"left"}}>
+                      <th style={{padding:"4px 8px",fontWeight:600}}>Hero</th>
+                      <th style={{padding:"4px 8px",fontWeight:600,textAlign:"center"}}>เกม</th>
+                      <th style={{padding:"4px 8px",fontWeight:600,textAlign:"center"}}>W-L</th>
+                      <th style={{padding:"4px 8px",fontWeight:600,textAlign:"center"}}>Win%</th>
+                      <th style={{padding:"4px 8px",fontWeight:600,textAlign:"center"}}>K/D/A</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {st.heroPool.map((h,i)=>(
+                      <tr key={h.hero} style={{background:i%2===0?"transparent":C.bgCard}}>
+                        <td style={{padding:"6px 8px"}}><HeroChip name={h.hero} size={24} accentCol={C.lose} fontSize={12}/></td>
+                        <td style={{padding:"6px 8px",textAlign:"center",color:C.textMuted}}>{h.picks}</td>
+                        <td style={{padding:"6px 8px",textAlign:"center"}}>
+                          <span style={{color:C.win,fontWeight:700}}>{h.wins}</span>
+                          <span style={{color:C.textMuted}}> - </span>
+                          <span style={{color:C.lose,fontWeight:700}}>{h.losses}</span>
+                        </td>
+                        <td style={{padding:"6px 8px",textAlign:"center"}}>
+                          <span style={{fontWeight:700,padding:"1px 8px",borderRadius:5,
+                            background:h.wr>=50?C.lose+"20":C.win+"20",color:h.wr>=50?C.lose:C.win}}>
+                            {h.wr}%
+                          </span>
+                        </td>
+                        <td style={{padding:"6px 8px",textAlign:"center",color:C.textMuted}}>
+                          {h.hasStats ? `${h.avgK}/${h.avgD}/${h.avgA}` : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* สถิติส่วนตัวของผู้เล่นแต่ละคนที่ scout ไว้ */}
+          {st.playerPool.length>0 && (
+            <div style={{...SC.card, marginBottom:12}}>
+              <div style={{fontWeight:700,fontSize:12,color:C.lose,marginBottom:10}}>
+                👤 สถิติผู้เล่นของ {rivalName} ({st.playerPool.length} คน)
+              </div>
+              <div style={{overflowX:"auto"}} className="h-scroll">
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:480}}>
+                  <thead>
+                    <tr style={{color:C.textMuted,fontSize:10,textAlign:"left"}}>
+                      <th style={{padding:"4px 8px",fontWeight:600}}>ผู้เล่น</th>
+                      <th style={{padding:"4px 8px",fontWeight:600,textAlign:"center"}}>เกม</th>
+                      <th style={{padding:"4px 8px",fontWeight:600,textAlign:"center"}}>W-L</th>
+                      <th style={{padding:"4px 8px",fontWeight:600,textAlign:"center"}}>Win%</th>
+                      <th style={{padding:"4px 8px",fontWeight:600,textAlign:"center"}}>K/D/A</th>
+                      <th style={{padding:"4px 8px",fontWeight:600}}>Hero ที่เล่นบ่อย</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {st.playerPool.map((p,i)=>(
+                      <tr key={p.player} style={{background:i%2===0?"transparent":C.bgCard}}>
+                        <td style={{padding:"6px 8px",fontWeight:700}}>{p.player}</td>
+                        <td style={{padding:"6px 8px",textAlign:"center",color:C.textMuted}}>{p.games}</td>
+                        <td style={{padding:"6px 8px",textAlign:"center"}}>
+                          <span style={{color:C.win,fontWeight:700}}>{p.wins}</span>
+                          <span style={{color:C.textMuted}}> - </span>
+                          <span style={{color:C.lose,fontWeight:700}}>{p.losses}</span>
+                        </td>
+                        <td style={{padding:"6px 8px",textAlign:"center"}}>
+                          <span style={{fontWeight:700,padding:"1px 8px",borderRadius:5,
+                            background:p.wr>=50?C.lose+"20":C.win+"20",color:p.wr>=50?C.lose:C.win}}>
+                            {p.wr}%
+                          </span>
+                        </td>
+                        <td style={{padding:"6px 8px",textAlign:"center",color:C.textMuted}}>
+                          {p.hasStats ? `${p.avgK}/${p.avgD}/${p.avgA}` : "—"}
+                        </td>
+                        <td style={{padding:"6px 8px"}}>
+                          <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+                            {p.topHeroes.slice(0,4).map(h=><HeroChip key={h} name={h} size={20} fontSize={10}/>)}
+                            {p.topHeroes.length>4 && <span style={{fontSize:10,color:C.textMuted}}>+{p.topHeroes.length-4}</span>}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Pattern ที่เจอ */}
+          <div style={{display:"grid",gridTemplateColumns:"1fr",gap:12}}>
             {st.topPatterns.length>0&&(
               <div style={SC.card}>
                 <div style={{fontWeight:700,fontSize:12,color:C.primaryLight,marginBottom:10}}>
@@ -6098,6 +6220,7 @@ function defaultAppState() {
     rivalLogos:    {},
     patchInfo:     {version:"",notes:"",updatedAt:null}, // ข้อมูล patch ปัจจุบัน
     heroTiers:     {}, // { [heroName]: "S+"|"S"|"A"|"B"|"C" } — meta tier list
+    practiceAssignments: [], // [{ id, player, title, note, dueDate, done, createdAt, createdBy }]
   };
 }
 
@@ -6277,6 +6400,18 @@ function appReducer(state, action) {
       if (!tier) delete heroTiers[hero]; else heroTiers[hero] = tier;
       return { ...state, heroTiers };
     }
+
+    case "ADD_PRACTICE": {
+      const item = { id: Date.now(), done: false, createdAt: new Date().toISOString(), ...action.payload };
+      return { ...state, practiceAssignments: [item, ...(state.practiceAssignments||[])] };
+    }
+
+    case "TOGGLE_PRACTICE":
+      return { ...state, practiceAssignments: (state.practiceAssignments||[]).map(p=>
+        p.id===action.payload ? { ...p, done: !p.done } : p) };
+
+    case "DELETE_PRACTICE":
+      return { ...state, practiceAssignments: (state.practiceAssignments||[]).filter(p=>p.id!==action.payload) };
 
     case "ADD_CUSTOM_HERO": {
       // payload: { name, role, img? }
@@ -6459,6 +6594,152 @@ function draftReducer(state, action) {
 
     default: return state;
   }
+}
+
+// ═══════════════════════════════════════════
+//  PRACTICE ASSIGNMENT — การบ้านฝึกซ้อมรายบุคคล
+// ═══════════════════════════════════════════
+function PracticePage({ session, roster, playerPhotos, assignments, isCoach, onAdd, onToggle, onDelete }) {
+  const [showForm, setShowForm] = useState(false);
+  const [player,   setPlayer]   = useState(roster[0]||"");
+  const [title,    setTitle]    = useState("");
+  const [note,     setNote]     = useState("");
+  const [dueDate,  setDueDate]  = useState("");
+  const [filter,   setFilter]   = useState("all"); // all | mine | pending | done
+
+  const myPlayerName = session?.user?.playerName;
+
+  function submit() {
+    if (!title.trim() || !player) return;
+    onAdd({ player, title: title.trim(), note: note.trim(), dueDate, createdBy: session?.user?.email || "" });
+    setTitle(""); setNote(""); setDueDate("");
+    setShowForm(false);
+  }
+
+  const canToggle = (a) => isCoach || (myPlayerName && a.player===myPlayerName);
+
+  const filtered = (assignments||[]).filter(a=>{
+    if (filter==="mine")    return myPlayerName && a.player===myPlayerName;
+    if (filter==="pending") return !a.done;
+    if (filter==="done")    return a.done;
+    return true;
+  });
+
+  const grouped = {};
+  filtered.forEach(a=>{ if (!grouped[a.player]) grouped[a.player]=[]; grouped[a.player].push(a); });
+
+  return (
+    <div style={{padding:"0 24px 40px",maxWidth:900,margin:"0 auto"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:10,marginBottom:16}}>
+        <div>
+          <h2 style={{margin:"0 0 6px",fontSize:24,fontWeight:800}}>🏋️ Practice Assignment</h2>
+          <p style={{margin:0,color:C.textMuted,fontSize:13}}>การบ้านฝึกซ้อมรายบุคคล</p>
+        </div>
+        {isCoach && (
+          <button onClick={()=>setShowForm(v=>!v)} style={{background:C.primary,color:"#fff",border:"none",
+            borderRadius:9,padding:"9px 18px",cursor:"pointer",fontWeight:700,fontSize:13}}>
+            {showForm?"✕ ยกเลิก":"+ มอบหมายการบ้าน"}
+          </button>
+        )}
+      </div>
+
+      {showForm && isCoach && (
+        <div style={{background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:14,padding:18,marginBottom:16}}>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:10,marginBottom:10}}>
+            <div>
+              <div style={{fontSize:11,color:C.textMuted,marginBottom:5}}>ผู้เล่น</div>
+              <select value={player} onChange={e=>setPlayer(e.target.value)}
+                style={{width:"100%",boxSizing:"border-box",background:C.bgCard,border:`1px solid ${C.border}`,
+                  color:C.textMain,borderRadius:8,padding:"8px 10px",fontSize:13,outline:"none"}}>
+                {roster.map(r=><option key={r} value={r}>{r}</option>)}
+              </select>
+            </div>
+            <div>
+              <div style={{fontSize:11,color:C.textMuted,marginBottom:5}}>กำหนดเสร็จ (ไม่บังคับ)</div>
+              <input type="date" value={dueDate} onChange={e=>setDueDate(e.target.value)}
+                style={{width:"100%",boxSizing:"border-box",background:C.bgCard,border:`1px solid ${C.border}`,
+                  color:C.textMain,borderRadius:8,padding:"8px 10px",fontSize:13,outline:"none"}}/>
+            </div>
+          </div>
+          <div style={{marginBottom:10}}>
+            <div style={{fontSize:11,color:C.textMuted,marginBottom:5}}>หัวข้อการบ้าน</div>
+            <input value={title} onChange={e=>setTitle(e.target.value)} placeholder="เช่น ฝึก Airi 10 เกม"
+              style={{width:"100%",boxSizing:"border-box",background:C.bgCard,border:`1px solid ${C.border}`,
+                color:C.textMain,borderRadius:8,padding:"8px 10px",fontSize:13,outline:"none"}}/>
+          </div>
+          <div style={{marginBottom:14}}>
+            <div style={{fontSize:11,color:C.textMuted,marginBottom:5}}>รายละเอียดเพิ่มเติม (ไม่บังคับ)</div>
+            <textarea value={note} onChange={e=>setNote(e.target.value)} rows={2}
+              style={{width:"100%",boxSizing:"border-box",background:C.bgCard,border:`1px solid ${C.border}`,
+                color:C.textMain,borderRadius:8,padding:"8px 10px",fontSize:13,outline:"none",resize:"vertical"}}/>
+          </div>
+          <button onClick={submit} disabled={!title.trim()}
+            style={{background:title.trim()?C.primary:C.border,color:"#fff",border:"none",borderRadius:9,
+              padding:"9px 20px",cursor:title.trim()?"pointer":"default",fontWeight:700,fontSize:13}}>
+            ✅ มอบหมาย
+          </button>
+        </div>
+      )}
+
+      <div style={{display:"flex",gap:6,marginBottom:16,flexWrap:"wrap"}}>
+        {[{id:"all",label:"ทั้งหมด"},{id:"mine",label:"ของฉัน"},{id:"pending",label:"ยังไม่เสร็จ"},{id:"done",label:"เสร็จแล้ว"}].map(f=>(
+          <button key={f.id} onClick={()=>setFilter(f.id)}
+            style={{background:filter===f.id?C.primary+"30":"transparent",
+              border:`1px solid ${filter===f.id?C.primary:C.border}`,
+              color:filter===f.id?C.primaryLight:C.textMuted,borderRadius:99,
+              padding:"5px 14px",cursor:"pointer",fontSize:12,fontWeight:700}}>
+            {f.label}
+          </button>
+        ))}
+      </div>
+
+      {Object.keys(grouped).length===0 ? (
+        <div style={{textAlign:"center",padding:"40px 0",color:C.textMuted,fontSize:13}}>ยังไม่มีการบ้าน</div>
+      ) : (
+        Object.entries(grouped).map(([playerName, items])=>(
+          <div key={playerName} style={{marginBottom:16}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+              <PlayerAvatar name={playerName} photoUrl={playerPhotos?.[playerName]} size={28}/>
+              <span style={{fontWeight:800,fontSize:13}}>{playerName}</span>
+              <span style={{fontSize:11,color:C.textMuted}}>
+                {items.filter(i=>i.done).length}/{items.length} เสร็จแล้ว
+              </span>
+            </div>
+            <div style={{display:"flex",flexDirection:"column",gap:6}}>
+              {items.map(a=>(
+                <div key={a.id} style={{display:"flex",alignItems:"flex-start",gap:10,
+                  background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 14px",
+                  opacity:a.done?0.6:1}}>
+                  <button onClick={()=>canToggle(a)&&onToggle(a.id)} disabled={!canToggle(a)}
+                    style={{width:22,height:22,borderRadius:6,border:`2px solid ${a.done?C.win:C.border}`,
+                      background:a.done?C.win:"transparent",cursor:canToggle(a)?"pointer":"default",
+                      flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",
+                      color:"#fff",fontSize:13,marginTop:1}}>
+                    {a.done?"✓":""}
+                  </button>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontWeight:700,fontSize:13,textDecoration:a.done?"line-through":"none"}}>
+                      {a.title}
+                    </div>
+                    {a.note && <div style={{fontSize:12,color:C.textMuted,marginTop:2}}>{a.note}</div>}
+                    {a.dueDate && (
+                      <div style={{fontSize:10,color:C.textMuted,marginTop:4}}>
+                        📅 กำหนดเสร็จ {new Date(a.dueDate).toLocaleDateString("th-TH",{day:"numeric",month:"short",year:"numeric"})}
+                      </div>
+                    )}
+                  </div>
+                  {isCoach && (
+                    <button onClick={()=>onDelete(a.id)} style={{background:"transparent",border:"none",
+                      color:C.lose,cursor:"pointer",fontSize:14,padding:4,flexShrink:0}}>🗑️</button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        ))
+      )}
+    </div>
+  );
 }
 
 // ═══════════════════════════════════════════
@@ -6864,6 +7145,17 @@ export default function RovApp() {
     }
   }, [updateSession, toast]);
 
+  const handleAddPractice = useCallback((payload) => {
+    dispatchApp({ type:"ADD_PRACTICE", payload });
+    toast("มอบหมายการบ้านสำเร็จ ✅", "success");
+  }, [toast]);
+  const handleTogglePractice = useCallback((id) => {
+    dispatchApp({ type:"TOGGLE_PRACTICE", payload:id });
+  }, []);
+  const handleDeletePractice = useCallback((id) => {
+    dispatchApp({ type:"DELETE_PRACTICE", payload:id });
+  }, []);
+
   const [newPlayerPhoto,      setNewPlayerPhoto]      = useState(null);
   const [newEnemyPlayerPhoto, setNewEnemyPlayerPhoto]  = useState(null);
   const [showAddRival,        setShowAddRival]         = useState(false);
@@ -6958,6 +7250,7 @@ export default function RovApp() {
   const NAV = [
     {id:"overview",icon:"📊",label:"Overview"},
     {id:"mystats", icon:"👤",label:"My Stats"},
+    {id:"practice",icon:"🏋️",label:"Practice"},
     {id:"draft",   icon:"⚔️",label:"Live Draft", coachOnly:true},
     {id:"matches", icon:"📋",label:"Match Log"},
     {id:"rivals",  icon:"🎯",label:"Rivals"},
@@ -7124,6 +7417,20 @@ export default function RovApp() {
           allGames={allGames}
           playerPhotos={app.playerPhotos}
           onLinkPlayer={handleLinkPlayer}
+        />
+      )}
+
+      {/* ── PRACTICE ASSIGNMENT PAGE ── */}
+      {page==="practice" && (
+        <PracticePage
+          session={session}
+          roster={roster}
+          playerPhotos={app.playerPhotos}
+          assignments={app.practiceAssignments}
+          isCoach={isCoach}
+          onAdd={handleAddPractice}
+          onToggle={handleTogglePractice}
+          onDelete={handleDeletePractice}
         />
       )}
 

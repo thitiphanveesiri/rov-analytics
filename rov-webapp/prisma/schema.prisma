@@ -71,6 +71,7 @@ model TeamData {
   schedules     Json     @default("[]") // [{ id, date, time, rival, tournament, note, category }]
   patchInfo     Json     @default("{}") // { version, notes, updatedAt }
   heroTiers     Json     @default("{}") // { [heroName]: "S+"|"S"|"A"|"B"|"C" }
+  practiceAssignments Json @default("[]") // [{ id, player, title, note, dueDate, done, createdAt, createdBy }]
   updatedAt     DateTime @updatedAt
   updatedBy     String?
 }

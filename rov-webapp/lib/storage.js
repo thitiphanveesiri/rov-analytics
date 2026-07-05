@@ -4,7 +4,7 @@
 const FIELDS = [
   "matches","rivals","roster","enemyRosters","scoutMatches",
   "playerPhotos","heroPhotos","customHeroes","roleOverrides","videos",
-  "teamLogo","rivalLogos","schedules","patchInfo","heroTiers",
+  "teamLogo","rivalLogos","schedules","patchInfo","heroTiers","practiceAssignments",
 ];
 
 const FALLBACK = {
@@ -12,7 +12,7 @@ const FALLBACK = {
   enemyRosters:{}, scoutMatches:[], playerPhotos:{}, heroPhotos:{},
   customHeroes:[], roleOverrides:{}, videos:[],
   teamLogo:null, rivalLogos:{}, schedules:[],
-  patchInfo:{version:"",notes:"",updatedAt:null}, heroTiers:{}, _loaded:true,
+  patchInfo:{version:"",notes:"",updatedAt:null}, heroTiers:{}, practiceAssignments:[], _loaded:true,
 };
 
 export async function loadFromStorage() {
