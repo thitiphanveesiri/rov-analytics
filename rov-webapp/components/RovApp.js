@@ -67,6 +67,47 @@ const ROLES_FILTER = ["All","Slayer","Jungle","Mid","Abyssal","Support"];
 const ROLES_PICK   = ["Slayer","Jungle","Mid","Abyssal","Support"];
 const ROLE_COLOR   = {Slayer:"#e17055",Jungle:"#00b894",Mid:"#6C5CE7",Abyssal:"#fdcb6e",Support:"#74b9ff"};
 
+// ═══════════════════════════════════════════
+//  DURATION HELPERS — เก็บเวลาเกมแบบ "นาที.วินาที" (เช่น 9:45 → "09.45")
+//  ไม่ใช่เลขทศนิยมนาทีตรงๆ เพราะ 45 วินาทีไม่ใช่ 0.45 นาที
+// ═══════════════════════════════════════════
+// พิมพ์ "9.45" หรือ "9:45" หรือแค่ "18" (นาทีล้วน) → normalize เป็น "09.45" / "18.00"
+function normalizeDuration(input) {
+  if (input===null || input===undefined || input==="") return "";
+  const str = String(input).trim();
+  const sep = str.includes(":") ? ":" : str.includes(".") ? "." : null;
+  if (!sep) {
+    // แค่ตัวเลขนาทีเฉยๆ ไม่มีวินาที
+    const m = str.padStart(2,"0");
+    return `${m}.00`;
+  }
+  const [mRaw, sRaw=""] = str.split(sep);
+  const mm = (mRaw||"0").padStart(2,"0");
+  const ss = (sRaw||"0").padStart(2,"0").slice(0,2);
+  return `${mm}.${ss}`;
+}
+// "09.45" → 9.75 (นาทีแบบทศนิยมจริง ไว้ใช้คำนวณค่าเฉลี่ย)
+function durationToMinutes(input) {
+  if (!input && input!==0) return 0;
+  const norm = normalizeDuration(input);
+  if (!norm) return 0;
+  const [m,s] = norm.split(".").map(Number);
+  return (m||0) + (s||0)/60;
+}
+// 9.75 (นาทีทศนิยม) → "09.45" ไว้โชว์ผล
+function minutesToDurationStr(totalMinutes) {
+  if (totalMinutes===null || totalMinutes===undefined || isNaN(totalMinutes)) return "-";
+  const m = Math.floor(totalMinutes);
+  const s = Math.round((totalMinutes - m) * 60);
+  return `${String(m).padStart(2,"0")}.${String(s).padStart(2,"0")}`;
+}
+
+// "09.45" → "09:45" — ใช้แสดงผลให้อ่านง่าย (นาที:วินาที แทนจุด กันสับสนกับทศนิยม)
+function formatDurationDisplay(input) {
+  if (!input) return null;
+  return normalizeDuration(input).replace(".", ":");
+}
+
 const C = {
   bgBase:"#0a0a16", bgPanel:"#14112a", bgCard:"#1a1535", border:"#1e1640",
   primary:"#6C5CE7", primaryLight:"#a29bfe",
@@ -445,6 +486,7 @@ function UnifiedStatsEditor({ ourPicks, enemyPicks, gameStats, onChangeStats }) 
   // gameStats = { our: { 0:{k,d,a,dmg,gold}, 1:... }, enemy: { 0:..., } }
   const fields = ["kills","deaths","assists","damage","damageTaken","gold"];
   const labels = ["K","D","A","Dmg","DmgTaken","Gold"];
+  const fieldWidth = { kills:40, deaths:40, assists:40, damage:72, damageTaken:72, gold:64 };
 
   function getVal(side, idx, field) {
     return (gameStats?.[side]?.[idx]?.[field]) ?? "";
@@ -476,7 +518,7 @@ function UnifiedStatsEditor({ ourPicks, enemyPicks, gameStats, onChangeStats }) 
   return (
     <div style={{background:"#080614",borderRadius:10,overflow:"hidden",border:`1px solid ${C.border}`}}>
       <div style={{overflowX:"auto"}}>
-        <table style={{width:"100%",borderCollapse:"collapse",minWidth:460}}>
+        <table style={{width:"100%",borderCollapse:"collapse",minWidth:560}}>
           <thead>
             <tr style={{background:"#0f0c22"}}>
               <th style={{textAlign:"left",padding:"8px 10px",fontWeight:700,fontSize:10,color:C.textMuted,whiteSpace:"nowrap"}}>
@@ -516,9 +558,9 @@ function UnifiedStatsEditor({ ourPicks, enemyPicks, gameStats, onChangeStats }) 
                             value={getVal(side, idx, field)}
                             onChange={e => setVal(side, idx, field, e.target.value)}
                             placeholder="0"
-                            style={{width:52,background:"#0a0816",border:`1px solid ${C.border}`,
-                              color:C.textMain,borderRadius:5,padding:"2px 5px",
-                              fontSize:11,textAlign:"center",outline:"none"}}
+                            style={{width:fieldWidth[field],background:"#0a0816",border:`1px solid ${C.border}`,
+                              color:C.textMain,borderRadius:5,padding:"4px 5px",
+                              fontSize:12,textAlign:"center",outline:"none"}}
                           />
                         </td>
                       ))}
@@ -632,7 +674,7 @@ function SingleGameDetail({ g, gameNo, onUpdateStats, onUpdateObjectives, player
           <span style={{color:C.textMuted}}> : </span>
           <span style={{color:C.lose,fontWeight:700}}>{g.enemyScore||0}</span>
           <span style={{color:C.textMuted,fontSize:11}}> kills</span>
-          <span style={{marginLeft:8,color:C.textMuted}}>{g.duration||0} นาที</span>
+          {g.duration && <span style={{marginLeft:8,color:C.textMuted}}>⏱ {formatDurationDisplay(g.duration)}</span>}
         </span>
       </div>
 
@@ -734,8 +776,8 @@ function SingleGameDetail({ g, gameNo, onUpdateStats, onUpdateObjectives, player
             onChangeStats={setGameStats}
           />
           {/* ── GPM / DPM / Damage Share ── */}
-          {g.duration > 0 && (() => {
-            const dur = Number(g.duration) || 0;
+          {durationToMinutes(g.duration) > 0 && (() => {
+            const dur = durationToMinutes(g.duration);
             if (!dur) return null;
 
             // collect our team stats
@@ -1332,12 +1374,12 @@ function PlayerProfile({ player, isEnemy, allGames, onBack, photoUrl }) {
       heroSt[hName].dmg += Number(gs.damage||0);
       heroSt[hName].dtk += Number(gs.damageTaken||0);
       heroSt[hName].gold+= Number(gs.gold||0);
-      heroSt[hName].dur += Number(g.duration||0);
+      heroSt[hName].dur += durationToMinutes(g.duration);
       heroSt[hName].cnt++;
       totK+=Number(gs.kills||0);totD+=Number(gs.deaths||0);totA+=Number(gs.assists||0);
       totDmg+=Number(gs.damage||0);totDtk+=Number(gs.damageTaken||0);
       totGold+=Number(gs.gold||0);
-      totDur+=Number(g.duration||0);statG++;
+      totDur+=durationToMinutes(g.duration);statG++;
     }
   });
 
@@ -1641,7 +1683,7 @@ function RivalStatsSection({ selRival, rGames, enemyRosters }) {
         ps.dmg += Number(gs.damage||0);
         ps.dtk += Number(gs.damageTaken||0);
         ps.gold+= Number(gs.gold||0);
-        ps.dur += Number(g.duration||0);
+        ps.dur += durationToMinutes(g.duration);
         ps.cnt++;
       }
     });
@@ -1665,7 +1707,7 @@ function RivalStatsSection({ selRival, rGames, enemyRosters }) {
         hd.dmg += Number(gs.damage||0);
         hd.dtk += Number(gs.damageTaken||0);
         hd.gold+= Number(gs.gold||0);
-        hd.dur += Number(g.duration||0);
+        hd.dur += durationToMinutes(g.duration);
         hd.cnt++;
       }
     });
@@ -1932,7 +1974,7 @@ function exportCSV(matches, allGames) {
         const kda = (k+a)/Math.max(d,1);
         rows.push([
           m.date, si+1, `"${m.rivalName||""}"`, m.boType||"BO1", gameNo,
-          g.result||"", g.ourSide||"", g.ourScore||0, g.enemyScore||0, g.duration||0,
+          g.result||"", g.ourSide||"", g.ourScore||0, g.enemyScore||0, durationToMinutes(g.duration).toFixed(2),
           "เรา", idx, slot.role||"", `"${slot.hero?.name||""}"`, `"${slot.player||""}"`,
           gs.kills??"-", gs.deaths??"-", gs.assists??"-",
           gs.damage??"-", gs.damageTaken??"-", gs.gold??"-",
@@ -1946,7 +1988,7 @@ function exportCSV(matches, allGames) {
         const kda = (k+a)/Math.max(d,1);
         rows.push([
           m.date, si+1, `"${m.rivalName||""}"`, m.boType||"BO1", gameNo,
-          g.result||"", g.ourSide||"", g.ourScore||0, g.enemyScore||0, g.duration||0,
+          g.result||"", g.ourSide||"", g.ourScore||0, g.enemyScore||0, durationToMinutes(g.duration).toFixed(2),
           "คู่แข่ง", idx, slot.role||"", `"${slot.hero?.name||""}"`, `"${slot.player||""}"`,
           gs.kills??"-", gs.deaths??"-", gs.assists??"-",
           gs.damage??"-", gs.damageTaken??"-", gs.gold??"-",
@@ -2429,6 +2471,7 @@ function ScoutGameForm({ gameNo, teamA, teamB, rivals, enemyRosters, onSave, onC
   const renderStatsTable = (teamKey, picks, stats, accentCol, teamName) => {
     const fields = ["kills","deaths","assists","damage","damageTaken","gold"];
     const headers = ["K","D","A","Dmg","DmgTkn","Gold"];
+    const fieldWidth = { kills:36, deaths:36, assists:36, damage:70, damageTaken:70, gold:62 };
     if (!picks.some(s=>s.hero)) return null;
     return (
       <div style={{marginBottom:8}}>
@@ -2436,7 +2479,7 @@ function ScoutGameForm({ gameNo, teamA, teamB, rivals, enemyRosters, onSave, onC
           {teamKey==="A"?`🔵 ${teamName}`:`🔴 ${teamName}`}
         </div>
         <div style={{overflowX:"auto"}}>
-          <table style={{width:"100%",borderCollapse:"collapse",minWidth:340}}>
+          <table style={{width:"100%",borderCollapse:"collapse",minWidth:440}}>
             <thead>
               <tr style={{background:"#0f0c22"}}>
                 <th style={{padding:"5px 8px",textAlign:"left",fontSize:9,color:C.textMuted,fontWeight:700}}>ผู้เล่น / Hero</th>
@@ -2463,9 +2506,9 @@ function ScoutGameForm({ gameNo, teamA, teamB, rivals, enemyRosters, onSave, onC
                           <input type="number" min="0"
                             value={cur??""} placeholder="0"
                             onChange={e=>setStatVal(teamKey,idx,field,e.target.value)}
-                            style={{width:46,background:"#0a0816",border:`1px solid ${C.border}`,
-                              color:C.textMain,borderRadius:4,padding:"2px 3px",
-                              fontSize:10,textAlign:"center",outline:"none"}}/>
+                            style={{width:fieldWidth[field],background:"#0a0816",border:`1px solid ${C.border}`,
+                              color:C.textMain,borderRadius:4,padding:"3px 4px",
+                              fontSize:11,textAlign:"center",outline:"none"}}/>
                         </td>
                       );
                     })}
@@ -2613,9 +2656,11 @@ function ScoutGameForm({ gameNo, teamA, teamB, rivals, enemyRosters, onSave, onC
             placeholder="0" style={{...iStyle,width:70,padding:"5px 8px",fontSize:12}}/>
         </div>
         <div>
-          <div style={{fontSize:10,color:C.textMuted,marginBottom:4}}>เวลา (นาที)</div>
-          <input type="number" value={duration} onChange={e=>setDuration(e.target.value)}
-            placeholder="18" style={{...iStyle,width:80,padding:"5px 8px",fontSize:12}}/>
+          <div style={{fontSize:10,color:C.textMuted,marginBottom:4}}>เวลา (นาที.วินาที)</div>
+          <input type="text" inputMode="decimal" value={duration}
+            onChange={e=>setDuration(e.target.value)}
+            onBlur={e=>setDuration(normalizeDuration(e.target.value))}
+            placeholder="09.45" style={{...iStyle,width:80,padding:"5px 8px",fontSize:12}}/>
         </div>
         <div style={{flex:1}}>
           <div style={{fontSize:10,color:C.textMuted,marginBottom:4}}>Coach Notes</div>
@@ -2917,7 +2962,7 @@ function ScoutCard({ sm, onDelete }) {
                       <span style={{fontSize:9}}> kills</span>
                     </span>
                   )}
-                  {g.duration&&<span style={{fontSize:11,color:C.textMuted}}>{g.duration} นาที</span>}
+                  {g.duration&&<span style={{fontSize:11,color:C.textMuted}}>⏱ {formatDurationDisplay(g.duration)}</span>}
                   {g.tags&&g.tags.length>0&&(
                     <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
                       {g.tags.map(t=>(
@@ -3021,6 +3066,7 @@ function ScoutCard({ sm, onDelete }) {
 function calcMatchupStats(records, teamFocus) {
   let wins=0, games=0, kFor=0, kAgainst=0;
   let totK=0,totD=0,totA=0,totDmg=0,totDtk=0,totGold=0,statCnt=0;
+  let totDur=0, durCnt=0;
   // แยกตาม side (blue/red)
   const sideStats = { blue:{dmg:0,dtk:0,gold:0,cnt:0,wins:0,games:0}, red:{dmg:0,dtk:0,gold:0,cnt:0,wins:0,games:0} };
   const heroFreq={}, patternCount={}, banFreq={};
@@ -3035,6 +3081,7 @@ function calcMatchupStats(records, teamFocus) {
       if (won) wins++;
       kFor     += Number(isA?g.killsA:g.killsB||0);
       kAgainst += Number(isA?g.killsB:g.killsA||0);
+      if (g.duration) { totDur += durationToMinutes(g.duration); durCnt++; }
 
       // side ของ teamFocus
       const mySide = isA ? (g.sideA||"blue") : (g.sideA==="blue"?"red":"blue");
@@ -3100,6 +3147,8 @@ function calcMatchupStats(records, teamFocus) {
     avgDtk:  statCnt?Math.round(totDtk/statCnt):null,
     avgGold: statCnt?Math.round(totGold/statCnt):null,
     statCnt,
+    avgDuration: durCnt ? minutesToDurationStr(totDur/durCnt) : null,
+    durCnt,
     // side breakdown
     blue: { games:blueGames, wins:blueWins, wr:blueGames?Math.round(blueWins/blueGames*100):null,
       avgDmg:sideStats.blue.cnt?Math.round(sideStats.blue.dmg/sideStats.blue.cnt):null,
@@ -3231,6 +3280,7 @@ function MatchupDetail({ rivalName, opponent, records, rivals, enemyRosters, onS
                   {label:"KDA",        val:st.avgKDA,                            col:"#fdcb6e"},
                   {label:"Avg Dmg",    val:st.avgDmg?st.avgDmg.toLocaleString():"-", col:"#e17055"},
                   {label:"Avg DmgTkn", val:st.avgDtk?st.avgDtk.toLocaleString():"-", col:"#fd79a8"},
+                  {label:"⏱️ เวลาเฉลี่ย/เกม", val:st.avgDuration?st.avgDuration.replace(".",":"):"-", col:"#1dd1a1"},
                 ].map(c=>(
                   <div key={c.label} style={{background:C.bgCard,borderRadius:8,padding:"8px 6px",textAlign:"center"}}>
                     <div style={{fontSize:9,color:C.textMuted,marginBottom:3}}>{c.label}</div>
@@ -7200,6 +7250,10 @@ export default function RovApp() {
   // ── overview stats ──
   const tG = allGames.length, tW = allGames.filter(g=>g.result==="WIN").length;
   const wr = tG ? Math.round(tW/tG*100) : 0;
+  const gamesWithDuration = allGames.filter(g=>g.duration);
+  const avgGameDuration = gamesWithDuration.length
+    ? minutesToDurationStr(gamesWithDuration.reduce((s,g)=>s+durationToMinutes(g.duration),0) / gamesWithDuration.length)
+    : null;
   const uniq = new Set();
   allGames.forEach(g=>(g.ourPicks||[]).forEach(s=>{if(s.hero?.name)uniq.add(s.hero.name);}));
   const banCounts = {};
@@ -7527,6 +7581,7 @@ export default function RovApp() {
                         {label:"🏆 Win Rate",   val:`${wr}%`,     col:wr>=50?C.win:C.lose, sub:`${tW}W — ${tG-tW}L`},
                         {label:"🎮 เกมทั้งหมด", val:tG,           col:C.primaryLight,       sub:`${matches.length} sessions`},
                         {label:"🦸 Heroes Used",val:uniq.size,    col:"#feca57",            sub:"ตัวละครไม่ซ้ำ"},
+                        {label:"⏱️ เวลาเฉลี่ย/เกม",val:avgGameDuration?avgGameDuration.replace(".",":"):"-", col:"#1dd1a1", sub:avgGameDuration?`จาก ${gamesWithDuration.length} เกมที่จดเวลาไว้`:"ยังไม่มีข้อมูลเวลา"},
                         {label:"🔵 Blue Side",  val:`${blueWR}%`, col:C.blue,              sub:`${blueG.length} เกม (${blueW}W)`},
                         {label:"🔴 Red Side",   val:`${redWR}%`,  col:C.red,               sub:`${redG.length} เกม (${redW}W)`},
                       ].map(c=>(
@@ -9374,7 +9429,7 @@ function DraftPageR({ draft, dispatch, roster, rivals, enemyRosters, onFinishSes
             {label:"ผล",key:"result",type:"select",opts:["WIN","LOSE"],w:88},
             {label:"คิลเรา",key:"ourScore",type:"number",placeholder:"0",w:75},
             {label:"คิลศัตรู",key:"enemyScore",type:"number",placeholder:"0",w:75},
-            {label:"เวลา(นาที)",key:"duration",type:"number",placeholder:"18",w:88},
+            {label:"เวลา(นาที.วินาที)",key:"duration",type:"text",placeholder:"09.45",w:96},
           ].map(f=>(
             <div key={f.key}>
               <div style={{fontSize:10,color:C.textMuted,marginBottom:3}}>{f.label}</div>
@@ -9385,8 +9440,10 @@ function DraftPageR({ draft, dispatch, roster, rivals, enemyRosters, onFinishSes
                       color:meta[f.key]==="WIN"?C.win:C.lose}}>
                     {f.opts.map(o=><option key={o}>{o}</option>)}
                   </select>
-                :<input type={f.type} placeholder={f.placeholder} value={meta[f.key]}
+                :<input type={f.type} inputMode={f.key==="duration"?"decimal":undefined}
+                    placeholder={f.placeholder} value={meta[f.key]}
                     onChange={e=>dispatch({type:"SET_META",payload:{[f.key]:e.target.value}})}
+                    onBlur={f.key==="duration" ? e=>dispatch({type:"SET_META",payload:{duration:normalizeDuration(e.target.value)}}) : undefined}
                     style={{...iStyle,width:f.w,padding:"5px 8px",fontSize:12}}/>
               }
             </div>
