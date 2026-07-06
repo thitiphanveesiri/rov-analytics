@@ -2594,7 +2594,7 @@ function ScoutGameForm({ gameNo, teamA, teamB, rivals, enemyRosters, onSave, onC
                 borderRadius:99,padding:"3px 9px",fontSize:10,cursor:"pointer",fontWeight:700}}>{r}</button>
             ))}
           </div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(62px,1fr))",
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(62px,1fr))",
             gap:4,maxHeight:420,overflowY:"auto"}}>
             {filtered.map(hero=>{
               const used=usedHeroes.has(hero.name);
@@ -4723,7 +4723,7 @@ function HeroImageManager({ heroPhotos, onSetPhoto, onSetPhotosBulk, onRemovePho
       </div>
 
       {/* per-hero grid editor */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(110px,1fr))",gap:10}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(110px,1fr))",gap:10}}>
         {filtered.map(hero => (
           <HeroImageSlot key={hero.name} hero={hero}
             photoUrl={heroPhotos[hero.name]}
@@ -7947,7 +7947,7 @@ export default function RovApp() {
                     ?<div style={{textAlign:"center",padding:60,background:C.bgPanel,borderRadius:14,color:C.textMuted}}>
                         ยังไม่มีคู่แข่ง — กด "+ เพิ่มทีมคู่แข่งใหม่" หรือบันทึกแมตช์เพื่อเพิ่มคู่แข่ง
                       </div>
-                    :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:14}}>
+                    :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:14}}>
                         {rivals.map(rv=>{
                           const rm=matches.filter(m=>m.rivalName===rv.name);
                           const rGames=rm.flatMap(m=>Array.isArray(m.games)&&m.games.length?m.games:[m]);
@@ -8374,7 +8374,7 @@ export default function RovApp() {
                               ยังไม่มีทีมคู่แข่ง — บันทึกแมตช์ก่อนนะครับ
                             </div>
                           )}
-                          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:12}}>
+                          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:12}}>
                             {rivals.map(rv=>{
                               const ep=enemyRosters[rv.name]||[];
                               const rGames=allGames.filter(g=>g.rivalName===rv.name);
@@ -9376,7 +9376,7 @@ function DraftPageR({ draft, dispatch, roster, rivals, enemyRosters, onFinishSes
                   borderRadius:99,padding:"3px 9px",fontSize:10,cursor:"pointer",fontWeight:700}}>{r}</button>
               ))}
             </div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(66px,1fr))",gap:4,flex:1}}>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(66px,1fr))",gap:4,flex:1}}>
               {filtered.map(hero=>{
                 const usedHere = usedThisGame.has(hero.name);
                 const glLocked = isGlobalLocked(hero.name);
