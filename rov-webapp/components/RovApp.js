@@ -7346,15 +7346,11 @@ export default function RovApp() {
 
       {/* NAV */}
       <div style={{background:"linear-gradient(90deg,#12072a,#0a0a16)",borderBottom:`1px solid ${C.border}`,
-        padding:isMobile?"0 12px":"0 24px",display:"flex",alignItems:"center",height:56,position:"sticky",top:0,zIndex:200}}>
-        <span style={{fontSize:20,marginRight:8}}>🦅</span>
-        <span style={{fontWeight:900,fontSize:isMobile?13:17,letterSpacing:isMobile?1:2,color:C.primaryLight,
-          whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
-          {isMobile?"RoV ANALYTICS":"PRO TEAM ANALYTICS"}
+        padding:isMobile?"0 12px":"0 24px",display:"flex",alignItems:"center",height:56,position:"sticky",top:0,zIndex:200,flexWrap:isMobile?"nowrap":"wrap",rowGap:6}}>
+        <span style={{fontSize:20,marginRight:8,flexShrink:0}}>🦅</span>
+        <span style={{fontWeight:900,fontSize:isMobile?13:17,letterSpacing:isMobile?0.5:1,color:C.primaryLight}}>
+          {session?.user?.teamName || app.teamName || "ทีมของฉัน"}
         </span>
-        {!isMobile && (
-          <span style={{background:C.primary,color:"#fff",fontSize:10,padding:"2px 8px",borderRadius:99,fontWeight:700,marginLeft:10}}>V7</span>
-        )}
         {/* save status indicator */}
         <span style={{marginLeft:isMobile?8:12,fontSize:isMobile?14:11,color:
           saveStatus==="saving"?C.primaryLight:saveStatus==="saved"?"#00b894":saveStatus==="error"?"#ff4757":C.textMuted,
@@ -9219,7 +9215,7 @@ function DraftPageR({ draft, dispatch, roster, rivals, enemyRosters, onFinishSes
 
   // ── PLAYING ──
   if (stage==="playing") return (
-    <div style={{padding:"10px 16px",overflowY:"auto"}}>
+    <div style={{padding:"10px 16px",display:"flex",flexDirection:"column",minHeight:"calc(100vh - 56px)",boxSizing:"border-box"}}>
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10,flexWrap:"wrap"}}>
         <span style={{fontWeight:800,fontSize:14,color:C.primaryLight}}>{boType} vs {rivalName}</span>
         <div style={{display:"flex",gap:5}}>
@@ -9259,7 +9255,8 @@ function DraftPageR({ draft, dispatch, roster, rivals, enemyRosters, onFinishSes
       </div>
 
       {/* board */}
-      <div style={{border:`2px solid ${C.border}`,borderRadius:14,overflow:"hidden",marginBottom:8}}>
+      <div style={{border:`2px solid ${C.border}`,borderRadius:14,overflow:"hidden",marginBottom:8,
+        flex:1,display:"flex",flexDirection:"column",minHeight:0}}>
         <div style={{background:"#0d0b1e",padding:"8px 16px",display:"flex",alignItems:"center",
           gap:10,borderBottom:`1px solid ${C.border}`,flexWrap:"wrap"}}>
           <span style={{fontWeight:900,color:C.primaryLight,fontSize:14}}>{boType} — Game {currentGame}</span>
@@ -9293,7 +9290,7 @@ function DraftPageR({ draft, dispatch, roster, rivals, enemyRosters, onFinishSes
           </button>
         </div>
 
-        <div style={{display:"flex",height:500}}>
+        <div style={{display:"flex",flex:1,minHeight:420}}>
           <TeamPanelR side="blue" isOurTeam={ourSide==="blue"}
             bans={blueBans} picks={bluePicks} cur={cur}
             roster={roster} enemyRoster={currentEnemyRoster}
