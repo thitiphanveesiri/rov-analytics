@@ -35,6 +35,8 @@ model Team {
   members     User[]
   data        TeamData?
   auditLogs   AdminAuditLog[]
+  matches     Match[]
+  patchVersions PatchVersion[]
 }
 
 // ── Admin action history (role changes, member removals) ──
@@ -52,6 +54,12 @@ model AdminAuditLog {
 }
 
 // ── Team Data (1 row per team) ──
+// NOTE: this JSON blob remains the SOURCE OF TRUTH for the app UI — nothing
+// here changes to avoid breaking the existing read/write flow the whole
+// frontend depends on. The Match/Game/Pick tables below are a *derived,
+// query-friendly copy* of match/scout data, kept in sync by lib/matchSync.js
+// every time /api/data PUT succeeds (see that file for why "sync + rebuild"
+// beats trying to diff JSON against relational rows).
 model TeamData {
   id            String   @id @default(cuid())
   teamId        String   @unique
@@ -74,4 +82,79 @@ model TeamData {
   practiceAssignments Json @default("[]") // [{ id, player, title, note, dueDate, done, createdAt, createdBy }]
   updatedAt     DateTime @updatedAt
   updatedBy     String?
+}
+
+// ══════════════════════════════════════════════════════════════
+//  NORMALIZED MATCH DATA — added for analytics (win rate by hero/role,
+//  draft/ban patterns, patch timeline). Additive only; does not replace
+//  TeamData.matches. Rebuilt from that JSON on every save via matchSync.js,
+//  so it's always a point-in-time mirror, not something edited directly.
+// ══════════════════════════════════════════════════════════════
+
+model Match {
+  id         String   @id @default(cuid())
+  teamId     String
+  team       Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  sourceId   String   // the original client-generated `id` from TeamData.matches (Date.now()-based) — lets us re-sync idempotently
+  rivalName  String?
+  category   String   @default("scrim") // "scrim" | "tournament" | etc.
+  date       DateTime
+  note       String?
+  createdAt  DateTime @default(now())
+  games      Game[]
+
+  @@unique([teamId, sourceId])
+  @@index([teamId, date])
+  @@index([teamId, rivalName])
+}
+
+model Game {
+  id          String   @id @default(cuid())
+  matchId     String
+  match       Match    @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  gameNo      Int      @default(1)
+  result      String   // "WIN" | "LOSE" (from the perspective of "our" team)
+  durationMin Float?   // normalized to decimal minutes via lib/duration.js durationToMinutes()
+  objectives  Json?
+
+  picks       Pick[]
+
+  @@index([matchId])
+}
+
+model Pick {
+  id        String  @id @default(cuid())
+  gameId    String
+  game      Game    @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  side      String  // "our" | "enemy"
+  isBan     Boolean @default(false)
+  slotIdx   Int     // pick: 0-4 (role slot) — ban: 0-3 (ban order)
+  hero      String
+  role      String? // resolved role at sync time (resolveHeroRole) — denormalized on purpose so hero role changes don't rewrite history
+  player    String?
+  kills     Int?
+  deaths    Int?
+  assists   Int?
+  damage    Int?
+  gold      Int?
+
+  @@index([gameId, side])
+  @@index([hero])
+  @@index([hero, isBan])
+}
+
+// ── Patch version history — needed for the "win rate vs patch" timeline.
+// TeamData.patchInfo only tracks the *current* patch, so this table
+// (populated via /api/admin/patch-versions) is what lets us map a match's
+// date to "which patch was live when this was played".
+model PatchVersion {
+  id         String   @id @default(cuid())
+  teamId     String
+  team       Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  version    String   // e.g. "1.52"
+  notes      String?
+  effectiveFrom DateTime // patch goes live at this date; the *next* version's effectiveFrom is this one's implicit end
+  createdAt  DateTime @default(now())
+
+  @@index([teamId, effectiveFrom])
 }
