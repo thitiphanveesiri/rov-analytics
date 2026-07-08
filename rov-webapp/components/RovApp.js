@@ -31,6 +31,18 @@ const iStyle = {
   boxSizing:"border-box", outline:"none",
 };
 
+// ═══════════════════════════════════════════════════════════════
+//  ⚠️ PENDING PATCH UPDATE — ระบบแบนใหม่ (5 ban/ทีม แทนที่ 4 เดิม)
+//  รอ logic ลำดับ ban/pick ที่แน่นอนจากแพตช์ที่กำลังจะอัปเดต
+//
+//  พอรู้ลำดับจริงแล้ว ต้องแก้แค่ 2 จุดนี้:
+//    1) BANS_PER_TEAM ด้านล่าง → เปลี่ยนเป็น 5
+//    2) DRAFT_ORDER + PHASE_SEGS ด้านล่าง → ใส่ลำดับ step จริงตามแพตช์ใหม่
+//  ที่เหลือ (ขนาด array การแบน, ตัวกรอง Ban ที่ 1-N, สถิติ ban/pick ต่างๆ)
+//  จะปรับตาม BANS_PER_TEAM ให้อัตโนมัติ เพราะ refactor ให้ derive จากค่านี้แล้ว
+// ═══════════════════════════════════════════════════════════════
+const BANS_PER_TEAM = 4; // TODO: เปลี่ยนเป็น 5 ตอนแพตช์ปล่อยจริงพร้อมลำดับใหม่
+
 const DRAFT_ORDER = [
   {team:"blue",action:"ban", slot:0},{team:"red", action:"ban", slot:0},
   {team:"blue",action:"ban", slot:1},{team:"red", action:"ban", slot:1},
@@ -43,6 +55,7 @@ const DRAFT_ORDER = [
   {team:"blue",action:"pick",slot:4},{team:"red", action:"pick",slot:4},
 ];
 
+// ⚠️ ต้องอัปเดตคู่กับ DRAFT_ORDER ด้านบนเมื่อรู้ลำดับใหม่ (start/end คือ index ใน DRAFT_ORDER)
 const PHASE_SEGS = [
   {label:"BAN 1", color:C.ban,  start:0, end:3,  flex:2},
   {label:"PICK 1",color:C.win,  start:4, end:9,  flex:3},
@@ -1487,15 +1500,12 @@ function PlayerProfile({ player, isEnemy, allGames, onBack, photoUrl }) {
 //   เรียงตาม slot 0→1→2... เสมอ)
 // ═══════════════════════════════════════════
 const PICK_BAN_FILTERS = [
-  {id:"ban0", label:"🚫 Ban ที่ 1", type:"ban",  idx:0},
-  {id:"ban1", label:"🚫 Ban ที่ 2", type:"ban",  idx:1},
-  {id:"ban2", label:"🚫 Ban ที่ 3", type:"ban",  idx:2},
-  {id:"ban3", label:"🚫 Ban ที่ 4", type:"ban",  idx:3},
-  {id:"pick0",label:"🦸 Pick ที่ 1",type:"pick", idx:0},
-  {id:"pick1",label:"🦸 Pick ที่ 2",type:"pick", idx:1},
-  {id:"pick2",label:"🦸 Pick ที่ 3",type:"pick", idx:2},
-  {id:"pick3",label:"🦸 Pick ที่ 4",type:"pick", idx:3},
-  {id:"pick4",label:"🦸 Pick ที่ 5",type:"pick", idx:4},
+  ...Array.from({length: BANS_PER_TEAM}, (_, i) => ({
+    id:`ban${i}`, label:`🚫 Ban ที่ ${i+1}`, type:"ban", idx:i,
+  })),
+  ...Array.from({length: ROLES_PICK.length}, (_, i) => ({
+    id:`pick${i}`, label:`🦸 Pick ที่ ${i+1}`, type:"pick", idx:i,
+  })),
 ];
 
 function PickBanOrderPanel({ games, getBans, getPicks, getWon, title }) {
@@ -2231,8 +2241,8 @@ function ScoutGameForm({ gameNo, teamA, teamB, rivals, enemyRosters, onSave, onC
   const initPicks = () => ROLES_PICK.map(r=>({role:r,hero:null,player:""}));
   const [picksA,    setPicksA]    = useState(initPicks);
   const [picksB,    setPicksB]    = useState(initPicks);
-  const [bansA,     setBansA]     = useState(Array(4).fill(null)); // ลำดับแบน ทีม A (4 ตัว)
-  const [bansB,     setBansB]     = useState(Array(4).fill(null)); // ลำดับแบน ทีม B (4 ตัว)
+  const [bansA,     setBansA]     = useState(Array(BANS_PER_TEAM).fill(null)); // ลำดับแบน ทีม A
+  const [bansB,     setBansB]     = useState(Array(BANS_PER_TEAM).fill(null)); // ลำดับแบน ทีม B
   // statsA/B: { [slotIdx]: { kills, deaths, assists, damage, damageTaken, gold } }
   const [statsA,    setStatsA]    = useState({});
   const [statsB,    setStatsB]    = useState({});
@@ -6457,8 +6467,8 @@ function initDraftState() {
     completedGames: [],
     // SingleGameDraft sub-state
     step:           0,
-    blueBans:       Array(4).fill(null),
-    redBans:        Array(4).fill(null),
+    blueBans:       Array(BANS_PER_TEAM).fill(null),
+    redBans:        Array(BANS_PER_TEAM).fill(null),
     bluePicks:      ROLES_PICK.map(r => ({ role: r, hero: null, player: "" })),
     redPicks:       ROLES_PICK.map(r => ({ role: r, hero: null, player: "" })),
     roleFilter:     "All",
@@ -6540,8 +6550,8 @@ function draftReducer(state, action) {
         stage: "chooseSide",
         // reset board for next game
         step: 0,
-        blueBans:  Array(4).fill(null),
-        redBans:   Array(4).fill(null),
+        blueBans:  Array(BANS_PER_TEAM).fill(null),
+        redBans:   Array(BANS_PER_TEAM).fill(null),
         bluePicks: ROLES_PICK.map(r => ({ role: r, hero: null, player: "" })),
         redPicks:  ROLES_PICK.map(r => ({ role: r, hero: null, player: "" })),
         meta: { result:"WIN", ourScore:"", enemyScore:"", duration:"", note:"" },
@@ -7629,7 +7639,7 @@ export default function RovApp() {
 
       {/* NAV */}
       <div style={{background:"linear-gradient(90deg,#12072a,#0a0a16)",borderBottom:`1px solid ${C.border}`,
-        padding:isMobile?"0 12px":"0 24px",display:"flex",alignItems:"center",height:56,position:"sticky",top:0,zIndex:200,flexWrap:isMobile?"nowrap":"wrap",rowGap:6}}>
+        padding:isMobile?"0 12px":"0 20px",display:"flex",alignItems:"center",height:56,position:"sticky",top:0,zIndex:200}}>
         <span style={{fontSize:20,marginRight:8,flexShrink:0}}>🦅</span>
         <span style={{fontWeight:900,fontSize:isMobile?13:17,letterSpacing:isMobile?0.5:1,color:C.primaryLight}}>
           {session?.user?.teamName || app.teamName || "ทีมของฉัน"}
@@ -7652,72 +7662,38 @@ export default function RovApp() {
         </span>
         <div style={{flex:1}}/>
 
-        {isMobile ? (
-          // ── Mobile: hamburger button opens a slide-down menu ──
-          <button onClick={()=>setShowMobileMenu(v=>!v)}
-            style={{background:showMobileMenu?C.primary+"30":"transparent",border:`1px solid ${C.border}`,
-              color:C.textMain,borderRadius:8,padding:"8px 12px",cursor:"pointer",fontSize:16,
-              minWidth:44,minHeight:44,display:"flex",alignItems:"center",justifyContent:"center"}}>
-            {showMobileMenu?"✕":"☰"}
-          </button>
-        ) : (
-          // ── Desktop: inline nav buttons + user info ──
-          <>
+        {/* เมนู ☰ เดียวกันทุกขนาดจอ — กันเมนูล้น/ตกบรรทัดไม่สวยเมื่อเพิ่มเมนูใหม่ในอนาคต */}
+        <button onClick={()=>setShowMobileMenu(v=>!v)}
+          style={{background:showMobileMenu?C.primary+"30":"transparent",
+            border:`1px solid ${showMobileMenu?C.primary:C.border}`,
+            color:showMobileMenu?C.primaryLight:C.textMain,borderRadius:8,
+            padding:isMobile?"8px 12px":"8px 16px",cursor:"pointer",fontSize:isMobile?16:14,fontWeight:700,
+            minWidth:44,minHeight:44,display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
+          {showMobileMenu ? "✕" : "☰"}{!isMobile && <span>{showMobileMenu?"ปิดเมนู":"เมนู"}</span>}
+        </button>
+      </div>
+
+      {/* ── เมนูแบบ dropdown เดียวกันทุกขนาดจอ (grid ยืดตามความกว้างจอ) ── */}
+      {showMobileMenu && (
+        <div style={{position:"sticky",top:56,zIndex:199,background:"#0d0a1e",
+          borderBottom:`1px solid ${C.border}`,padding:isMobile?"10px 12px":"16px 20px",
+          maxHeight:"calc(100vh - 56px)",overflowY:"auto"}}>
+          <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"repeat(auto-fill,minmax(170px,1fr))",gap:6}}>
             {NAV.filter(n=>(!n.coachOnly || isCoach) && (!n.adminOnly || isAdmin)).map(n=>(
               <button key={n.id}
-                onClick={()=>dispatchUI({type:"SET_PAGE",payload:n.id})}
+                onClick={()=>{dispatchUI({type:"SET_PAGE",payload:n.id});setShowMobileMenu(false);}}
                 style={{background:page===n.id?C.primary+"30":"transparent",
-                  border:"none",color:page===n.id?C.primaryLight:C.textMuted,
-                  padding:"6px 14px",cursor:"pointer",fontSize:13,
-                  fontWeight:page===n.id?700:400,borderRadius:8}}>
+                  border:page===n.id?`1px solid ${C.primary}60`:"1px solid transparent",
+                  color:page===n.id?C.primaryLight:C.textMain,textAlign:"left",
+                  padding:"12px 14px",cursor:"pointer",fontSize:isMobile?15:14,minHeight:44,
+                  fontWeight:page===n.id?700:400,borderRadius:9}}>
                 {n.icon} {n.label}
               </button>
             ))}
-            {session?.user && (
-              <div style={{display:"flex",alignItems:"center",gap:8,marginLeft:14,paddingLeft:14,
-                borderLeft:`1px solid ${C.border}`}}>
-                {app.teamLogo && (
-                  <LogoImg url={app.teamLogo} name={app.teamName||"ทีมเรา"} size={26}
-                    style={{border:`2px solid ${C.primary}40`}}/>
-                )}
-                <span style={{fontSize:11,color:C.textMuted}}>
-                  {session.user.name || session.user.email}
-                </span>
-                <span style={{fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:99,
-                  background: isAdmin?"#f9ca24"+"30":isCoach?C.primary+"30":C.border+"30",
-                  color:       isAdmin?"#f9ca24"  :isCoach?C.primaryLight:C.textMuted}}>
-                  {isAdmin?"👑 Admin":isCoach?"🎓 Coach":"👤 Member"}
-                </span>
-                <button onClick={()=>signOut({ callbackUrl: "/login" })}
-                  style={{background:"transparent",border:`1px solid ${C.border}`,color:C.textMuted,
-                    borderRadius:7,padding:"4px 10px",cursor:"pointer",fontSize:11,fontWeight:600}}>
-                  ออกจากระบบ
-                </button>
-              </div>
-            )}
-          </>
-        )}
-      </div>
-
-      {/* ── Mobile slide-down menu ── */}
-      {isMobile && showMobileMenu && (
-        <div style={{position:"sticky",top:56,zIndex:199,background:"#0d0a1e",
-          borderBottom:`1px solid ${C.border}`,padding:"10px 12px",
-          display:"flex",flexDirection:"column",gap:4,
-          maxHeight:"calc(100vh - 56px)",overflowY:"auto"}}>
-          {NAV.filter(n=>(!n.coachOnly || isCoach) && (!n.adminOnly || isAdmin)).map(n=>(
-            <button key={n.id}
-              onClick={()=>{dispatchUI({type:"SET_PAGE",payload:n.id});setShowMobileMenu(false);}}
-              style={{background:page===n.id?C.primary+"30":"transparent",
-                border:"none",color:page===n.id?C.primaryLight:C.textMain,textAlign:"left",
-                padding:"12px 14px",cursor:"pointer",fontSize:15,minHeight:44,
-                fontWeight:page===n.id?700:400,borderRadius:9}}>
-              {n.icon} {n.label}
-            </button>
-          ))}
+          </div>
           {session?.user && (
-            <div style={{marginTop:8,paddingTop:12,borderTop:`1px solid ${C.border}`,
-              display:"flex",alignItems:"center",gap:10}}>
+            <div style={{marginTop:12,paddingTop:12,borderTop:`1px solid ${C.border}`,
+              display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
               {app.teamLogo && (
                 <LogoImg url={app.teamLogo} name={app.teamName||"ทีมเรา"} size={32}
                   style={{border:`2px solid ${C.primary}40`}}/>
@@ -8802,8 +8778,8 @@ function recencyWeight(idMs) {
 // rivalFilter = null → เก็บภาพรวม "meta" จากทุกทีม (ทั้งเราและคู่แข่งทุกคน)
 // rivalFilter = "ชื่อทีม" → เก็บเฉพาะพฤติกรรมของทีมนั้นทีมเดียว
 function collectFrequencies(allGames, scoutMatches, rivalFilter) {
-  const bans  = [new Map(), new Map(), new Map(), new Map()];
-  const picks = [new Map(), new Map(), new Map(), new Map(), new Map()];
+  const bans  = Array.from({length: BANS_PER_TEAM}, () => new Map());
+  const picks = Array.from({length: ROLES_PICK.length}, () => new Map());
   const add = (map, name, w) => { if (name && map) map.set(name, (map.get(name)||0) + w); };
 
   allGames.forEach(g=>{
@@ -8981,7 +8957,7 @@ function MockDraftTrainer({ rivals, allGames, scoutMatches, heroTiers, onExit })
     setLastSource(null);
     setState({
       step: 0,
-      blueBans: Array(4).fill(null), redBans: Array(4).fill(null),
+      blueBans: Array(BANS_PER_TEAM).fill(null), redBans: Array(BANS_PER_TEAM).fill(null),
       bluePicks: ROLES_PICK.map(r=>({role:r,hero:null})),
       redPicks:  ROLES_PICK.map(r=>({role:r,hero:null})),
     });
