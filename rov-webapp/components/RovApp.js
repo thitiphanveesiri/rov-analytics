@@ -404,7 +404,7 @@ function PhotoPicker({ value, onChange, size=72, team="our" }) {
 //  ✅ แก้ใหม่: ใช้ slot index เป็น key แทนชื่อผู้เล่น
 //     เพื่อให้บันทึก stats ได้แม้ไม่ได้กรอกชื่อ
 // ═══════════════════════════════════════════
-function UnifiedStatsEditor({ ourPicks, enemyPicks, gameStats, onChangeStats }) {
+function UnifiedStatsEditor({ ourPicks, enemyPicks, gameStats, onChangeStats, ourScore, enemyScore }) {
   // gameStats = { our: { 0:{k,d,a,dmg,gold}, 1:... }, enemy: { 0:..., } }
   const fields = ["kills","deaths","assists","damage","damageTaken","gold"];
   const labels = ["K","D","A","Dmg","DmgTaken","Gold"];
@@ -425,6 +425,26 @@ function UnifiedStatsEditor({ ourPicks, enemyPicks, gameStats, onChangeStats }) 
     onChangeStats(next);
   }
 
+  // ── ระบบช่วยเช็คยอดรวม K/D กันกรอกผิด ──
+  // กติกา RoV: kill รวมของทีมเรา = kill ที่บันทึกไว้ของทีมเรา (ourScore)
+  //           death รวมของทีมเรา = kill รวมของฝั่งตรงข้าม (enemyScore) เพราะทุก death ของเราคือ kill ของอีกฝั่ง
+  //           และกลับกันสำหรับฝั่งคู่แข่ง
+  function sumField(side, field) {
+    const rows = gameStats?.[side] || {};
+    return Object.values(rows).reduce((s,r)=> s + (Number(r?.[field]) || 0), 0);
+  }
+  const sumOurK = sumField("our","kills"),     sumOurD = sumField("our","deaths");
+  const sumEnemyK = sumField("enemy","kills"), sumEnemyD = sumField("enemy","deaths");
+  const hasAnyStat = sumOurK||sumOurD||sumEnemyK||sumEnemyD;
+  const hasScore = ourScore!=null && enemyScore!=null && (ourScore!==0 || enemyScore!==0);
+
+  const checks = hasScore ? [
+    { label:"Kill รวมทีมเรา",     actual:sumOurK,   expected:Number(ourScore)||0   },
+    { label:"Death รวมทีมเรา",    actual:sumOurD,   expected:Number(enemyScore)||0 },
+    { label:"Kill รวมคู่แข่ง",     actual:sumEnemyK, expected:Number(enemyScore)||0 },
+    { label:"Death รวมคู่แข่ง",    actual:sumEnemyD, expected:Number(ourScore)||0   },
+  ] : [];
+
   const sections = [
     { label:"🛡️ ทีมเรา", side:"our",   picks: ourPicks,   col: C.win  },
     { label:"⚔️ คู่แข่ง", side:"enemy", picks: enemyPicks, col: C.lose },
@@ -439,6 +459,25 @@ function UnifiedStatsEditor({ ourPicks, enemyPicks, gameStats, onChangeStats }) 
 
   return (
     <div style={{background:"#080614",borderRadius:10,overflow:"hidden",border:`1px solid ${C.border}`}}>
+      {hasScore && hasAnyStat > 0 && (
+        <div style={{padding:"10px 12px",background:"#0f0c22",borderBottom:`1px solid ${C.border}`,
+          display:"flex",flexWrap:"wrap",gap:8}}>
+          {checks.map(c=>{
+            const ok = c.actual === c.expected;
+            return (
+              <div key={c.label} style={{display:"flex",alignItems:"center",gap:5,
+                background: ok ? C.win+"15" : C.lose+"15",
+                border:`1px solid ${ok?C.win:C.lose}40`,borderRadius:7,padding:"4px 9px"}}>
+                <span style={{fontSize:11}}>{ok?"✅":"⚠️"}</span>
+                <span style={{fontSize:10,color:C.textMuted}}>{c.label}:</span>
+                <span style={{fontSize:11,fontWeight:800,color:ok?C.win:C.lose}}>
+                  {c.actual}/{c.expected}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
       <div style={{overflowX:"auto"}}>
         <table style={{width:"100%",borderCollapse:"collapse",minWidth:560}}>
           <thead>
@@ -858,6 +897,8 @@ function SingleGameDetail({ g, gameNo, onUpdateStats, onUpdateObjectives, onUpda
             enemyPicks={g.enemyPicks}
             gameStats={gameStats}
             onChangeStats={setGameStats}
+            ourScore={g.ourScore}
+            enemyScore={g.enemyScore}
           />
           {/* ── GPM / DPM / Damage Share ── */}
           {durationToMinutes(g.duration) > 0 && (() => {
@@ -1083,6 +1124,22 @@ function MatchCardWithStats({ m, onUpdateStats, onUpdateObjectives, onUpdateGame
             </span>
           )}
           {isBO && <span style={{fontSize:12,color:bc,fontWeight:700}}>{wins}W – {total-wins}L</span>}
+          {!isBO && m.videoId && videos.some(v=>v.id===m.videoId) && (
+            <button onClick={e=>{ e.stopPropagation(); onJumpToVideo && onJumpToVideo(m.videoId); }}
+              title="ดูวิดีโอที่ผูกไว้กับแมตช์นี้"
+              style={{background:"transparent",border:`1px solid ${C.border}`,color:C.primaryLight,
+                borderRadius:7,padding:"3px 10px",cursor:"pointer",fontSize:12,flexShrink:0}}>
+              🎬
+            </button>
+          )}
+          {isBO && m.games.some(g=>g.videoId) && (
+            <button onClick={e=>{ e.stopPropagation(); setOpen(true); }}
+              title="มีวิดีโอผูกไว้ในบางเกม — กดเพื่อดูรายละเอียด"
+              style={{background:"transparent",border:`1px solid ${C.border}`,color:C.primaryLight,
+                borderRadius:7,padding:"3px 10px",cursor:"pointer",fontSize:12,flexShrink:0}}>
+              🎬
+            </button>
+          )}
           {onEditMeta && (
             <button onClick={e=>{ e.stopPropagation(); setEditing(v=>!v); }}
               style={{background:C.primary+"20",border:`1px solid ${C.primary}40`,color:C.primaryLight,
@@ -1282,6 +1339,8 @@ function MatchCardWithStats({ m, onUpdateStats, onUpdateObjectives, onUpdateGame
                   enemyPicks={m.enemyPicks}
                   gameStats={gameStats}
                   onChangeStats={setGameStats}
+                  ourScore={m.ourScore}
+                  enemyScore={m.enemyScore}
                 />
               )}
             </div>

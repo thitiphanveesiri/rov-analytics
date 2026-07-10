@@ -31,24 +31,29 @@ export async function loadFromStorage() {
 }
 
 export async function saveToStorage(appState) {
-  try {
-    // Only send the fields that belong in the DB — strip all React/internal state
-    const payload = {};
-    FIELDS.forEach(f => { payload[f] = appState[f] ?? FALLBACK[f]; });
+  // Only send the fields that belong in the DB — strip all React/internal state
+  const payload = {};
+  FIELDS.forEach(f => { payload[f] = appState[f] ?? FALLBACK[f]; });
 
-    const res = await fetch("/api/data", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+  const res = await fetch("/api/data", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
 
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.error || `HTTP ${res.status}`);
-    }
-    return true;
-  } catch (err) {
-    console.error("saveToStorage failed:", err);
-    return false;
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    // Surface the real reason (e.g. Zod validation details) instead of a
+    // generic message — this is what shows up in the toast/console when a
+    // save silently fails, so don't swallow it here.
+    const detail = body.error || body.message || JSON.stringify(body.issues || body) || `HTTP ${res.status}`;
+    console.error("saveToStorage: server rejected save:", detail);
+    throw new Error(detail);
   }
+  // IMPORTANT: never catch-and-return-false here — the caller relies on
+  // this throwing so it can show an accurate save-failed state to the
+  // user. Swallowing errors here previously caused the UI to always show
+  // "✅ บันทึกแล้ว" even when the save had actually failed, silently
+  // losing data on reload.
+  return true;
 }
