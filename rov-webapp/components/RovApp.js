@@ -501,7 +501,13 @@ function UnifiedStatsEditor({ ourPicks, enemyPicks, gameStats, onChangeStats }) 
 // ═══════════════════════════════════════════
 //  OBJECTIVE CONTROL EDITOR (Dragon/Turret/First Blood)
 // ═══════════════════════════════════════════
-const OBJ_DEFAULT = { firstBlood:null, firstTower:null, ourDragons:0, enemyDragons:0, ourTurrets:0, enemyTurrets:0 };
+const OBJ_DEFAULT = {
+  firstBlood:null, firstTower:null,
+  ourAbyssal:0, enemyAbyssal:0,       // มังกร
+  ourDark:0, enemyDark:0,             // Dark (Dark Slayer)
+  ourGodslayer:0, enemyGodslayer:0,   // Godslayer
+  ourTurrets:0, enemyTurrets:0,
+};
 
 function ObjectiveEditor({ objectives, onChange }) {
   const obj = { ...OBJ_DEFAULT, ...(objectives||{}) };
@@ -543,8 +549,12 @@ function ObjectiveEditor({ objectives, onChange }) {
         <FirstPicker field="firstTower" label="First Tower"  icon="🏯"/>
       </div>
       <div style={{display:"flex",gap:20,flexWrap:"wrap"}}>
-        <CountField field="ourDragons"   label="🐉 Dragon (เรา)"     col={C.win}/>
-        <CountField field="enemyDragons" label="🐉 Dragon (คู่แข่ง)" col={C.lose}/>
+        <CountField field="ourAbyssal"    label="🐉 Abyssal (เรา)"     col={C.win}/>
+        <CountField field="enemyAbyssal"  label="🐉 Abyssal (คู่แข่ง)" col={C.lose}/>
+        <CountField field="ourDark"       label="⚫ Dark (เรา)"        col={C.win}/>
+        <CountField field="enemyDark"     label="⚫ Dark (คู่แข่ง)"    col={C.lose}/>
+        <CountField field="ourGodslayer"   label="👑 Godslayer (เรา)"     col={C.win}/>
+        <CountField field="enemyGodslayer" label="👑 Godslayer (คู่แข่ง)" col={C.lose}/>
         <CountField field="ourTurrets"   label="🏯 Turret พัง (เรา)"     col={C.win}/>
         <CountField field="enemyTurrets" label="🏯 Turret พัง (คู่แข่ง)" col={C.lose}/>
       </div>
@@ -555,13 +565,141 @@ function ObjectiveEditor({ objectives, onChange }) {
 // ═══════════════════════════════════════════
 //  SINGLE GAME DETAIL (Match Log)
 // ═══════════════════════════════════════════
-function SingleGameDetail({ g, gameNo, onUpdateStats, onUpdateObjectives, playerPhotos={}, rivalName }) {
+// ═══════════════════════════════════════════
+//  EDIT GAME MODAL — แก้ไข hero draft / สกอร์ / เวลา / ชื่อผู้เล่น / ผูกวิดีโอ
+//  ย้อนหลังจากหน้า Match Log (ต่างจาก UPDATE_STATS ที่แก้ได้แค่ K/D/A)
+// ═══════════════════════════════════════════
+function EditGameModal({ game, roster, videos=[], onSave, onClose }) {
+  const [ourPicks, setOurPicks] = useState(() =>
+    (game.ourPicks && game.ourPicks.length ? game.ourPicks : ROLES_PICK.map(r=>({role:r,hero:null,player:""})))
+      .map(p=>({...p})));
+  const [enemyPicks, setEnemyPicks] = useState(() =>
+    (game.enemyPicks && game.enemyPicks.length ? game.enemyPicks : ROLES_PICK.map(r=>({role:r,hero:null})))
+      .map(p=>({...p})));
+  const [result,     setResult]     = useState(game.result || "WIN");
+  const [ourScore,   setOurScore]   = useState(game.ourScore ?? "");
+  const [enemyScore, setEnemyScore] = useState(game.enemyScore ?? "");
+  const [duration,   setDuration]   = useState(game.duration || "");
+  const [videoId,    setVideoId]    = useState(game.videoId || "");
+
+  const setOurHero   = (i,name) => setOurPicks(prev => prev.map((p,idx)=> idx===i ? {...p, hero: name?{name}:null} : p));
+  const setOurPlayer = (i,name) => setOurPicks(prev => prev.map((p,idx)=> idx===i ? {...p, player:name} : p));
+  const setEnemyHero = (i,name) => setEnemyPicks(prev => prev.map((p,idx)=> idx===i ? {...p, hero: name?{name}:null} : p));
+
+  function save() {
+    onSave({
+      ourPicks, enemyPicks, result,
+      ourScore: ourScore===""?0:Number(ourScore)||0,
+      enemyScore: enemyScore===""?0:Number(enemyScore)||0,
+      duration: normalizeDuration(duration),
+      videoId: videoId || null,
+    });
+    onClose();
+  }
+
+  const selectStyle = {background:C.bgCard,border:`1px solid ${C.border}`,color:C.textMain,
+    borderRadius:6,padding:"5px 6px",fontSize:11,outline:"none"};
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",zIndex:500,
+      display:"flex",alignItems:"center",justifyContent:"center",padding:16}}
+      onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()}
+        style={{background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:16,
+          padding:24,width:680,maxWidth:"100%",maxHeight:"85vh",overflowY:"auto"}}>
+        <div style={{fontWeight:800,fontSize:16,marginBottom:16,color:C.primaryLight}}>✏️ แก้ไขข้อมูลเกม</div>
+
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:16,marginBottom:16}}>
+          <div>
+            <div style={{fontWeight:700,fontSize:12,color:C.win,marginBottom:8}}>🛡️ ทีมเรา (Hero + ผู้เล่น)</div>
+            {ourPicks.map((p,i)=>(
+              <div key={i} style={{display:"flex",gap:6,marginBottom:6,alignItems:"center"}}>
+                <span style={{fontSize:10,color:C.textMuted,width:48,flexShrink:0}}>{p.role}</span>
+                <select value={p.hero?.name||""} onChange={e=>setOurHero(i,e.target.value)} style={{...selectStyle,flex:1}}>
+                  <option value="">— hero —</option>
+                  {HERO_DATA.map(h=><option key={h.name} value={h.name}>{h.name}</option>)}
+                </select>
+                <select value={p.player||""} onChange={e=>setOurPlayer(i,e.target.value)} style={{...selectStyle,width:96}}>
+                  <option value="">— ผู้เล่น —</option>
+                  {roster.map(r=><option key={r} value={r}>{r}</option>)}
+                </select>
+              </div>
+            ))}
+          </div>
+          <div>
+            <div style={{fontWeight:700,fontSize:12,color:C.lose,marginBottom:8}}>⚔️ คู่แข่ง (Hero)</div>
+            {enemyPicks.map((p,i)=>(
+              <div key={i} style={{display:"flex",gap:6,marginBottom:6,alignItems:"center"}}>
+                <span style={{fontSize:10,color:C.textMuted,width:48,flexShrink:0}}>{p.role}</span>
+                <select value={p.hero?.name||""} onChange={e=>setEnemyHero(i,e.target.value)} style={{...selectStyle,flex:1}}>
+                  <option value="">— hero —</option>
+                  {HERO_DATA.map(h=><option key={h.name} value={h.name}>{h.name}</option>)}
+                </select>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:16}}>
+          <div>
+            <div style={{fontSize:10,color:C.textMuted,marginBottom:4}}>ผล</div>
+            <select value={result} onChange={e=>setResult(e.target.value)}
+              style={{...selectStyle,color:result==="WIN"?C.win:C.lose,fontWeight:700,padding:"7px 10px",fontSize:12}}>
+              <option>WIN</option><option>LOSE</option>
+            </select>
+          </div>
+          <div>
+            <div style={{fontSize:10,color:C.textMuted,marginBottom:4}}>คิลเรา</div>
+            <input type="number" value={ourScore} onChange={e=>setOurScore(e.target.value)}
+              style={{...selectStyle,width:70,padding:"7px 10px",fontSize:12}}/>
+          </div>
+          <div>
+            <div style={{fontSize:10,color:C.textMuted,marginBottom:4}}>คิลศัตรู</div>
+            <input type="number" value={enemyScore} onChange={e=>setEnemyScore(e.target.value)}
+              style={{...selectStyle,width:70,padding:"7px 10px",fontSize:12}}/>
+          </div>
+          <div>
+            <div style={{fontSize:10,color:C.textMuted,marginBottom:4}}>เวลา (นาที.วินาที)</div>
+            <input type="text" inputMode="decimal" value={duration}
+              onChange={e=>setDuration(e.target.value)}
+              onBlur={e=>setDuration(normalizeDuration(e.target.value))}
+              placeholder="09.45"
+              style={{...selectStyle,width:90,padding:"7px 10px",fontSize:12}}/>
+          </div>
+        </div>
+
+        <div style={{marginBottom:20}}>
+          <div style={{fontSize:10,color:C.textMuted,marginBottom:4}}>🎬 ผูกกับวิดีโอ (ไม่บังคับ)</div>
+          <select value={videoId} onChange={e=>setVideoId(e.target.value)}
+            style={{...selectStyle,width:"100%",boxSizing:"border-box",padding:"8px 10px",fontSize:12}}>
+            <option value="">— ไม่ผูกวิดีโอ —</option>
+            {videos.map(v=><option key={v.id} value={v.id}>{v.title||v.url}</option>)}
+          </select>
+        </div>
+
+        <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+          <button onClick={onClose} style={{background:"transparent",border:`1px solid ${C.border}`,
+            color:C.textMuted,borderRadius:8,padding:"9px 18px",cursor:"pointer",fontWeight:700,fontSize:13}}>
+            ยกเลิก
+          </button>
+          <button onClick={save} style={{background:C.primary,color:"#fff",border:"none",borderRadius:8,
+            padding:"9px 22px",cursor:"pointer",fontWeight:700,fontSize:13}}>
+            💾 บันทึก
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SingleGameDetail({ g, gameNo, onUpdateStats, onUpdateObjectives, onUpdateGameFull, onJumpToVideo, playerPhotos={}, rivalName, roster=[], videos=[] }) {
   const [showStats, setShowStats] = useState(false);
   const [gameStats, setGameStats] = useState(g.gameStats || { our:{}, enemy:{} });
   const [saved, setSaved] = useState(false);
   const [showObj, setShowObj] = useState(false);
   const [objectives, setObjectives] = useState(g.objectives || OBJ_DEFAULT);
   const [objSaved, setObjSaved] = useState(false);
+  const [editingGame, setEditingGame] = useState(false);
 
   function handleSaveObjectives() {
     onUpdateObjectives && onUpdateObjectives(gameNo - 1, objectives);
@@ -591,7 +729,21 @@ function SingleGameDetail({ g, gameNo, onUpdateStats, onUpdateObjectives, player
             {g.ourSide==="blue"?"🔵 Blue":"🔴 Red"} Side
           </span>
         )}
-        <span style={{fontSize:12,color:C.textMuted,marginLeft:"auto"}}>
+        <div style={{display:"flex",gap:6,marginLeft:"auto"}}>
+          {g.videoId && videos.some(v=>v.id===g.videoId) && (
+            <button onClick={()=>onJumpToVideo && onJumpToVideo(g.videoId)}
+              style={{background:"transparent",border:`1px solid ${C.border}`,color:C.primaryLight,
+                borderRadius:7,padding:"3px 10px",cursor:"pointer",fontSize:11,fontWeight:700}}>
+              🎬 ดูวิดีโอ
+            </button>
+          )}
+          <button onClick={()=>setEditingGame(true)}
+            style={{background:"transparent",border:`1px solid ${C.border}`,color:C.textMuted,
+              borderRadius:7,padding:"3px 10px",cursor:"pointer",fontSize:11,fontWeight:700}}>
+            ✏️ แก้ไข
+          </button>
+        </div>
+        <span style={{fontSize:12,color:C.textMuted,width:"100%"}}>
           <span style={{color:C.win,fontWeight:700}}>{g.ourScore||0}</span>
           <span style={{color:C.textMuted}}> : </span>
           <span style={{color:C.lose,fontWeight:700}}>{g.enemyScore||0}</span>
@@ -599,6 +751,16 @@ function SingleGameDetail({ g, gameNo, onUpdateStats, onUpdateObjectives, player
           {g.duration && <span style={{marginLeft:8,color:C.textMuted}}>⏱ {formatDurationDisplay(g.duration)}</span>}
         </span>
       </div>
+
+      {editingGame && (
+        <EditGameModal
+          game={g}
+          roster={roster}
+          videos={videos}
+          onSave={updates => onUpdateGameFull && onUpdateGameFull(gameNo - 1, updates)}
+          onClose={()=>setEditingGame(false)}
+        />
+      )}
 
       {/* Bans */}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
@@ -821,7 +983,7 @@ function SingleGameDetail({ g, gameNo, onUpdateStats, onUpdateObjectives, player
 // ═══════════════════════════════════════════
 //  MATCH CARD (Match Log page)
 // ═══════════════════════════════════════════
-function MatchCardWithStats({ m, onUpdateStats, onUpdateObjectives, playerPhotos={}, onDelete, onEditMeta }) {
+function MatchCardWithStats({ m, onUpdateStats, onUpdateObjectives, onUpdateGameFull, onJumpToVideo, playerPhotos={}, onDelete, onEditMeta, roster=[], videos=[] }) {
   const [open, setOpen] = useState(false);
   const isBO  = Array.isArray(m.games) && m.games.length > 0;
   const wins  = isBO ? m.games.filter(g=>g.result==="WIN").length : (m.result==="WIN"?1:0);
@@ -835,6 +997,7 @@ function MatchCardWithStats({ m, onUpdateStats, onUpdateObjectives, playerPhotos
   const [showObj,   setShowObj]   = useState(false);
   const [objectives,setObjectives]= useState(m.objectives || OBJ_DEFAULT);
   const [objSaved,  setObjSaved]  = useState(false);
+  const [editingGame,setEditingGame] = useState(false);
 
   function handleSaveObjectives() {
     onUpdateObjectives && onUpdateObjectives(m.id, null, objectives);
@@ -998,7 +1161,10 @@ function MatchCardWithStats({ m, onUpdateStats, onUpdateObjectives, playerPhotos
                   key={i} g={g} gameNo={i+1}
                   onUpdateStats={(gameIdx, gs) => onUpdateStats(m.id, gameIdx, gs)}
                   onUpdateObjectives={(gameIdx, obj) => onUpdateObjectives(m.id, gameIdx, obj)}
+                  onUpdateGameFull={(gameIdx, updates) => onUpdateGameFull && onUpdateGameFull(m.id, gameIdx, updates)}
+                  onJumpToVideo={onJumpToVideo}
                   playerPhotos={playerPhotos} rivalName={m.rivalName}
+                  roster={roster} videos={videos}
                 />
               ))}
             </div>
@@ -1087,7 +1253,28 @@ function MatchCardWithStats({ m, onUpdateStats, onUpdateObjectives, playerPhotos
                     {objSaved?"✅ บันทึกแล้ว!":"💾 บันทึก Objective"}
                   </button>
                 )}
+                {m.videoId && videos.some(v=>v.id===m.videoId) && (
+                  <button onClick={()=>onJumpToVideo && onJumpToVideo(m.videoId)}
+                    style={{background:"transparent",border:`1px solid ${C.border}`,color:C.primaryLight,
+                      borderRadius:7,padding:"4px 12px",cursor:"pointer",fontSize:11,fontWeight:700}}>
+                    🎬 ดูวิดีโอ
+                  </button>
+                )}
+                <button onClick={()=>setEditingGame(true)}
+                  style={{background:"transparent",border:`1px solid ${C.border}`,color:C.textMuted,
+                    borderRadius:7,padding:"4px 12px",cursor:"pointer",fontSize:11,fontWeight:700}}>
+                  ✏️ แก้ไขข้อมูลเกม
+                </button>
               </div>
+              {editingGame && (
+                <EditGameModal
+                  game={m}
+                  roster={roster}
+                  videos={videos}
+                  onSave={updates => onUpdateGameFull && onUpdateGameFull(m.id, null, updates)}
+                  onClose={()=>setEditingGame(false)}
+                />
+              )}
               {showObj && <ObjectiveEditor objectives={objectives} onChange={setObjectives}/>}
               {showStats && (
                 <UnifiedStatsEditor
@@ -1119,6 +1306,7 @@ function PatchMetaCard({ patchInfo, heroTiers, onSavePatch, onSetTier }) {
   const [notes,   setNotes]   = useState(patchInfo?.notes   || "");
   const [showTiers, setShowTiers] = useState(false);
   const [search, setSearch] = useState("");
+  const [expanded, setExpanded] = useState(false);
 
   function save() {
     onSavePatch({ version: version.trim(), notes: notes.trim() });
@@ -1128,6 +1316,11 @@ function PatchMetaCard({ patchInfo, heroTiers, onSavePatch, onSetTier }) {
   const filteredHeroes = HERO_DATA.filter(h =>
     h.name.toLowerCase().includes(search.toLowerCase())
   );
+
+  const NOTES_PREVIEW_LEN = 220; // ยาวกว่านี้ค่อยตัดแล้วมีปุ่ม "ดูเพิ่มเติม"
+  const notesText = patchInfo?.notes || "";
+  const isLong = notesText.length > NOTES_PREVIEW_LEN;
+  const displayedNotes = (!expanded && isLong) ? notesText.slice(0, NOTES_PREVIEW_LEN) + "..." : notesText;
 
   return (
     <div style={{background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:14,padding:18,marginBottom:16}}>
@@ -1143,9 +1336,18 @@ function PatchMetaCard({ patchInfo, heroTiers, onSavePatch, onSetTier }) {
             )}
           </div>
           {!editing ? (
-            <div style={{fontSize:12,color:C.textMuted,lineHeight:1.6,whiteSpace:"pre-wrap"}}>
-              {patchInfo?.notes || "ยังไม่ได้ใส่โน้ต patch — กด แก้ไข เพื่อบันทึกความเปลี่ยนแปลงของ patch นี้"}
-            </div>
+            <>
+              <div style={{fontSize:12,color:C.textMuted,lineHeight:1.6,whiteSpace:"pre-wrap"}}>
+                {displayedNotes || "ยังไม่ได้ใส่โน้ต patch — กด แก้ไข เพื่อบันทึกความเปลี่ยนแปลงของ patch นี้"}
+              </div>
+              {isLong && (
+                <button onClick={()=>setExpanded(v=>!v)}
+                  style={{background:"transparent",border:"none",color:C.primaryLight,
+                    cursor:"pointer",fontSize:11,fontWeight:700,padding:"6px 0 0",textDecoration:"underline"}}>
+                  {expanded ? "▲ ย่อกลับ" : "▼ ดูเพิ่มเติม (โน้ตยาว)"}
+                </button>
+              )}
+            </>
           ) : (
             <div style={{display:"flex",flexDirection:"column",gap:8,marginTop:6}}>
               <input value={version} onChange={e=>setVersion(e.target.value)}
@@ -5770,11 +5972,22 @@ function TimestampedNote({ note, onSeek }) {
   );
 }
 
-function VideoCard({ v, onDelete, onEdit }) {
+function VideoCard({ v, onDelete, onEdit, forceOpen, onForceOpenHandled }) {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editData, setEditData] = useState({...v});
   const iframeRef = useRef(null);
+  const cardRef = useRef(null);
+
+  // ── ถ้าถูกเปิดมาจากปุ่ม "ดูวิดีโอ" ใน Match Log ให้ขยายอัตโนมัติ + เลื่อนจอมาหา ──
+  useEffect(() => {
+    if (forceOpen) {
+      setOpen(true);
+      cardRef.current?.scrollIntoView({ behavior:"smooth", block:"center" });
+      onForceOpenHandled && onForceOpenHandled();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [forceOpen]);
 
   function saveEdit() {
     onEdit(editData); setEditing(false);
@@ -5802,7 +6015,7 @@ function VideoCard({ v, onDelete, onEdit }) {
     : null;
 
   return (
-    <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:14,
+    <div ref={cardRef} style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:14,
       overflow:"hidden",borderLeft:`4px solid ${C.primary}`}}>
       {/* header */}
       <div onClick={()=>setOpen(p=>!p)}
@@ -5917,12 +6130,20 @@ function VideoCard({ v, onDelete, onEdit }) {
   );
 }
 
-function VideoLibrary({ videos=[], onAddVideo, onUpdateVideo, onDeleteVideo }) {
+function VideoLibrary({ videos=[], onAddVideo, onUpdateVideo, onDeleteVideo, focusVideoId, onClearFocusVideo }) {
   const [showAdd,     setShowAdd]     = useState(false);
   const [filterTag,   setFilterTag]   = useState("all");
   const [filterRival, setFilterRival] = useState("");
   const [search,      setSearch]      = useState("");
   const fileInputRef  = useRef(null);
+
+  // ── ถ้ามาจากปุ่ม "ดูวิดีโอ" ใน Match Log ให้ล้าง filter ทั้งหมด
+  //    กันไม่ให้วิดีโอที่ผูกไว้โดน filter บังจนหาไม่เจอ ──
+  useEffect(() => {
+    if (focusVideoId) {
+      setFilterTag("all"); setFilterRival(""); setSearch("");
+    }
+  }, [focusVideoId]);
 
   const [form, setForm] = useState({
     title:"", url:"", rival:"", date:"", tags:[], note:"", type:"link",
@@ -6146,6 +6367,8 @@ function VideoLibrary({ videos=[], onAddVideo, onUpdateVideo, onDeleteVideo }) {
               <VideoCard key={v.id} v={v}
                 onDelete={()=>onDeleteVideo && onDeleteVideo(v.id)}
                 onEdit={updated=>onUpdateVideo && onUpdateVideo({id:v.id,...updated})}
+                forceOpen={v.id===focusVideoId}
+                onForceOpenHandled={onClearFocusVideo}
               />
             ))}
           </div>
@@ -6261,6 +6484,22 @@ function appReducer(state, action) {
           return { ...m, games };
         }
         return { ...m, objectives };
+      });
+      return { ...state, matches };
+    }
+
+    // แก้ไขข้อมูลเกมย้อนหลังจากหน้า Match Log — hero draft, สกอร์, เวลา,
+    // ชื่อผู้เล่น, และการผูกวิดีโอ (ไม่ใช่แค่ stats เหมือน UPDATE_STATS เดิม)
+    case "UPDATE_GAME_FULL": {
+      const { matchId, gameIdx, updates } = action.payload;
+      const matches = state.matches.map(m => {
+        if (m.id !== matchId) return m;
+        if (gameIdx != null && Array.isArray(m.games)) {
+          const games = [...m.games];
+          games[gameIdx] = { ...games[gameIdx], ...updates };
+          return { ...m, games };
+        }
+        return { ...m, ...updates };
       });
       return { ...state, matches };
     }
@@ -6431,12 +6670,15 @@ function initUIState() {
     newName:        "",
     newEnemyName:   "",
     scoutView:      null,   // null | "log" | "new"
+    focusVideoId:   null,   // ใช้ตอนกด "ดูวิดีโอ" จาก Match Log ให้ไปเปิดคลิปที่ผูกไว้อัตโนมัติ
   };
 }
 
 function uiReducer(state, action) {
   switch (action.type) {
     case "SET_PAGE":            return { ...state, page: action.payload, selRival: null };
+    case "GOTO_VIDEO":          return { ...state, page: "video", focusVideoId: action.payload, selRival: null };
+    case "CLEAR_FOCUS_VIDEO":   return { ...state, focusVideoId: null };
     case "SET_SEL_RIVAL":       return { ...state, selRival: action.payload, rivalView: "history", scoutView: null };
     case "SET_RIVAL_VIEW":      return { ...state, rivalView: action.payload };
     case "SET_SCOUT_VIEW":      return { ...state, scoutView: action.payload };
@@ -7472,6 +7714,15 @@ export default function RovApp() {
     dispatchApp({ type:"UPDATE_OBJECTIVES", payload:{ matchId, gameIdx, objectives } });
   }, []);
 
+  const handleUpdateGameFull = useCallback((matchId, gameIdx, updates) => {
+    dispatchApp({ type:"UPDATE_GAME_FULL", payload:{ matchId, gameIdx, updates } });
+    toast("แก้ไขข้อมูลเกมสำเร็จ ✅", "success");
+  }, [toast]);
+
+  const handleJumpToVideo = useCallback((videoId) => {
+    dispatchUI({ type:"GOTO_VIDEO", payload: videoId });
+  }, []);
+
   const handleLinkPlayer = useCallback(async (playerName) => {
     try {
       const res = await fetch("/api/user/player-link", {
@@ -7567,19 +7818,22 @@ export default function RovApp() {
   // ── Objective control aggregate ──
   const gamesWithObj = allGames.filter(g=>g.objectives);
   const objSummary = (() => {
-    let fbOur=0, fbEnemy=0, ftOur=0, ftEnemy=0, dragOur=0, dragEnemy=0, turOur=0, turEnemy=0;
-    let winsWithFT=0, gamesWithFT=0, winsWithFirstDrag=0, gamesWithDragEdge=0;
+    let fbOur=0, fbEnemy=0, ftOur=0, ftEnemy=0, turOur=0, turEnemy=0;
+    let abyOur=0, abyEnemy=0, darkOur=0, darkEnemy=0, gsOur=0, gsEnemy=0;
+    let winsWithFT=0, gamesWithFT=0;
+    let winsWithGSEdge=0, gamesWithGSEdge=0;
     gamesWithObj.forEach(g=>{
       const o=g.objectives;
       if(o.firstBlood==="our") fbOur++; else if(o.firstBlood==="enemy") fbEnemy++;
       if(o.firstTower==="our") { ftOur++; gamesWithFT++; if(g.result==="WIN") winsWithFT++; }
       else if(o.firstTower==="enemy") { ftEnemy++; gamesWithFT++; }
-      dragOur   += Number(o.ourDragons||0);
-      dragEnemy += Number(o.enemyDragons||0);
-      turOur    += Number(o.ourTurrets||0);
-      turEnemy  += Number(o.enemyTurrets||0);
-      if(Number(o.ourDragons||0) > Number(o.enemyDragons||0)) {
-        gamesWithDragEdge++; if(g.result==="WIN") winsWithFirstDrag++;
+      abyOur   += Number(o.ourAbyssal||0);   abyEnemy   += Number(o.enemyAbyssal||0);
+      darkOur  += Number(o.ourDark||0);      darkEnemy  += Number(o.enemyDark||0);
+      gsOur    += Number(o.ourGodslayer||0); gsEnemy    += Number(o.enemyGodslayer||0);
+      turOur   += Number(o.ourTurrets||0);   turEnemy   += Number(o.enemyTurrets||0);
+      // Godslayer มักเป็นตัวชี้ผลเกมช่วงท้าย เลยใช้เป็น "objective edge" หลักแทน dragon รวมแบบเดิม
+      if(Number(o.ourGodslayer||0) > Number(o.enemyGodslayer||0)) {
+        gamesWithGSEdge++; if(g.result==="WIN") winsWithGSEdge++;
       }
     });
     return {
@@ -7587,9 +7841,9 @@ export default function RovApp() {
       fbOur, fbEnemy,
       ftOur, ftEnemy,
       ftWinRate: gamesWithFT ? Math.round(winsWithFT/gamesWithFT*100) : null,
-      dragOur, dragEnemy,
+      abyOur, abyEnemy, darkOur, darkEnemy, gsOur, gsEnemy,
       turOur, turEnemy,
-      dragEdgeWinRate: gamesWithDragEdge ? Math.round(winsWithFirstDrag/gamesWithDragEdge*100) : null,
+      gsEdgeWinRate: gamesWithGSEdge ? Math.round(winsWithGSEdge/gamesWithGSEdge*100) : null,
     };
   })();
 
@@ -7940,7 +8194,9 @@ export default function RovApp() {
                     {[
                       {icon:"🩸",label:"First Blood",our:objSummary.fbOur,enemy:objSummary.fbEnemy},
                       {icon:"🏯",label:"First Tower",our:objSummary.ftOur,enemy:objSummary.ftEnemy},
-                      {icon:"🐉",label:"Dragon รวม",our:objSummary.dragOur,enemy:objSummary.dragEnemy},
+                      {icon:"🐉",label:"Abyssal",our:objSummary.abyOur,enemy:objSummary.abyEnemy},
+                      {icon:"⚫",label:"Dark",our:objSummary.darkOur,enemy:objSummary.darkEnemy},
+                      {icon:"👑",label:"Godslayer",our:objSummary.gsOur,enemy:objSummary.gsEnemy},
                       {icon:"🏰",label:"Turret พัง",our:objSummary.turOur,enemy:objSummary.turEnemy},
                     ].map(c=>(
                       <div key={c.label} style={{background:C.bgCard,borderRadius:10,padding:"12px 10px",textAlign:"center"}}>
@@ -7960,10 +8216,10 @@ export default function RovApp() {
                         💡 เกมที่เราได้ First Tower ก่อน → ชนะ <b>{objSummary.ftWinRate}%</b>
                       </div>
                     )}
-                    {objSummary.dragEdgeWinRate!==null && (
+                    {objSummary.gsEdgeWinRate!==null && (
                       <div style={{background:C.primary+"12",borderRadius:8,padding:"8px 14px",fontSize:12,
                         color:C.primaryLight,borderLeft:`3px solid ${C.primary}`}}>
-                        💡 เกมที่เราคุม Dragon ได้มากกว่า → ชนะ <b>{objSummary.dragEdgeWinRate}%</b>
+                        💡 เกมที่เราคุม Godslayer ได้มากกว่า → ชนะ <b>{objSummary.gsEdgeWinRate}%</b>
                       </div>
                     )}
                   </div>
@@ -8144,7 +8400,7 @@ export default function RovApp() {
                             : `ยังไม่มีแมตช์ประเภท "${tabs.find(t=>t.id===matchCatFilter)?.label}"`}
                         </div>
                       :filtered.map(m=>(
-                          <MatchCardWithStats key={m.id} m={m} onUpdateStats={handleUpdateStats} onUpdateObjectives={handleUpdateObjectives} playerPhotos={app.playerPhotos} onDelete={id=>dispatchApp({type:"DELETE_MATCH",payload:id})} onEditMeta={handleEditMatchMeta}/>
+                          <MatchCardWithStats key={m.id} m={m} onUpdateStats={handleUpdateStats} onUpdateObjectives={handleUpdateObjectives} onUpdateGameFull={handleUpdateGameFull} onJumpToVideo={handleJumpToVideo} roster={roster} videos={app.videos||[]} playerPhotos={app.playerPhotos} onDelete={id=>dispatchApp({type:"DELETE_MATCH",payload:id})} onEditMeta={handleEditMatchMeta}/>
                         ))
                     }
                   </>
@@ -8400,7 +8656,7 @@ export default function RovApp() {
                         />
                       )}
                       {rivalView==="history" && rm.map(m=>(
-                        <MatchCardWithStats key={m.id} m={m} onUpdateStats={handleUpdateStats} onUpdateObjectives={handleUpdateObjectives} playerPhotos={app.playerPhotos} onDelete={id=>dispatchApp({type:"DELETE_MATCH",payload:id})} onEditMeta={handleEditMatchMeta}/>
+                        <MatchCardWithStats key={m.id} m={m} onUpdateStats={handleUpdateStats} onUpdateObjectives={handleUpdateObjectives} onUpdateGameFull={handleUpdateGameFull} onJumpToVideo={handleJumpToVideo} roster={roster} videos={app.videos||[]} playerPhotos={app.playerPhotos} onDelete={id=>dispatchApp({type:"DELETE_MATCH",payload:id})} onEditMeta={handleEditMatchMeta}/>
                       ))}
                       {rivalView==="overview" && (
                         <div>
@@ -8487,6 +8743,8 @@ export default function RovApp() {
               onAddVideo={v=>dispatchApp({type:"ADD_VIDEO",payload:v})}
               onUpdateVideo={v=>dispatchApp({type:"UPDATE_VIDEO",payload:v})}
               onDeleteVideo={id=>dispatchApp({type:"DELETE_VIDEO",payload:id})}
+              focusVideoId={ui.focusVideoId}
+              onClearFocusVideo={()=>dispatchUI({type:"CLEAR_FOCUS_VIDEO"})}
             />
           )}
 
