@@ -328,37 +328,167 @@ function PlayerAvatar({ name, photoUrl, size=44, team="our", style={} }) {
   );
 }
 
+// ═══════════════════════════════════════════
+//  IMAGE CROP MODAL — ลาก/ซูมปรับตำแหน่งรูปก่อนอัปโหลดจริง
+//  (ใช้กับไฟล์ที่เลือกจากเครื่องเท่านั้น — รูปจาก URL ภายนอกไม่รองรับ
+//  เพราะ canvas จะถูกบล็อกด้วย CORS จนดึงข้อมูลรูปออกมา crop ไม่ได้)
+// ═══════════════════════════════════════════
+function ImageCropModal({ file, onConfirm, onCancel, round=false, title="ปรับตำแหน่ง/ขนาดรูป" }) {
+  const [imgUrl, setImgUrl] = useState(null);
+  const [natural, setNatural] = useState({ w:0, h:0 });
+  const [zoom, setZoom] = useState(1);
+  const [pos, setPos] = useState({ x:0, y:0 });
+  const [saving, setSaving] = useState(false);
+  const dragRef = useRef(null);
+  const imgRef = useRef(null);
+  const CONTAINER = 280;
+
+  useEffect(() => {
+    const url = URL.createObjectURL(file);
+    setImgUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+
+  function handleImgLoad(e) {
+    setNatural({ w:e.target.naturalWidth, h:e.target.naturalHeight });
+    setZoom(1); setPos({x:0,y:0});
+  }
+
+  const baseScale = natural.w && natural.h ? Math.max(CONTAINER/natural.w, CONTAINER/natural.h) : 1;
+  const scale = baseScale * zoom;
+  const dispW = natural.w * scale, dispH = natural.h * scale;
+
+  function clamp(p) {
+    // กันลากรูปหลุดจนเห็นพื้นที่ว่างในกรอบ
+    const maxX = Math.max(0, (dispW - CONTAINER) / 2);
+    const maxY = Math.max(0, (dispH - CONTAINER) / 2);
+    return { x: Math.min(maxX, Math.max(-maxX, p.x)), y: Math.min(maxY, Math.max(-maxY, p.y)) };
+  }
+
+  function getPoint(e) {
+    const t = e.touches ? e.touches[0] : e;
+    return { x:t.clientX, y:t.clientY };
+  }
+  function onPointerDown(e) {
+    const p = getPoint(e);
+    dragRef.current = { startX:p.x, startY:p.y, origX:pos.x, origY:pos.y };
+  }
+  function onPointerMove(e) {
+    if (!dragRef.current) return;
+    const p = getPoint(e);
+    const dx = p.x - dragRef.current.startX, dy = p.y - dragRef.current.startY;
+    setPos(clamp({ x: dragRef.current.origX + dx, y: dragRef.current.origY + dy }));
+  }
+  function onPointerUp() { dragRef.current = null; }
+
+  function confirm() {
+    setSaving(true);
+    const OUT = 480;
+    const canvas = document.createElement("canvas");
+    canvas.width = OUT; canvas.height = OUT;
+    const ctx = canvas.getContext("2d");
+    const drawScale = OUT / CONTAINER;
+    const imgLeft = (CONTAINER - dispW)/2 + pos.x;
+    const imgTop  = (CONTAINER - dispH)/2 + pos.y;
+    ctx.drawImage(imgRef.current, 0,0,natural.w,natural.h,
+      imgLeft*drawScale, imgTop*drawScale, dispW*drawScale, dispH*drawScale);
+    canvas.toBlob(blob => {
+      setSaving(false);
+      if (blob) onConfirm(blob); else onCancel();
+    }, "image/jpeg", 0.92);
+  }
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.8)",zIndex:600,
+      display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+      <div style={{background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:16,padding:20,
+        width:360,maxWidth:"100%"}}>
+        <div style={{fontWeight:800,fontSize:14,marginBottom:12,color:C.primaryLight}}>{title}</div>
+        <div
+          onMouseDown={onPointerDown} onMouseMove={onPointerMove} onMouseUp={onPointerUp} onMouseLeave={onPointerUp}
+          onTouchStart={onPointerDown} onTouchMove={onPointerMove} onTouchEnd={onPointerUp}
+          style={{width:CONTAINER,height:CONTAINER,margin:"0 auto",position:"relative",overflow:"hidden",
+            borderRadius:round?"50%":12,background:"#000",cursor:dragRef.current?"grabbing":"grab",
+            touchAction:"none",border:`2px solid ${C.border}`}}>
+          {imgUrl && (
+            <img ref={imgRef} src={imgUrl} onLoad={handleImgLoad} draggable={false} alt=""
+              style={{
+                position:"absolute",
+                left: (CONTAINER - dispW)/2 + pos.x,
+                top:  (CONTAINER - dispH)/2 + pos.y,
+                width: dispW, height: dispH,
+                userSelect:"none", pointerEvents:"none",
+              }}/>
+          )}
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:10,marginTop:14}}>
+          <span style={{fontSize:16}}>🔍</span>
+          <input type="range" min="1" max="3" step="0.02" value={zoom}
+            onChange={e=>setZoom(Number(e.target.value))} style={{flex:1}}/>
+        </div>
+        <div style={{fontSize:11,color:C.textMuted,textAlign:"center",marginTop:6}}>
+          ลากรูปเพื่อขยับตำแหน่ง · เลื่อนแถบเพื่อซูมเข้า-ออก
+        </div>
+        <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:16}}>
+          <button onClick={onCancel} disabled={saving}
+            style={{background:"transparent",border:`1px solid ${C.border}`,color:C.textMuted,
+              borderRadius:8,padding:"9px 18px",cursor:"pointer",fontWeight:700,fontSize:13}}>
+            ยกเลิก
+          </button>
+          <button onClick={confirm} disabled={saving || !imgUrl}
+            style={{background:C.primary,color:"#fff",border:"none",borderRadius:8,
+              padding:"9px 22px",cursor:"pointer",fontWeight:700,fontSize:13,opacity:saving?0.6:1}}>
+            {saving?"กำลังตัด...":"✅ ใช้รูปนี้"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PhotoPicker({ value, onChange, size=72, team="our" }) {
   const [showUrlInput, setShowUrlInput] = useState(false);
   const [urlVal, setUrlVal] = useState(value && value.startsWith("http") ? value : "");
   const fileRef = useRef(null);
 
   const [uploading, setUploading] = useState(false);
+  const [cropFile, setCropFile] = useState(null);
 
-  async function handleFile(e) {
+  function handleFile(e) {
     const file = e.target.files?.[0];
     if (!file) return;
+    setCropFile(file); // เปิดหน้าต่างปรับตำแหน่ง/ซูมก่อน แล้วค่อยอัปโหลดตอนกดยืนยัน
+  }
+
+  async function handleCropConfirm(blob) {
+    setCropFile(null);
     setUploading(true);
     try {
-      const compressed = await compressImage(file);
-      if (compressed.size > 1.5*1024*1024) {
+      if (blob.size > 1.5*1024*1024) {
         alert("ไฟล์รูปใหญ่เกินไป (จำกัด 1.5MB) — กรุณาเลือกรูปที่เล็กกว่านี้");
         return;
       }
-      const blob = await upload(compressed.name || file.name, compressed, { access: "public", handleUploadUrl: "/api/upload" });
-      onChange(blob.url);
-      if (value && value !== blob.url) deleteBlobUrls(value); // clean up the old photo
+      const compressed = await compressImage(blob);
+      const uploaded = await upload("photo.jpg", compressed, { access: "public", handleUploadUrl: "/api/upload" });
+      onChange(uploaded.url);
+      if (value && value !== uploaded.url) deleteBlobUrls(value); // clean up the old photo
     } catch (err) {
       console.error("Photo upload failed:", err);
       alert("อัพโหลดรูปไม่สำเร็จ ลองใหม่อีกครั้ง");
     } finally {
       setUploading(false);
-      e.target.value = "";
+      if (fileRef.current) fileRef.current.value = "";
     }
   }
 
   return (
     <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:6}}>
+      {cropFile && (
+        <ImageCropModal file={cropFile} round
+          onConfirm={handleCropConfirm}
+          onCancel={()=>{setCropFile(null); if(fileRef.current) fileRef.current.value="";}}
+        />
+      )}
       <div style={{position:"relative"}}>
         <PlayerAvatar name="?" photoUrl={value} size={size} team={team}/>
         {value && (
@@ -769,7 +899,7 @@ function SingleGameDetail({ g, gameNo, onUpdateStats, onUpdateObjectives, onUpda
           </span>
         )}
         <div style={{display:"flex",gap:6,marginLeft:"auto"}}>
-          {g.videoId && videos.some(v=>v.id===g.videoId) && (
+          {g.videoId && videos.some(v=>String(v.id)===String(g.videoId)) && (
             <button onClick={()=>onJumpToVideo && onJumpToVideo(g.videoId)}
               style={{background:"transparent",border:`1px solid ${C.border}`,color:C.primaryLight,
                 borderRadius:7,padding:"3px 10px",cursor:"pointer",fontSize:11,fontWeight:700}}>
@@ -1124,7 +1254,7 @@ function MatchCardWithStats({ m, onUpdateStats, onUpdateObjectives, onUpdateGame
             </span>
           )}
           {isBO && <span style={{fontSize:12,color:bc,fontWeight:700}}>{wins}W – {total-wins}L</span>}
-          {!isBO && m.videoId && videos.some(v=>v.id===m.videoId) && (
+          {!isBO && m.videoId && videos.some(v=>String(v.id)===String(m.videoId)) && (
             <button onClick={e=>{ e.stopPropagation(); onJumpToVideo && onJumpToVideo(m.videoId); }}
               title="ดูวิดีโอที่ผูกไว้กับแมตช์นี้"
               style={{background:"transparent",border:`1px solid ${C.border}`,color:C.primaryLight,
@@ -1310,7 +1440,7 @@ function MatchCardWithStats({ m, onUpdateStats, onUpdateObjectives, onUpdateGame
                     {objSaved?"✅ บันทึกแล้ว!":"💾 บันทึก Objective"}
                   </button>
                 )}
-                {m.videoId && videos.some(v=>v.id===m.videoId) && (
+                {m.videoId && videos.some(v=>String(v.id)===String(m.videoId)) && (
                   <button onClick={()=>onJumpToVideo && onJumpToVideo(m.videoId)}
                     style={{background:"transparent",border:`1px solid ${C.border}`,color:C.primaryLight,
                       borderRadius:7,padding:"4px 12px",cursor:"pointer",fontSize:11,fontWeight:700}}>
@@ -4177,30 +4307,42 @@ function LogoImg({ url, name, size=48, style={} }) {
 
 function LogoUploader({ label, currentUrl, onUpload, onRemove, size=64 }) {
   const [uploading, setUploading] = useState(false);
+  const [cropFile, setCropFile] = useState(null);
   const fileRef = useRef(null);
   const toast = useToast();
 
-  async function handleFile(e) {
+  function handleFile(e) {
     const file = e.target.files?.[0];
     if (!file) return;
+    setCropFile(file);
+  }
+
+  async function handleCropConfirm(blob) {
+    setCropFile(null);
     setUploading(true);
     try {
-      const compressed = await compressImage(file);
-      if (compressed.size > 1.5*1024*1024) {
+      if (blob.size > 1.5*1024*1024) {
         toast("ไฟล์รูปใหญ่เกินไป (จำกัด 1.5MB)", "error");
         return;
       }
-      const blob = await upload(compressed.name || file.name, compressed, { access:"public", handleUploadUrl:"/api/upload" });
-      onUpload(blob.url);
-      if (currentUrl && currentUrl !== blob.url) deleteBlobUrls(currentUrl); // clean up the old logo
+      const compressed = await compressImage(blob);
+      const uploaded = await upload("logo.jpg", compressed, { access:"public", handleUploadUrl:"/api/upload" });
+      onUpload(uploaded.url);
+      if (currentUrl && currentUrl !== uploaded.url) deleteBlobUrls(currentUrl); // clean up the old logo
       toast(`อัพโหลดโลโก้ ${label} สำเร็จ`, "success");
     } catch {
       toast("อัพโหลดไม่สำเร็จ ลองใหม่อีกครั้ง", "error");
-    } finally { setUploading(false); e.target.value=""; }
+    } finally { setUploading(false); if(fileRef.current) fileRef.current.value=""; }
   }
 
   return (
     <div style={{display:"flex",alignItems:"center",gap:12}}>
+      {cropFile && (
+        <ImageCropModal file={cropFile} title={`ปรับโลโก้ ${label}`}
+          onConfirm={handleCropConfirm}
+          onCancel={()=>{setCropFile(null); if(fileRef.current) fileRef.current.value="";}}
+        />
+      )}
       <LogoImg url={currentUrl} name={label} size={size}/>
       <div>
         <div style={{fontSize:11,color:C.textMuted,marginBottom:6,fontWeight:700}}>{label}</div>
@@ -5011,32 +5153,44 @@ function HeroImageSlot({ hero, photoUrl, onSet, onRemove, onSetRole }) {
   const displayUrl = photoUrl || webUrl;
 
   const [uploading, setUploading] = useState(false);
+  const [cropFile, setCropFile] = useState(null);
 
-  async function handleFile(e) {
+  function handleFile(e) {
     const file = e.target.files?.[0];
     if (!file) return;
+    setCropFile(file);
+  }
+
+  async function handleCropConfirm(blob) {
+    setCropFile(null);
     setUploading(true);
     try {
-      const compressed = await compressImage(file);
-      if (compressed.size > 1.5*1024*1024) {
+      if (blob.size > 1.5*1024*1024) {
         alert("ไฟล์รูปใหญ่เกินไป (จำกัด 1.5MB)");
         return;
       }
-      const blob = await upload(compressed.name || file.name, compressed, { access: "public", handleUploadUrl: "/api/upload" });
-      onSet(blob.url);
-      if (photoUrl && photoUrl !== blob.url) deleteBlobUrls(photoUrl); // clean up the old photo
+      const compressed = await compressImage(blob);
+      const uploaded = await upload("hero.jpg", compressed, { access: "public", handleUploadUrl: "/api/upload" });
+      onSet(uploaded.url);
+      if (photoUrl && photoUrl !== uploaded.url) deleteBlobUrls(photoUrl); // clean up the old photo
     } catch (err) {
       console.error("Hero photo upload failed:", err);
       alert("อัพโหลดรูปไม่สำเร็จ ลองใหม่อีกครั้ง");
     } finally {
       setUploading(false);
-      e.target.value = "";
+      if (fileRef.current) fileRef.current.value = "";
     }
   }
 
   return (
     <div style={{background:C.bgPanel,border:`1px solid ${photoUrl?C.primary+"60":C.border}`,
       borderRadius:10,padding:8,textAlign:"center"}}>
+      {cropFile && (
+        <ImageCropModal file={cropFile} title={`ปรับรูป ${hero.name}`}
+          onConfirm={handleCropConfirm}
+          onCancel={()=>{setCropFile(null); if(fileRef.current) fileRef.current.value="";}}
+        />
+      )}
       <div style={{position:"relative",width:"100%",aspectRatio:"1",borderRadius:8,
         overflow:"hidden",background:(ROLE_COLOR[hero.role]||C.primary)+"22",marginBottom:6}}>
         {displayUrl && !err ? (
@@ -6426,7 +6580,7 @@ function VideoLibrary({ videos=[], onAddVideo, onUpdateVideo, onDeleteVideo, foc
               <VideoCard key={v.id} v={v}
                 onDelete={()=>onDeleteVideo && onDeleteVideo(v.id)}
                 onEdit={updated=>onUpdateVideo && onUpdateVideo({id:v.id,...updated})}
-                forceOpen={v.id===focusVideoId}
+                forceOpen={String(v.id)===String(focusVideoId)}
                 onForceOpenHandled={onClearFocusVideo}
               />
             ))}
@@ -7812,6 +7966,7 @@ export default function RovApp() {
   const [newEnemyPlayerPhoto, setNewEnemyPlayerPhoto]  = useState(null);
   const [showAddRival,        setShowAddRival]         = useState(false);
   const [newRivalName,        setNewRivalName]         = useState("");
+  const [cropRivalLogo,       setCropRivalLogo]        = useState(null); // { name, file } — modal state for rival logo cropping
 
   const handleAddPlayer = useCallback(() => {
     const name = ui.newName.trim();
@@ -8471,6 +8626,23 @@ export default function RovApp() {
           {/* ═══ RIVALS ═══ */}
           {page==="rivals" && (
             <div>
+              {cropRivalLogo && (
+                <ImageCropModal file={cropRivalLogo.file} title={`ปรับโลโก้ ${cropRivalLogo.name}`}
+                  onConfirm={async (blob) => {
+                    const { name, file } = cropRivalLogo;
+                    setCropRivalLogo(null);
+                    try {
+                      if (blob.size > 1.5*1024*1024) { toast("ไฟล์ใหญ่เกิน 1.5MB", "error"); return; }
+                      const compressed = await compressImage(blob);
+                      const uploaded = await upload("logo.jpg", compressed, { access:"public", handleUploadUrl:"/api/upload" });
+                      dispatchApp({ type:"SET_RIVAL_LOGO", payload:{ name, url: uploaded.url } });
+                      const oldUrl = app.rivalLogos?.[name];
+                      if (oldUrl && oldUrl !== uploaded.url) deleteBlobUrls(oldUrl);
+                    } catch { toast("อัพโหลดไม่สำเร็จ", "error"); }
+                  }}
+                  onCancel={()=>setCropRivalLogo(null)}
+                />
+              )}
               {!selRival ? (
                 <>
                   <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6,flexWrap:"wrap"}}>
@@ -8592,17 +8764,10 @@ export default function RovApp() {
                                       📸 {app.rivalLogos?.[rv.name]?"เปลี่ยนโลโก้":"อัพโหลดโลโก้"}
                                       <input type="file" accept="image/*"
                                         style={{display:"none"}}
-                                        onChange={async e=>{
+                                        onChange={e=>{
                                           const file=e.target.files?.[0];
                                           if(!file) return;
-                                          try{
-                                            const compressed=await compressImage(file);
-                                            if(compressed.size>1.5*1024*1024){alert("ไฟล์ใหญ่เกิน 1.5MB");e.target.value="";return;}
-                                            const blob=await upload(file.name,compressed,{access:"public",handleUploadUrl:"/api/upload"});
-                                            dispatchApp({type:"SET_RIVAL_LOGO",payload:{name:rv.name,url:blob.url}});
-                                            const oldUrl=app.rivalLogos?.[rv.name];
-                                            if(oldUrl && oldUrl!==blob.url) deleteBlobUrls(oldUrl);
-                                          }catch{alert("อัพโหลดไม่สำเร็จ");}
+                                          setCropRivalLogo({ name: rv.name, file });
                                           e.target.value="";
                                         }}/>
                                     </label>
