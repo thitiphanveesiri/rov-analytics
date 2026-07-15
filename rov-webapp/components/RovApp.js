@@ -1044,12 +1044,15 @@ function SingleGameDetail({ g, gameNo, onUpdateStats, onUpdateObjectives, onUpda
                 role:   slot.role || "",
                 dmg:    Number(st.damage||0),
                 gold:   Number(st.gold||0),
+                kills:  Number(st.kills||0),
+                assists:Number(st.assists||0),
               };
             });
 
-            const totalDmg  = ourStats.reduce((s,p)=>s+p.dmg, 0);
-            const totalGold = ourStats.reduce((s,p)=>s+p.gold, 0);
-            const hasData   = totalDmg > 0 || totalGold > 0;
+            const totalDmg   = ourStats.reduce((s,p)=>s+p.dmg, 0);
+            const totalGold  = ourStats.reduce((s,p)=>s+p.gold, 0);
+            const teamKills  = Number(g.ourScore) || ourStats.reduce((s,p)=>s+p.kills, 0); // ใช้สกอร์ทีมที่บันทึกไว้เป็นหลัก ถ้าไม่มีค่อย fallback ไปรวมจากที่กรอกรายคน
+            const hasData    = totalDmg > 0 || totalGold > 0;
             if (!hasData) return null;
 
             return (
@@ -1069,6 +1072,8 @@ function SingleGameDetail({ g, gameNo, onUpdateStats, onUpdateObjectives, onUpda
                         <th style={{textAlign:"center",padding:"4px 6px"}}>%Dmg</th>
                         <th style={{textAlign:"center",padding:"4px 6px"}}>Gold</th>
                         <th style={{textAlign:"center",padding:"4px 6px"}}>GPM</th>
+                        <th style={{textAlign:"center",padding:"4px 6px"}}>DPG</th>
+                        <th style={{textAlign:"center",padding:"4px 6px"}}>KP%</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1076,6 +1081,8 @@ function SingleGameDetail({ g, gameNo, onUpdateStats, onUpdateObjectives, onUpda
                         const dpm      = dur ? Math.round(p.dmg/dur) : 0;
                         const gpm      = dur ? Math.round(p.gold/dur) : 0;
                         const dmgShare = totalDmg ? Math.round(p.dmg/totalDmg*100) : 0;
+                        const dpg      = p.gold ? (p.dmg/p.gold).toFixed(2) : null; // Damage per Gold — ความคุ้มค่าทองที่ได้
+                        const kp       = teamKills ? Math.round((p.kills+p.assists)/teamKills*100) : null; // Kill Participation
                         const roleCol  = ROLE_COLOR[p.role] || C.textMuted;
                         return (
                           <tr key={i} style={{borderBottom:`1px solid ${C.border}30`,
@@ -1110,6 +1117,12 @@ function SingleGameDetail({ g, gameNo, onUpdateStats, onUpdateObjectives, onUpda
                             <td style={{padding:"5px 6px",textAlign:"center",color:"#00b894",fontWeight:700}}>
                               {gpm ? gpm.toLocaleString() : "—"}
                             </td>
+                            <td style={{padding:"5px 6px",textAlign:"center",color:"#fd79a8",fontWeight:700}}>
+                              {dpg ?? "—"}
+                            </td>
+                            <td style={{padding:"5px 6px",textAlign:"center",color:kp>=60?"#e17055":C.textMain,fontWeight:700}}>
+                              {kp!=null ? `${kp}%` : "—"}
+                            </td>
                           </tr>
                         );
                       })}
@@ -1134,13 +1147,20 @@ function SingleGameDetail({ g, gameNo, onUpdateStats, onUpdateObjectives, onUpda
                           <td style={{padding:"5px 6px",textAlign:"center",fontWeight:800,color:"#00b894"}}>
                             {dur ? Math.round(totalGold/dur).toLocaleString() : "—"}
                           </td>
+                          <td style={{padding:"5px 6px",textAlign:"center",fontWeight:800,color:"#fd79a8"}}>
+                            {totalGold ? (totalDmg/totalGold).toFixed(2) : "—"}
+                          </td>
+                          <td style={{padding:"5px 6px",textAlign:"center",color:C.textMuted,fontSize:10}}>
+                            —
+                          </td>
                         </tr>
                       )}
                     </tbody>
                   </table>
                 </div>
                 <div style={{fontSize:9,color:C.textMuted,marginTop:6,textAlign:"right"}}>
-                  DPM = Damage Per Minute · GPM = Gold Per Minute · %Dmg = สัดส่วนดาเมจ
+                  DPM = Damage/นาที · GPM = Gold/นาที · %Dmg = สัดส่วนดาเมจในทีม ·
+                  DPG = Damage/ทอง 1 หน่วย (ความคุ้มค่าทอง) · KP% = (Kill+Assist ของผู้เล่น) / Kill รวมทีม
                 </div>
               </div>
             );
