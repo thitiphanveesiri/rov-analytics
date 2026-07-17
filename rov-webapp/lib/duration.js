@@ -11,14 +11,25 @@ export function normalizeDuration(input) {
   if (input === null || input === undefined || input === "") return "";
   const str = String(input).trim();
   const sep = str.includes(":") ? ":" : str.includes(".") ? "." : null;
+
   if (!sep) {
     // แค่ตัวเลขนาทีเฉยๆ ไม่มีวินาที
-    const m = str.padStart(2, "0");
+    const n = Number(str);
+    if (!Number.isFinite(n) || n < 0) return ""; // ปฏิเสธค่าติดลบ/ไม่ใช่ตัวเลข แทนที่จะปล่อยผ่านเงียบๆ
+    const m = String(Math.trunc(n)).padStart(2, "0");
     return `${m}.00`;
   }
-  const [mRaw, sRaw = ""] = str.split(sep);
-  const mm = (mRaw || "0").padStart(2, "0");
-  const ss = (sRaw || "0").padStart(2, "0").slice(0, 2);
+
+  const parts = str.split(sep);
+  if (parts.length > 2) return ""; // รูปแบบผิด เช่น "9.45.30" — ปฏิเสธแทนตัดทิ้งเงียบๆ
+
+  const [mRaw, sRaw = "0"] = parts;
+  const mNum = Number(mRaw || "0");
+  const sNum = Number(sRaw || "0");
+  if (!Number.isFinite(mNum) || !Number.isFinite(sNum) || mNum < 0 || sNum < 0 || sNum > 59) return "";
+
+  const mm = String(Math.trunc(mNum)).padStart(2, "0");
+  const ss = String(Math.trunc(sNum)).padStart(2, "0");
   return `${mm}.${ss}`;
 }
 

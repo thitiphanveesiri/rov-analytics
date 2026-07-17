@@ -42,6 +42,7 @@ const iStyle = {
 //  จะปรับตาม BANS_PER_TEAM ให้อัตโนมัติ เพราะ refactor ให้ derive จากค่านี้แล้ว
 // ═══════════════════════════════════════════════════════════════
 const BANS_PER_TEAM = 4; // TODO: เปลี่ยนเป็น 5 ตอนแพตช์ปล่อยจริงพร้อมลำดับใหม่
+const DRAFT_LS_KEY = "rov_analytics_draft_inprogress_v1"; // localStorage key สำหรับ autosave draft ที่ทำค้างไว้
 
 const DRAFT_ORDER = [
   {team:"blue",action:"ban", slot:0},{team:"red", action:"ban", slot:0},
@@ -758,8 +759,8 @@ function EditGameModal({ game, roster, videos=[], onSave, onClose }) {
   function save() {
     onSave({
       ourPicks, enemyPicks, result,
-      ourScore: ourScore===""?0:Number(ourScore)||0,
-      enemyScore: enemyScore===""?0:Number(enemyScore)||0,
+      ourScore: Math.max(0, ourScore===""?0:Number(ourScore)||0),
+      enemyScore: Math.max(0, enemyScore===""?0:Number(enemyScore)||0),
       duration: normalizeDuration(duration),
       videoId: videoId || null,
     });
@@ -819,12 +820,12 @@ function EditGameModal({ game, roster, videos=[], onSave, onClose }) {
           </div>
           <div>
             <div style={{fontSize:10,color:C.textMuted,marginBottom:4}}>คิลเรา</div>
-            <input type="number" value={ourScore} onChange={e=>setOurScore(e.target.value)}
+            <input type="number" min="0" value={ourScore} onChange={e=>setOurScore(e.target.value)}
               style={{...selectStyle,width:70,padding:"7px 10px",fontSize:12}}/>
           </div>
           <div>
             <div style={{fontSize:10,color:C.textMuted,marginBottom:4}}>คิลศัตรู</div>
-            <input type="number" value={enemyScore} onChange={e=>setEnemyScore(e.target.value)}
+            <input type="number" min="0" value={enemyScore} onChange={e=>setEnemyScore(e.target.value)}
               style={{...selectStyle,width:70,padding:"7px 10px",fontSize:12}}/>
           </div>
           <div>
@@ -1509,7 +1510,7 @@ const TIER_CONFIG = [
   {id:"B", col:"#54a0ff"}, {id:"C", col:"#8395a7"},
 ];
 
-function PatchMetaCard({ patchInfo, heroTiers, onSavePatch, onSetTier }) {
+function PatchMetaCard({ patchInfo, heroTiers, onSavePatch, onSetTier, isCoach }) {
   const [editing, setEditing] = useState(false);
   const [version, setVersion] = useState(patchInfo?.version || "");
   const [notes,   setNotes]   = useState(patchInfo?.notes   || "");
@@ -1584,11 +1585,13 @@ function PatchMetaCard({ patchInfo, heroTiers, onSavePatch, onSetTier }) {
                 cursor:"pointer",fontSize:11}}>ยกเลิก</button>
             </>
           ) : (
-            <button onClick={()=>{setVersion(patchInfo?.version||"");setNotes(patchInfo?.notes||"");setEditing(true);}}
-              style={{background:"transparent",border:`1px solid ${C.border}`,color:C.textMuted,
-                borderRadius:7,padding:"6px 12px",cursor:"pointer",fontSize:11,fontWeight:700}}>
-              ✏️ แก้ไข
-            </button>
+            isCoach && (
+              <button onClick={()=>{setVersion(patchInfo?.version||"");setNotes(patchInfo?.notes||"");setEditing(true);}}
+                style={{background:"transparent",border:`1px solid ${C.border}`,color:C.textMuted,
+                  borderRadius:7,padding:"6px 12px",cursor:"pointer",fontSize:11,fontWeight:700}}>
+                ✏️ แก้ไข
+              </button>
+            )
           )}
         </div>
       </div>
@@ -1616,8 +1619,11 @@ function PatchMetaCard({ patchInfo, heroTiers, onSavePatch, onSetTier }) {
                     <HeroChip name={h.name} size={26} fontSize={12} bold={false}/>
                     <div style={{display:"flex",gap:4,marginLeft:"auto"}}>
                       {TIER_CONFIG.map(t=>(
-                        <button key={t.id} onClick={()=>onSetTier(h.name, tier===t.id?null:t.id)}
-                          style={{width:26,height:22,borderRadius:5,cursor:"pointer",fontSize:10,fontWeight:800,
+                        <button key={t.id} disabled={!isCoach}
+                          onClick={()=>isCoach && onSetTier(h.name, tier===t.id?null:t.id)}
+                          title={isCoach?undefined:"เฉพาะโค้ช/แอดมินที่ตั้งค่า Tier List ได้"}
+                          style={{width:26,height:22,borderRadius:5,cursor:isCoach?"pointer":"not-allowed",
+                            fontSize:10,fontWeight:800,opacity:isCoach?1:0.5,
                             background:tier===t.id?t.col:"transparent",
                             border:`1px solid ${tier===t.id?t.col:C.border}`,
                             color:tier===t.id?"#1a1a2e":C.textMuted}}>
@@ -1736,7 +1742,9 @@ function PlayerProfile({ player, isEnemy, allGames, onBack, photoUrl }) {
   const avgD = statG ? (totD/statG).toFixed(1) : "-";
   const avgA = statG ? (totA/statG).toFixed(1) : "-";
 
-  const chartGames = pGames.slice(-10);
+  // allGames/pGames เรียงจากใหม่ไปเก่า (แมตช์ใหม่ถูก prepend เข้า array) —
+  // ต้องเอา 10 ตัวแรก (ใหม่สุด) แล้ว reverse ให้กราฟไล่จากซ้าย(เก่า)ไปขวา(ใหม่)
+  const chartGames = pGames.slice(0, 10).reverse();
   const chartData  = chartGames.map((g,i)=>{
     const picks = g[picksKey] || [];
     const slotIdx = picks.findIndex(s=>s.player===player);
@@ -6970,6 +6978,10 @@ function draftReducer(state, action) {
     case "RESET":
       return initDraftState();
 
+    // กู้คืน draft ที่ค้างไว้จาก localStorage (กรณีแท็บ crash/refresh กลางคัน)
+    case "LOAD_DRAFT":
+      return { ...action.payload };
+
     // Hero selection
     case "SELECT_HERO": {
       const { hero, team, action: act, slot } = action.payload;
@@ -7761,7 +7773,8 @@ function MyStatsPage({ session, roster, allGames, playerPhotos, onLinkPlayer }) 
           <div style={{background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:14,padding:18,marginTop:16}}>
             <div style={{fontWeight:800,fontSize:13,color:C.primaryLight,marginBottom:10}}>🕒 เกมล่าสุด</div>
             <div style={{display:"flex",flexDirection:"column",gap:4,maxHeight:280,overflowY:"auto"}}>
-              {myRows.slice().reverse().slice(0,15).map((r,i)=>(
+              {/* myRows เรียงใหม่ไปเก่าอยู่แล้ว (ตาม allGames) — เอา 15 ตัวแรกคือ 15 เกมล่าสุดพอดี ไม่ต้อง reverse ก่อน */}
+              {myRows.slice(0,15).map((r,i)=>(
                 <div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"6px 8px",
                   background:i%2===0?"transparent":C.bgCard,borderRadius:7}}>
                   <span style={{fontSize:10,fontWeight:700,padding:"2px 7px",borderRadius:5,
@@ -7798,6 +7811,21 @@ export default function RovApp() {
   const [app,  dispatchApp]  = useReducer(appReducer,  null, initAppState);
   const [ui,   dispatchUI]   = useReducer(uiReducer,   null, initUIState);
   const [draft, dispatchDraft]= useReducer(draftReducer, null, initDraftState);
+
+  // ── Autosave in-progress draft ไว้ที่ localStorage ──
+  // ป้องกันเสีย progress ทั้งหมดถ้าแท็บ crash/refresh/ปิดพลาดกลางคันตอน
+  // กำลัง ban/pick อยู่ (ระหว่างแข่งจริง ที่กดดันเรื่องเวลามาก เสียแล้วเสียเลย)
+  useEffect(() => {
+    try {
+      if (draft.stage === "setup") {
+        localStorage.removeItem(DRAFT_LS_KEY);
+      } else {
+        localStorage.setItem(DRAFT_LS_KEY, JSON.stringify(draft));
+      }
+    } catch (err) {
+      console.warn("Draft autosave to localStorage failed (non-fatal):", err);
+    }
+  }, [draft]);
   const [saveStatus, setSaveStatus] = useState("idle"); // idle | saving | saved | error
   const [heroDataVersion, setHeroDataVersion] = useState(0); // bump to force re-render after HERO_DATA mutation
   // 1400px covers iPad landscape (max ~1366 CSS px) too — with 13 nav items
@@ -7827,7 +7855,13 @@ export default function RovApp() {
       } catch (err) {
         console.error("Save failed:", err);
         setSaveStatus("error");
-        toast("บันทึกไม่สำเร็จ กรุณาลองใหม่", "error", 5000);
+        if (err.isConflict) {
+          // อีกคน (หรืออีกแท็บ) save ทับไปก่อนแล้ว — เตือนแบบเจาะจง ไม่ใช่ error ทั่วไป
+          // และไม่ auto-retry ซ้อนทับ เพราะจะยิ่งชนกันวนไปเรื่อยๆ
+          toast(err.message, "error", 8000);
+        } else {
+          toast("บันทึกไม่สำเร็จ กรุณาลองใหม่", "error", 5000);
+        }
         setTimeout(()=>setSaveStatus("idle"), 4000);
       }
     }, 600); // debounce: wait 600ms after last change before saving
@@ -8277,6 +8311,7 @@ export default function RovApp() {
                 heroTiers={app.heroTiers}
                 onSavePatch={info=>dispatchApp({type:"SET_PATCH_INFO",payload:info})}
                 onSetTier={(hero,tier)=>dispatchApp({type:"SET_HERO_TIER",payload:{hero,tier}})}
+                isCoach={isCoach}
               />
               {/* ── Upcoming match reminder ── */}
               {(()=>{
@@ -9709,6 +9744,20 @@ function MockDraftTrainer({ rivals, allGames, scoutMatches, heroTiers, onExit })
 
 function DraftPageR({ draft, dispatch, roster, rivals, enemyRosters, onFinishSession, allGames, scoutMatches, heroTiers }) {
   const [mockMode, setMockMode] = useState(false);
+
+  // เช็คครั้งเดียวตอนเปิดหน้านี้ว่ามี draft ที่ทำค้างไว้ (จากแท็บก่อนหน้าที่ crash/ปิดพลาด) ไหม
+  const [recoverable] = useState(() => {
+    if (draft.stage !== "setup") return null; // อยู่กลาง session อยู่แล้ว ไม่ต้องเสนอกู้คืน
+    try {
+      const raw = localStorage.getItem(DRAFT_LS_KEY);
+      if (!raw) return null;
+      const saved = JSON.parse(raw);
+      if (saved && saved.stage && saved.stage !== "setup") return saved;
+      return null;
+    } catch { return null; }
+  });
+  const [dismissedRecovery, setDismissedRecovery] = useState(false);
+
   if (mockMode) return (
     <MockDraftTrainer rivals={rivals} allGames={allGames} scoutMatches={scoutMatches} heroTiers={heroTiers}
       onExit={()=>setMockMode(false)}/>
@@ -9795,6 +9844,33 @@ function DraftPageR({ draft, dispatch, roster, rivals, enemyRosters, onFinishSes
       minHeight:"calc(100vh - 60px)",background:C.bgBase}}>
       <div style={{width:500,background:C.bgPanel,borderRadius:20,padding:36,
         border:`1px solid ${C.border}`,boxShadow:"0 20px 60px rgba(0,0,0,0.4)"}}>
+        {recoverable && !dismissedRecovery && (
+          <div style={{background:"#feca5715",border:"1px solid #feca5750",borderRadius:12,
+            padding:14,marginBottom:20}}>
+            <div style={{fontWeight:800,fontSize:13,color:"#feca57",marginBottom:6}}>
+              ⚠️ พบ Draft ที่ทำค้างไว้
+            </div>
+            <div style={{fontSize:12,color:C.textMuted,marginBottom:10}}>
+              {recoverable.boType} vs {recoverable.rivalName || "?"} — ทำไปแล้ว {recoverable.step||0}/{DRAFT_ORDER.length} ขั้นตอน
+              (น่าจะเกิดจากรีเฟรช/ปิดแท็บกลางคันครั้งก่อน)
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={()=>{ dispatch({type:"LOAD_DRAFT", payload:recoverable}); }}
+                style={{background:"#feca57",color:"#1a1a2e",border:"none",borderRadius:8,
+                  padding:"7px 16px",cursor:"pointer",fontWeight:800,fontSize:12}}>
+                🔄 กู้คืนต่อ
+              </button>
+              <button onClick={()=>{
+                  try{ localStorage.removeItem(DRAFT_LS_KEY); }catch{}
+                  setDismissedRecovery(true);
+                }}
+                style={{background:"transparent",border:`1px solid ${C.border}`,color:C.textMuted,
+                  borderRadius:8,padding:"7px 16px",cursor:"pointer",fontWeight:700,fontSize:12}}>
+                🗑️ ลบทิ้ง เริ่มใหม่
+              </button>
+            </div>
+          </div>
+        )}
         <div style={{textAlign:"center",marginBottom:28}}>
           <div style={{fontSize:36,marginBottom:6}}>⚔️</div>
           <h2 style={{margin:0,fontSize:20,fontWeight:800}}>เริ่ม Draft Session</h2>

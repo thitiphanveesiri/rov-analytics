@@ -8,19 +8,20 @@ import { syncMatchesToRelational } from "@/lib/matchSync";
 // NOTE: no body-size-limit config for App Router Route Handlers.
 // Photos are stored as Vercel Blob URLs (not base64) so payload stays small.
 
-async function getTeamId(session) {
+async function getTeamUser(session) {
   const user = await prisma.user.findUnique({
     where: { email: session.user.email },
-    select: { teamId: true }
+    select: { teamId: true, role: true }
   });
-  return user?.teamId;
+  return user;
 }
 
 export async function GET() {
   const session = await getServerSession(authOptions);
   if (!session) return NextResponse.json({ error: "ไม่ได้ login" }, { status: 401 });
 
-  const teamId = await getTeamId(session);
+  const user = await getTeamUser(session);
+  const teamId = user?.teamId;
   if (!teamId) return NextResponse.json({ error: "ยังไม่ได้เข้าทีม" }, { status: 403 });
 
   const data = await prisma.teamData.upsert({
@@ -41,7 +42,8 @@ export async function PUT(req) {
   const session = await getServerSession(authOptions);
   if (!session) return NextResponse.json({ error: "ไม่ได้ login" }, { status: 401 });
 
-  const teamId = await getTeamId(session);
+  const user = await getTeamUser(session);
+  const teamId = user?.teamId;
   if (!teamId) return NextResponse.json({ error: "ยังไม่ได้เข้าทีม" }, { status: 403 });
 
   let body;
@@ -71,25 +73,73 @@ export async function PUT(req) {
     matches, rivals, roster, enemyRosters, scoutMatches,
     playerPhotos, heroPhotos, customHeroes, roleOverrides, videos,
     teamLogo, rivalLogos, schedules, patchInfo, heroTiers, practiceAssignments,
+    expectedUpdatedAt, // เวลาที่ client เห็นข้อมูลล่าสุดตอนโหลด — ใช้เช็ค conflict
   } = validation.data;
 
-  try {
-    const updated = await prisma.teamData.upsert({
+  const writeData = {
+    matches, rivals, roster, enemyRosters, scoutMatches,
+    playerPhotos, heroPhotos, customHeroes, roleOverrides, videos,
+    teamLogo, rivalLogos, schedules, patchInfo, heroTiers, practiceAssignments,
+    updatedBy: session.user.email,
+  };
+
+  // ── Field-level permission gate ──
+  // Patch notes & the meta tier list are meant to be coach/admin-managed
+  // calls, but the UI restriction alone is client-side and trivially
+  // bypassed by calling this endpoint directly. If a plain "member" tries
+  // to change either field, silently keep the existing DB value instead —
+  // this protects the data without failing the rest of their (legitimate)
+  // save in the same request.
+  const isCoachOrAdmin = user.role === "admin" || user.role === "coach";
+  if (!isCoachOrAdmin && (writeData.patchInfo !== undefined || writeData.heroTiers !== undefined)) {
+    const existing = await prisma.teamData.findUnique({
       where: { teamId },
-      update: {
-        matches, rivals, roster, enemyRosters, scoutMatches,
-        playerPhotos, heroPhotos, customHeroes, roleOverrides, videos,
-        teamLogo, rivalLogos, schedules, patchInfo, heroTiers, practiceAssignments,
-        updatedBy: session.user.email,
-      },
-      create: {
-        teamId,
-        matches, rivals, roster, enemyRosters, scoutMatches,
-        playerPhotos, heroPhotos, customHeroes, roleOverrides, videos,
-        teamLogo, rivalLogos, schedules, patchInfo, heroTiers, practiceAssignments,
-        updatedBy: session.user.email,
-      },
+      select: { patchInfo: true, heroTiers: true },
     });
+    if (existing) {
+      if (writeData.patchInfo !== undefined) writeData.patchInfo = existing.patchInfo;
+      if (writeData.heroTiers !== undefined) writeData.heroTiers = existing.heroTiers;
+    }
+  }
+
+  try {
+    let updated;
+
+    if (expectedUpdatedAt) {
+      // ── Optimistic locking: ป้องกันคนสองคน (หรือ 2 แท็บของคนเดียว) save
+      //    พร้อมกันแล้วคนหลังทับข้อมูลคนแรกแบบเงียบๆ ──
+      // updateMany + WHERE ที่รวม updatedAt เดิมไว้ด้วย เป็น atomic
+      // compare-and-swap ระดับ DB กัน race condition ระหว่างเช็คกับเขียนจริง
+      const result = await prisma.teamData.updateMany({
+        where: { teamId, updatedAt: new Date(expectedUpdatedAt) },
+        data: writeData,
+      });
+
+      if (result.count === 0) {
+        const existing = await prisma.teamData.findUnique({ where: { teamId } });
+        if (existing) {
+          // มีข้อมูลอยู่แล้ว แต่ updatedAt ไม่ตรงกับที่ client เห็นล่าสุด
+          // แปลว่ามีคนอื่น (หรือแท็บอื่น) save ทับไปก่อนหน้านี้แล้ว
+          return NextResponse.json({
+            error: "CONFLICT",
+            message: "ข้อมูลถูกแก้ไขจากที่อื่นระหว่างที่คุณกำลังแก้ไข กรุณารีเฟรชหน้าเพื่อดูข้อมูลล่าสุดก่อนบันทึกต่อ",
+            currentUpdatedAt: existing.updatedAt,
+          }, { status: 409 });
+        }
+        // ยังไม่เคยมีแถวนี้เลย (ทีมใหม่ที่ยังไม่เคย save) — สร้างใหม่
+        updated = await prisma.teamData.create({ data: { teamId, ...writeData } });
+      } else {
+        updated = await prisma.teamData.findUnique({ where: { teamId } });
+      }
+    } else {
+      // ไม่มี expectedUpdatedAt ส่งมา (client เก่า หรือ save ครั้งแรกในเซสชัน) —
+      // ยัง upsert ตามปกติเพื่อ backward compatibility
+      updated = await prisma.teamData.upsert({
+        where: { teamId },
+        update: writeData,
+        create: { teamId, ...writeData },
+      });
+    }
 
     // Best-effort mirror into normalized tables for analytics. Deliberately
     // NOT allowed to fail the save: if this throws (bad data shape we didn't

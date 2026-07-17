@@ -15,11 +15,18 @@ const FALLBACK = {
   patchInfo:{version:"",notes:"",updatedAt:null}, heroTiers:{}, practiceAssignments:[], _loaded:true,
 };
 
+// Tracks the last-known `updatedAt` timestamp of TeamData as this client
+// has seen it. Sent back on every save so the server can detect if someone
+// else (another team member, or another tab of the same user) saved in
+// between — see the optimistic-locking check in app/api/data/route.js.
+let lastKnownUpdatedAt = null;
+
 export async function loadFromStorage() {
   try {
     const res = await fetch("/api/data");
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    lastKnownUpdatedAt = data.updatedAt || null;
     // Build state from DB data, falling back to safe defaults per field
     const state = { _loaded: true };
     FIELDS.forEach(f => { state[f] = data[f] ?? FALLBACK[f]; });
@@ -34,6 +41,7 @@ export async function saveToStorage(appState) {
   // Only send the fields that belong in the DB — strip all React/internal state
   const payload = {};
   FIELDS.forEach(f => { payload[f] = appState[f] ?? FALLBACK[f]; });
+  if (lastKnownUpdatedAt) payload.expectedUpdatedAt = lastKnownUpdatedAt;
 
   const res = await fetch("/api/data", {
     method: "PUT",
@@ -43,6 +51,20 @@ export async function saveToStorage(appState) {
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
+
+    if (res.status === 409) {
+      // Someone else saved in between — do NOT silently retry-and-overwrite,
+      // that's exactly the data-loss bug this check exists to prevent.
+      // Adopt their updatedAt so a manual retry (after the user reloads and
+      // re-applies their change) will succeed instead of conflicting again.
+      lastKnownUpdatedAt = body.currentUpdatedAt || lastKnownUpdatedAt;
+      const conflictErr = new Error(
+        body.message || "ข้อมูลถูกแก้ไขจากที่อื่นระหว่างนี้ กรุณารีเฟรชหน้าก่อนบันทึกต่อ"
+      );
+      conflictErr.isConflict = true;
+      throw conflictErr;
+    }
+
     // Surface the real reason (e.g. Zod validation details) instead of a
     // generic message — this is what shows up in the toast/console when a
     // save silently fails, so don't swallow it here.
@@ -50,6 +72,10 @@ export async function saveToStorage(appState) {
     console.error("saveToStorage: server rejected save:", detail);
     throw new Error(detail);
   }
+
+  const body = await res.json().catch(() => ({}));
+  if (body.updatedAt) lastKnownUpdatedAt = body.updatedAt;
+
   // IMPORTANT: never catch-and-return-false here — the caller relies on
   // this throwing so it can show an accurate save-failed state to the
   // user. Swallowing errors here previously caused the UI to always show
