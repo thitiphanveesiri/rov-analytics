@@ -1175,7 +1175,162 @@ function SingleGameDetail({ g, gameNo, onUpdateStats, onUpdateObjectives, onUpda
 // ═══════════════════════════════════════════
 //  MATCH CARD (Match Log page)
 // ═══════════════════════════════════════════
-function MatchCardWithStats({ m, onUpdateStats, onUpdateObjectives, onUpdateGameFull, onJumpToVideo, playerPhotos={}, onDelete, onEditMeta, roster=[], videos=[] }) {
+// ═══════════════════════════════════════════
+//  MATCH DRAFT SUMMARY — สรุปภาพรวม ban/pick ทุกเกมในแมตช์เดียว
+//  แบบกราฟิกถ่ายทอดสด ดาวน์โหลดเป็นรูปแชร์ได้
+// ═══════════════════════════════════════════
+function GameSummaryRow({ game, gameNo, ourTeamName, ourTeamLogo, rivalName, rivalLogo }) {
+  const ourBans   = game.ourBans   || [];
+  const enemyBans = game.enemyBans || [];
+  const ourPicks   = game.ourPicks   || [];
+  const enemyPicks = game.enemyPicks || [];
+  const ourWin = game.result === "WIN";
+
+  return (
+    <div style={{marginBottom:16,border:`1px solid ${C.border}`,borderRadius:10,overflow:"hidden",background:"#0a0a16"}}>
+      {/* ── แถว Ban + ชื่อทีม + สกอร์ ── */}
+      <div style={{display:"flex",alignItems:"center",background:"#14112a"}}>
+        <div style={{display:"flex",gap:3,padding:"6px 8px",flexShrink:0}}>
+          {ourBans.map((b,i)=>(
+            <div key={i} style={{width:30,height:30,borderRadius:5,overflow:"hidden",
+              filter:b?.name?"grayscale(65%)":"none",opacity:b?.name?0.85:0.3,
+              background:"#000",border:`1px solid ${C.border}`,flexShrink:0}}>
+              {b?.name ? <HeroAvatar name={b.name} team="our" size={30}/> : (
+                <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",
+                  fontSize:14,color:C.textMuted}}>🚫</div>
+              )}
+            </div>
+          ))}
+        </div>
+        <div style={{flex:1,textAlign:"center",fontWeight:900,fontSize:13,color:C.blue,
+          letterSpacing:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",padding:"0 6px"}}>
+          {ourTeamName}
+        </div>
+        <div style={{padding:"5px 12px",background:C.bgPanel,display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+          <LogoImg url={ourTeamLogo} name={ourTeamName} size={24}/>
+          <span style={{fontWeight:900,fontSize:17,color:ourWin?C.win:"#fff"}}>{game.ourScore ?? 0}</span>
+          <span style={{color:C.textMuted,fontSize:11}}>vs</span>
+          <span style={{fontWeight:900,fontSize:17,color:!ourWin?C.lose:"#fff"}}>{game.enemyScore ?? 0}</span>
+          <LogoImg url={rivalLogo} name={rivalName} size={24}/>
+        </div>
+        <div style={{flex:1,textAlign:"center",fontWeight:900,fontSize:13,color:C.red,
+          letterSpacing:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",padding:"0 6px"}}>
+          {rivalName}
+        </div>
+        <div style={{display:"flex",gap:3,padding:"6px 8px",flexShrink:0}}>
+          {enemyBans.map((b,i)=>(
+            <div key={i} style={{width:30,height:30,borderRadius:5,overflow:"hidden",
+              filter:b?.name?"grayscale(65%)":"none",opacity:b?.name?0.85:0.3,
+              background:"#000",border:`1px solid ${C.border}`,flexShrink:0}}>
+              {b?.name ? <HeroAvatar name={b.name} team="enemy" size={30}/> : (
+                <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",
+                  fontSize:14,color:C.textMuted}}>🚫</div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* ── แถบ Game No. / เวลา ── */}
+      <div style={{textAlign:"center",fontSize:10,color:C.textMuted,padding:"3px 0",
+        background:"#0d0a1e",borderTop:`1px solid ${C.border}`,borderBottom:`1px solid ${C.border}`,
+        letterSpacing:1,fontWeight:700}}>
+        GAME {gameNo}{game.duration ? ` · ⏱ ${formatDurationDisplay(game.duration)}` : ""}
+      </div>
+
+      {/* ── แถว Pick ── */}
+      <div style={{display:"flex"}}>
+        <div style={{flex:1,display:"flex"}}>
+          {ourPicks.map((p,i)=>(
+            <div key={i} style={{flex:1,aspectRatio:"1",position:"relative",borderRight:`1px solid ${C.border}`}}>
+              {p?.hero?.name ? (
+                <>
+                  <HeroAvatar name={p.hero.name} team="our" size={64} style={{width:"100%",height:"100%",borderRadius:0,border:"none"}}/>
+                </>
+              ) : <div style={{width:"100%",height:"100%",background:"#14112a"}}/>}
+            </div>
+          ))}
+        </div>
+        <div style={{flex:1,display:"flex"}}>
+          {enemyPicks.map((p,i)=>(
+            <div key={i} style={{flex:1,aspectRatio:"1",position:"relative",borderLeft:i===0?`2px solid ${C.border}`:`1px solid ${C.border}`}}>
+              {p?.hero?.name ? (
+                <HeroAvatar name={p.hero.name} team="enemy" size={64} style={{width:"100%",height:"100%",borderRadius:0,border:"none"}}/>
+              ) : <div style={{width:"100%",height:"100%",background:"#14112a"}}/>}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MatchDraftSummaryModal({ match, ourTeamName, ourTeamLogo, rivalName, rivalLogo, onClose }) {
+  const games = Array.isArray(match.games) && match.games.length ? match.games : [match];
+  const captureRef = useRef(null);
+  const [downloading, setDownloading] = useState(false);
+  const toast = useToast();
+
+  async function downloadImage() {
+    setDownloading(true);
+    try {
+      const { default: html2canvas } = await import("html2canvas");
+      const canvas = await html2canvas(captureRef.current, {
+        backgroundColor: "#0a0a16", scale: 2, useCORS: true,
+      });
+      const link = document.createElement("a");
+      const safeRival = (rivalName||"rival").replace(/[^a-zA-Z0-9ก-๙]/g, "_");
+      link.download = `draft-summary-vs-${safeRival}.png`;
+      link.href = canvas.toDataURL("image/png");
+      link.click();
+    } catch (err) {
+      console.error("Export image failed:", err);
+      toast("สร้างรูปไม่สำเร็จ ลองใหม่อีกครั้ง", "error");
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:700,
+      display:"flex",alignItems:"center",justifyContent:"center",padding:16}}
+      onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()}
+        style={{background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:16,padding:20,
+          maxWidth:820,width:"100%",maxHeight:"90vh",display:"flex",flexDirection:"column"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:8}}>
+          <div style={{fontWeight:800,fontSize:15,color:C.primaryLight}}>
+            📸 สรุปภาพรวม Draft — {ourTeamName} vs {rivalName}
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={downloadImage} disabled={downloading}
+              style={{background:C.primary,color:"#fff",border:"none",borderRadius:8,
+                padding:"8px 16px",cursor:downloading?"default":"pointer",fontWeight:700,fontSize:12,
+                opacity:downloading?0.6:1}}>
+              {downloading?"⏳ กำลังสร้างรูป...":"⬇️ ดาวน์โหลดรูป"}
+            </button>
+            <button onClick={onClose}
+              style={{background:"transparent",border:`1px solid ${C.border}`,color:C.textMuted,
+                borderRadius:8,padding:"8px 16px",cursor:"pointer",fontWeight:700,fontSize:12}}>
+              ✕ ปิด
+            </button>
+          </div>
+        </div>
+        <div style={{overflowY:"auto",paddingRight:4}}>
+          <div ref={captureRef} style={{background:"#0a0a16",padding:12}}>
+            {games.map((g,i)=>(
+              <GameSummaryRow key={i} game={g} gameNo={i+1}
+                ourTeamName={ourTeamName} ourTeamLogo={ourTeamLogo}
+                rivalName={rivalName} rivalLogo={rivalLogo}/>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MatchCardWithStats({ m, onUpdateStats, onUpdateObjectives, onUpdateGameFull, onJumpToVideo, playerPhotos={}, onDelete, onEditMeta, roster=[], videos=[], ourTeamName, ourTeamLogo, rivalLogo }) {
   const [open, setOpen] = useState(false);
   const isBO  = Array.isArray(m.games) && m.games.length > 0;
   const wins  = isBO ? m.games.filter(g=>g.result==="WIN").length : (m.result==="WIN"?1:0);
@@ -1190,6 +1345,7 @@ function MatchCardWithStats({ m, onUpdateStats, onUpdateObjectives, onUpdateGame
   const [objectives,setObjectives]= useState(m.objectives || OBJ_DEFAULT);
   const [objSaved,  setObjSaved]  = useState(false);
   const [editingGame,setEditingGame] = useState(false);
+  const [showSummary,setShowSummary] = useState(false);
 
   function handleSaveObjectives() {
     onUpdateObjectives && onUpdateObjectives(m.id, null, objectives);
@@ -1290,6 +1446,22 @@ function MatchCardWithStats({ m, onUpdateStats, onUpdateObjectives, onUpdateGame
                 borderRadius:7,padding:"3px 10px",cursor:"pointer",fontSize:12,flexShrink:0}}>
               🎬
             </button>
+          )}
+          <button onClick={e=>{ e.stopPropagation(); setShowSummary(true); }}
+            title="สรุปภาพรวม Draft ทุกเกม — ดาวน์โหลดเป็นรูปได้"
+            style={{background:"transparent",border:`1px solid ${C.border}`,color:"#feca57",
+              borderRadius:7,padding:"3px 10px",cursor:"pointer",fontSize:12,flexShrink:0}}>
+            📸
+          </button>
+          {showSummary && (
+            <MatchDraftSummaryModal
+              match={m}
+              ourTeamName={ourTeamName || "ทีมเรา"}
+              ourTeamLogo={ourTeamLogo}
+              rivalName={m.rivalName}
+              rivalLogo={rivalLogo}
+              onClose={()=>setShowSummary(false)}
+            />
           )}
           {onEditMeta && (
             <button onClick={e=>{ e.stopPropagation(); setEditing(v=>!v); }}
@@ -8669,7 +8841,7 @@ export default function RovApp() {
                             : `ยังไม่มีแมตช์ประเภท "${tabs.find(t=>t.id===matchCatFilter)?.label}"`}
                         </div>
                       :filtered.map(m=>(
-                          <MatchCardWithStats key={m.id} m={m} onUpdateStats={handleUpdateStats} onUpdateObjectives={handleUpdateObjectives} onUpdateGameFull={handleUpdateGameFull} onJumpToVideo={handleJumpToVideo} roster={roster} videos={app.videos||[]} playerPhotos={app.playerPhotos} onDelete={id=>dispatchApp({type:"DELETE_MATCH",payload:id})} onEditMeta={handleEditMatchMeta}/>
+                          <MatchCardWithStats key={m.id} m={m} onUpdateStats={handleUpdateStats} onUpdateObjectives={handleUpdateObjectives} onUpdateGameFull={handleUpdateGameFull} onJumpToVideo={handleJumpToVideo} roster={roster} videos={app.videos||[]} playerPhotos={app.playerPhotos} ourTeamName={session?.user?.teamName||app.teamName||"ทีมเรา"} ourTeamLogo={app.teamLogo} rivalLogo={app.rivalLogos?.[m.rivalName]} onDelete={id=>dispatchApp({type:"DELETE_MATCH",payload:id})} onEditMeta={handleEditMatchMeta}/>
                         ))
                     }
                   </>
@@ -8935,7 +9107,7 @@ export default function RovApp() {
                         />
                       )}
                       {rivalView==="history" && rm.map(m=>(
-                        <MatchCardWithStats key={m.id} m={m} onUpdateStats={handleUpdateStats} onUpdateObjectives={handleUpdateObjectives} onUpdateGameFull={handleUpdateGameFull} onJumpToVideo={handleJumpToVideo} roster={roster} videos={app.videos||[]} playerPhotos={app.playerPhotos} onDelete={id=>dispatchApp({type:"DELETE_MATCH",payload:id})} onEditMeta={handleEditMatchMeta}/>
+                        <MatchCardWithStats key={m.id} m={m} onUpdateStats={handleUpdateStats} onUpdateObjectives={handleUpdateObjectives} onUpdateGameFull={handleUpdateGameFull} onJumpToVideo={handleJumpToVideo} roster={roster} videos={app.videos||[]} playerPhotos={app.playerPhotos} ourTeamName={session?.user?.teamName||app.teamName||"ทีมเรา"} ourTeamLogo={app.teamLogo} rivalLogo={app.rivalLogos?.[m.rivalName]} onDelete={id=>dispatchApp({type:"DELETE_MATCH",payload:id})} onEditMeta={handleEditMatchMeta}/>
                       ))}
                       {rivalView==="overview" && (
                         <div>
