@@ -1179,23 +1179,66 @@ function SingleGameDetail({ g, gameNo, onUpdateStats, onUpdateObjectives, onUpda
 //  MATCH DRAFT SUMMARY — สรุปภาพรวม ban/pick ทุกเกมในแมตช์เดียว
 //  แบบกราฟิกถ่ายทอดสด ดาวน์โหลดเป็นรูปแชร์ได้
 // ═══════════════════════════════════════════
-function GameSummaryRow({ game, gameNo, ourTeamName, ourTeamLogo, rivalName, rivalLogo }) {
-  const ourBans   = game.ourBans   || [];
-  const enemyBans = game.enemyBans || [];
-  const ourPicks   = game.ourPicks   || [];
-  const enemyPicks = game.enemyPicks || [];
+// แปลงข้อมูลเกมจาก Match Log (รูปแบบ our/enemy) ให้เป็น blue/red มาตรฐาน
+function matchGameToBlueRed(game, ourTeamName, ourTeamLogo, rivalName, rivalLogo) {
+  const isBlueOur = game.ourSide ? game.ourSide === "blue" : true;
   const ourWin = game.result === "WIN";
+  return {
+    blueTeamName:  isBlueOur ? ourTeamName : rivalName,
+    blueTeamLogo:  isBlueOur ? ourTeamLogo : rivalLogo,
+    blueTeamTag:   isBlueOur ? "our" : "enemy",
+    blueBans:      isBlueOur ? (game.ourBans||[])  : (game.enemyBans||[]),
+    bluePicks:     isBlueOur ? (game.ourPicks||[]) : (game.enemyPicks||[]),
+    blueScore:     isBlueOur ? (game.ourScore??0)  : (game.enemyScore??0),
+    blueWin:       isBlueOur ? ourWin : !ourWin,
+    redTeamName:   isBlueOur ? rivalName : ourTeamName,
+    redTeamLogo:   isBlueOur ? rivalLogo : ourTeamLogo,
+    redTeamTag:    isBlueOur ? "enemy" : "our",
+    redBans:       isBlueOur ? (game.enemyBans||[])  : (game.ourBans||[]),
+    redPicks:      isBlueOur ? (game.enemyPicks||[]) : (game.ourPicks||[]),
+    redScore:      isBlueOur ? (game.enemyScore??0)  : (game.ourScore??0),
+    duration: game.duration,
+  };
+}
+
+// แปลงข้อมูลเกมจาก Scout Log (รูปแบบ teamA/teamB) ให้เป็น blue/red มาตรฐาน
+function scoutGameToBlueRed(game, teamAName, teamALogo, teamBName, teamBLogo) {
+  const aIsBlue = (game.sideA || "blue") === "blue";
+  return {
+    blueTeamName:  aIsBlue ? teamAName : teamBName,
+    blueTeamLogo:  aIsBlue ? teamALogo : teamBLogo,
+    blueTeamTag:   "our", // scout log ไม่มีแนวคิด "เรา" — ใช้สีกลางจาก HeroAvatar team prop
+    blueBans:      aIsBlue ? (game.bansA||[])  : (game.bansB||[]),
+    bluePicks:     aIsBlue ? (game.picksA||[]) : (game.picksB||[]),
+    blueScore:     Number(aIsBlue ? game.killsA : game.killsB) || 0,
+    redTeamName:   aIsBlue ? teamBName : teamAName,
+    redTeamLogo:   aIsBlue ? teamBLogo : teamALogo,
+    redTeamTag:    "enemy",
+    redBans:       aIsBlue ? (game.bansB||[])  : (game.bansA||[]),
+    redPicks:      aIsBlue ? (game.picksB||[]) : (game.picksA||[]),
+    redScore:      Number(aIsBlue ? game.killsB : game.killsA) || 0,
+    duration: game.duration,
+  };
+}
+
+function GameSummaryRow({ bg, gameNo }) {
+  const {
+    blueTeamName, blueTeamLogo, blueTeamTag, blueBans, bluePicks, blueScore, blueWin,
+    redTeamName, redTeamLogo, redTeamTag, redBans, redPicks, redScore,
+    duration,
+  } = bg;
+  const redWin = blueWin===undefined ? undefined : !blueWin;
 
   return (
     <div style={{marginBottom:16,border:`1px solid ${C.border}`,borderRadius:10,overflow:"hidden",background:"#0a0a16"}}>
-      {/* ── แถว Ban + ชื่อทีม + สกอร์ ── */}
+      {/* ── แถว Ban + ชื่อทีม + สกอร์ (Blue ซ้าย / Red ขวา เสมอ) ── */}
       <div style={{display:"flex",alignItems:"center",background:"#14112a"}}>
         <div style={{display:"flex",gap:3,padding:"6px 8px",flexShrink:0}}>
-          {ourBans.map((b,i)=>(
+          {blueBans.map((b,i)=>(
             <div key={i} style={{width:30,height:30,borderRadius:5,overflow:"hidden",
               filter:b?.name?"grayscale(65%)":"none",opacity:b?.name?0.85:0.3,
               background:"#000",border:`1px solid ${C.border}`,flexShrink:0}}>
-              {b?.name ? <HeroAvatar name={b.name} team="our" size={30}/> : (
+              {b?.name ? <HeroAvatar name={b.name} team={blueTeamTag} size={30}/> : (
                 <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",
                   fontSize:14,color:C.textMuted}}>🚫</div>
               )}
@@ -1204,25 +1247,25 @@ function GameSummaryRow({ game, gameNo, ourTeamName, ourTeamLogo, rivalName, riv
         </div>
         <div style={{flex:1,textAlign:"center",fontWeight:900,fontSize:13,color:C.blue,
           letterSpacing:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",padding:"0 6px"}}>
-          {ourTeamName}
+          {blueTeamName}
         </div>
         <div style={{padding:"5px 12px",background:C.bgPanel,display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
-          <LogoImg url={ourTeamLogo} name={ourTeamName} size={24}/>
-          <span style={{fontWeight:900,fontSize:17,color:ourWin?C.win:"#fff"}}>{game.ourScore ?? 0}</span>
+          <LogoImg url={blueTeamLogo} name={blueTeamName} size={24}/>
+          <span style={{fontWeight:900,fontSize:17,color:blueWin?C.win:"#fff"}}>{blueScore}</span>
           <span style={{color:C.textMuted,fontSize:11}}>vs</span>
-          <span style={{fontWeight:900,fontSize:17,color:!ourWin?C.lose:"#fff"}}>{game.enemyScore ?? 0}</span>
-          <LogoImg url={rivalLogo} name={rivalName} size={24}/>
+          <span style={{fontWeight:900,fontSize:17,color:redWin?C.lose:"#fff"}}>{redScore}</span>
+          <LogoImg url={redTeamLogo} name={redTeamName} size={24}/>
         </div>
         <div style={{flex:1,textAlign:"center",fontWeight:900,fontSize:13,color:C.red,
           letterSpacing:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",padding:"0 6px"}}>
-          {rivalName}
+          {redTeamName}
         </div>
         <div style={{display:"flex",gap:3,padding:"6px 8px",flexShrink:0}}>
-          {enemyBans.map((b,i)=>(
+          {redBans.map((b,i)=>(
             <div key={i} style={{width:30,height:30,borderRadius:5,overflow:"hidden",
               filter:b?.name?"grayscale(65%)":"none",opacity:b?.name?0.85:0.3,
               background:"#000",border:`1px solid ${C.border}`,flexShrink:0}}>
-              {b?.name ? <HeroAvatar name={b.name} team="enemy" size={30}/> : (
+              {b?.name ? <HeroAvatar name={b.name} team={redTeamTag} size={30}/> : (
                 <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",
                   fontSize:14,color:C.textMuted}}>🚫</div>
               )}
@@ -1235,27 +1278,29 @@ function GameSummaryRow({ game, gameNo, ourTeamName, ourTeamLogo, rivalName, riv
       <div style={{textAlign:"center",fontSize:10,color:C.textMuted,padding:"3px 0",
         background:"#0d0a1e",borderTop:`1px solid ${C.border}`,borderBottom:`1px solid ${C.border}`,
         letterSpacing:1,fontWeight:700}}>
-        GAME {gameNo}{game.duration ? ` · ⏱ ${formatDurationDisplay(game.duration)}` : ""}
+        GAME {gameNo}{duration ? ` · ⏱ ${formatDurationDisplay(duration)}` : ""}
       </div>
 
-      {/* ── แถว Pick ── */}
+      {/* ── แถว Pick (เรียงตามฝั่ง Blue ซ้าย / Red ขวา เสมอ) ── */}
+      <div style={{display:"flex",fontSize:9,fontWeight:800,letterSpacing:1,textAlign:"center",background:"#0d0a1e"}}>
+        <div style={{flex:1,padding:"2px 0",color:C.blue}}>🔵 BLUE ({blueTeamName})</div>
+        <div style={{flex:1,padding:"2px 0",color:C.red}}>🔴 RED ({redTeamName})</div>
+      </div>
       <div style={{display:"flex"}}>
         <div style={{flex:1,display:"flex"}}>
-          {ourPicks.map((p,i)=>(
+          {bluePicks.map((p,i)=>(
             <div key={i} style={{flex:1,aspectRatio:"1",position:"relative",borderRight:`1px solid ${C.border}`}}>
               {p?.hero?.name ? (
-                <>
-                  <HeroAvatar name={p.hero.name} team="our" size={64} style={{width:"100%",height:"100%",borderRadius:0,border:"none"}}/>
-                </>
+                <HeroAvatar name={p.hero.name} team={blueTeamTag} size={64} style={{width:"100%",height:"100%",borderRadius:0,border:"none"}}/>
               ) : <div style={{width:"100%",height:"100%",background:"#14112a"}}/>}
             </div>
           ))}
         </div>
         <div style={{flex:1,display:"flex"}}>
-          {enemyPicks.map((p,i)=>(
+          {redPicks.map((p,i)=>(
             <div key={i} style={{flex:1,aspectRatio:"1",position:"relative",borderLeft:i===0?`2px solid ${C.border}`:`1px solid ${C.border}`}}>
               {p?.hero?.name ? (
-                <HeroAvatar name={p.hero.name} team="enemy" size={64} style={{width:"100%",height:"100%",borderRadius:0,border:"none"}}/>
+                <HeroAvatar name={p.hero.name} team={redTeamTag} size={64} style={{width:"100%",height:"100%",borderRadius:0,border:"none"}}/>
               ) : <div style={{width:"100%",height:"100%",background:"#14112a"}}/>}
             </div>
           ))}
@@ -1265,8 +1310,7 @@ function GameSummaryRow({ game, gameNo, ourTeamName, ourTeamLogo, rivalName, riv
   );
 }
 
-function MatchDraftSummaryModal({ match, ourTeamName, ourTeamLogo, rivalName, rivalLogo, onClose }) {
-  const games = Array.isArray(match.games) && match.games.length ? match.games : [match];
+function MatchDraftSummaryModal({ games, toBlueRed, teamAName, teamBName, onClose }) {
   const captureRef = useRef(null);
   const [downloading, setDownloading] = useState(false);
   const toast = useToast();
@@ -1279,8 +1323,8 @@ function MatchDraftSummaryModal({ match, ourTeamName, ourTeamLogo, rivalName, ri
         backgroundColor: "#0a0a16", scale: 2, useCORS: true,
       });
       const link = document.createElement("a");
-      const safeRival = (rivalName||"rival").replace(/[^a-zA-Z0-9ก-๙]/g, "_");
-      link.download = `draft-summary-vs-${safeRival}.png`;
+      const safeName = (teamBName||"match").replace(/[^a-zA-Z0-9ก-๙]/g, "_");
+      link.download = `draft-summary-vs-${safeName}.png`;
       link.href = canvas.toDataURL("image/png");
       link.click();
     } catch (err) {
@@ -1300,7 +1344,7 @@ function MatchDraftSummaryModal({ match, ourTeamName, ourTeamLogo, rivalName, ri
           maxWidth:820,width:"100%",maxHeight:"90vh",display:"flex",flexDirection:"column"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:8}}>
           <div style={{fontWeight:800,fontSize:15,color:C.primaryLight}}>
-            📸 สรุปภาพรวม Draft — {ourTeamName} vs {rivalName}
+            📸 สรุปภาพรวม Draft — {teamAName} vs {teamBName}
           </div>
           <div style={{display:"flex",gap:8}}>
             <button onClick={downloadImage} disabled={downloading}
@@ -1319,9 +1363,7 @@ function MatchDraftSummaryModal({ match, ourTeamName, ourTeamLogo, rivalName, ri
         <div style={{overflowY:"auto",paddingRight:4}}>
           <div ref={captureRef} style={{background:"#0a0a16",padding:12}}>
             {games.map((g,i)=>(
-              <GameSummaryRow key={i} game={g} gameNo={i+1}
-                ourTeamName={ourTeamName} ourTeamLogo={ourTeamLogo}
-                rivalName={rivalName} rivalLogo={rivalLogo}/>
+              <GameSummaryRow key={i} bg={toBlueRed(g)} gameNo={i+1}/>
             ))}
           </div>
         </div>
@@ -1455,11 +1497,10 @@ function MatchCardWithStats({ m, onUpdateStats, onUpdateObjectives, onUpdateGame
           </button>
           {showSummary && (
             <MatchDraftSummaryModal
-              match={m}
-              ourTeamName={ourTeamName || "ทีมเรา"}
-              ourTeamLogo={ourTeamLogo}
-              rivalName={m.rivalName}
-              rivalLogo={rivalLogo}
+              games={Array.isArray(m.games) && m.games.length ? m.games : [m]}
+              toBlueRed={g => matchGameToBlueRed(g, ourTeamName || "ทีมเรา", ourTeamLogo, m.rivalName, rivalLogo)}
+              teamAName={ourTeamName || "ทีมเรา"}
+              teamBName={m.rivalName}
               onClose={()=>setShowSummary(false)}
             />
           )}
@@ -3388,6 +3429,7 @@ function ScoutSessionCreator({ rivals, enemyRosters, onSave, onCancel }) {
 // ═══════════════════════════════════════════
 function ScoutCard({ sm, onDelete }) {
   const [open, setOpen] = useState(false);
+  const [showSummary, setShowSummary] = useState(false);
   const gamesArr = sm.games||[];
   const aWins = gamesArr.filter(g=>g.teamAResult==="WIN").length;
   const bWins = gamesArr.length - aWins;
@@ -3558,11 +3600,27 @@ function ScoutCard({ sm, onDelete }) {
               </div>
             );
           })}
-          <button onClick={()=>{if(window.confirm("ลบ Scout record นี้?"))onDelete(sm.id);}}
-            style={{background:C.lose+"15",border:`1px solid ${C.lose}30`,color:C.lose,
-              borderRadius:7,padding:"5px 14px",cursor:"pointer",fontSize:11,fontWeight:700,marginTop:4}}>
-            🗑️ ลบ
-          </button>
+          <div style={{display:"flex",gap:8,marginTop:4}}>
+            <button onClick={()=>setShowSummary(true)}
+              style={{background:"transparent",border:`1px solid ${C.border}`,color:"#feca57",
+                borderRadius:7,padding:"5px 14px",cursor:"pointer",fontSize:11,fontWeight:700}}>
+              📸 สรุปภาพรวม Draft
+            </button>
+            <button onClick={()=>{if(window.confirm("ลบ Scout record นี้?"))onDelete(sm.id);}}
+              style={{background:C.lose+"15",border:`1px solid ${C.lose}30`,color:C.lose,
+                borderRadius:7,padding:"5px 14px",cursor:"pointer",fontSize:11,fontWeight:700}}>
+              🗑️ ลบ
+            </button>
+          </div>
+          {showSummary && (
+            <MatchDraftSummaryModal
+              games={gamesArr}
+              toBlueRed={g => scoutGameToBlueRed(g, sm.teamA, null, sm.teamB, null)}
+              teamAName={sm.teamA}
+              teamBName={sm.teamB}
+              onClose={()=>setShowSummary(false)}
+            />
+          )}
         </div>
       )}
     </div>
