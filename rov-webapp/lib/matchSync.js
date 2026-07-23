@@ -5,23 +5,19 @@
 // truth). Strategy: on every successful save, wipe and rebuild this team's
 // rows from the JSON that was just saved.
 //
-// ── v2 — fixed a real production bug ──
-// The first version looped `await tx.match.create({ data: { ..., games: {
-// create: [...] } } })` once per match, inside a single interactive
-// transaction. Each iteration was its own round-trip to the DB (Match
-// insert + nested Game insert + nested Pick insert, all separate queries
-// under the hood). For a team with a large match history this blew past
-// the transaction's 20s timeout and Prisma killed it mid-way:
-// `P2028 Transaction already closed`.
+// Why "wipe and rebuild" instead of diffing old vs new:
+// - Match/game IDs on the client are `Date.now()`-based and can shift when
+//   users edit/delete/reorder — diffing that reliably is genuinely harder
+//   than it looks and easy to get subtly wrong (ghost rows, orphaned picks).
+// - A team's match history is a few hundred to a few thousand rows at most
+//   (this is a scrim/tournament tracker, not a firehose) — a full rebuild
+//   inside one transaction is milliseconds, not a performance concern.
+// - It's trivially correct: the relational tables are *always* an exact
+//   mirror of the JSON that was last saved, by construction. No drift.
 //
-// Fix: build the full set of Match/Game/Pick rows in memory first (with
-// IDs generated up front, since createMany doesn't return created rows),
-// then write them with THREE createMany calls total instead of one
-// create() per match. That's a fixed, small number of round-trips
-// regardless of how many matches a team has — a few hundred matches and a
-// few thousand matches cost roughly the same wall-clock time now.
+// This runs in a Prisma transaction so a crash mid-rebuild can't leave a
+// team with half-written match history.
 
-import crypto from "node:crypto";
 import { prisma } from "./prisma.js";
 import { resolveHeroRole } from "./heroes.js";
 import { durationToMinutes } from "./duration.js";
@@ -51,7 +47,7 @@ function buildPickRows(picks, side, isBan, customHeroes, roleOverrides) {
     .filter(Boolean);
 }
 
-function applyStats(pickRows, gameStats, side) {
+function buildStatRows(pickRows, gameStats, side) {
   if (!gameStats?.[side]) return pickRows;
   return pickRows.map((row) => {
     if (row.side !== side || row.isBan) return row;
@@ -66,6 +62,25 @@ function applyStats(pickRows, gameStats, side) {
       gold: stat.gold ?? null,
     };
   });
+}
+
+function toGameRow(g, gameNo, customHeroes, roleOverrides) {
+  let picks = [
+    ...buildPickRows(g.ourBans, "our", true, customHeroes, roleOverrides),
+    ...buildPickRows(g.enemyBans, "enemy", true, customHeroes, roleOverrides),
+    ...buildPickRows(g.ourPicks, "our", false, customHeroes, roleOverrides),
+    ...buildPickRows(g.enemyPicks, "enemy", false, customHeroes, roleOverrides),
+  ];
+  picks = buildStatRows(picks, g.gameStats, "our");
+  picks = buildStatRows(picks, g.gameStats, "enemy");
+
+  return {
+    gameNo: g.gameNo ?? gameNo,
+    result: g.result === "WIN" || g.result === "LOSE" ? g.result : "LOSE",
+    durationMin: g.duration ? durationToMinutes(g.duration) : null,
+    objectives: g.objectives ?? undefined,
+    picks: { create: picks },
+  };
 }
 
 function parseMatchDate(dateStr) {
@@ -90,65 +105,28 @@ function parseMatchDate(dateStr) {
 export async function syncMatchesToRelational(teamId, matches = [], customHeroes = [], roleOverrides = {}) {
   if (!Array.isArray(matches)) return;
 
-  // ── Build all rows in memory first, with IDs generated up front ──
-  // (createMany doesn't return the created rows, so we can't get a
-  // generated Game id back to attach Picks to it the usual Prisma way —
-  // generating the id ourselves sidesteps that entirely.)
-  const matchRows = [];
-  const gameRows = [];
-  const pickRows = [];
+  await prisma.$transaction(async (tx) => {
+    // Wipe this team's mirror, then rebuild. Cascade deletes handle Game/Pick.
+    await tx.match.deleteMany({ where: { teamId } });
 
-  for (const m of matches) {
-    const matchId = crypto.randomUUID();
-    matchRows.push({
-      id: matchId,
-      teamId,
-      sourceId: String(m.id),
-      rivalName: m.rivalName ?? null,
-      category: m.category || "scrim",
-      date: parseMatchDate(m.date),
-      note: m.note ?? null,
-    });
+    for (const m of matches) {
+      const games = Array.isArray(m.games) && m.games.length > 0
+        ? m.games
+        : [m]; // flat single-game match: treat the match itself as game #1
 
-    const games = Array.isArray(m.games) && m.games.length > 0 ? m.games : [m];
-
-    games.forEach((g, i) => {
-      const gameId = crypto.randomUUID();
-      gameRows.push({
-        id: gameId,
-        matchId,
-        gameNo: g.gameNo ?? i + 1,
-        result: g.result === "WIN" || g.result === "LOSE" ? g.result : "LOSE",
-        durationMin: g.duration ? durationToMinutes(g.duration) : null,
-        objectives: g.objectives ?? undefined,
+      await tx.match.create({
+        data: {
+          teamId,
+          sourceId: String(m.id),
+          rivalName: m.rivalName ?? null,
+          category: m.category || "scrim",
+          date: parseMatchDate(m.date),
+          note: m.note ?? null,
+          games: {
+            create: games.map((g, i) => toGameRow(g, i + 1, customHeroes, roleOverrides)),
+          },
+        },
       });
-
-      let picks = [
-        ...buildPickRows(g.ourBans, "our", true, customHeroes, roleOverrides),
-        ...buildPickRows(g.enemyBans, "enemy", true, customHeroes, roleOverrides),
-        ...buildPickRows(g.ourPicks, "our", false, customHeroes, roleOverrides),
-        ...buildPickRows(g.enemyPicks, "enemy", false, customHeroes, roleOverrides),
-      ];
-      picks = applyStats(picks, g.gameStats, "our");
-      picks = applyStats(picks, g.gameStats, "enemy");
-
-      for (const p of picks) {
-        pickRows.push({ id: crypto.randomUUID(), gameId, ...p });
-      }
-    });
-  }
-
-  // ── Write: delete + 3 bulk inserts, instead of N sequential creates ──
-  // Kept as a single transaction for atomicity, but now it's a FIXED
-  // number of queries (4) no matter how many matches there are, so it
-  // can't time out the way the per-record loop did.
-  await prisma.$transaction(
-    [
-      prisma.match.deleteMany({ where: { teamId } }), // cascades to Game/Pick
-      ...(matchRows.length ? [prisma.match.createMany({ data: matchRows })] : []),
-      ...(gameRows.length ? [prisma.game.createMany({ data: gameRows })] : []),
-      ...(pickRows.length ? [prisma.pick.createMany({ data: pickRows })] : []),
-    ],
-    { timeout: 30000 }
-  );
+    }
+  }, { timeout: 20000 });
 }

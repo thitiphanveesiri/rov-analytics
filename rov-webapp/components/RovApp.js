@@ -1228,6 +1228,9 @@ function GameSummaryRow({ bg, gameNo }) {
     duration,
   } = bg;
   const redWin = blueWin===undefined ? undefined : !blueWin;
+  // ฝั่งแดงเรียงจากขวาสุดไปซ้าย (สลับทิศจากฝั่งน้ำเงินที่เรียงซ้ายไปขวาปกติ)
+  const redBansRTL  = [...redBans].reverse();
+  const redPicksRTL = [...redPicks].reverse();
 
   return (
     <div style={{marginBottom:16,border:`1px solid ${C.border}`,borderRadius:10,overflow:"hidden",background:"#0a0a16"}}>
@@ -1261,7 +1264,7 @@ function GameSummaryRow({ bg, gameNo }) {
           {redTeamName}
         </div>
         <div style={{display:"flex",gap:3,padding:"6px 8px",flexShrink:0}}>
-          {redBans.map((b,i)=>(
+          {redBansRTL.map((b,i)=>(
             <div key={i} style={{width:30,height:30,borderRadius:5,overflow:"hidden",
               filter:b?.name?"grayscale(65%)":"none",opacity:b?.name?0.85:0.3,
               background:"#000",border:`1px solid ${C.border}`,flexShrink:0}}>
@@ -1297,7 +1300,7 @@ function GameSummaryRow({ bg, gameNo }) {
           ))}
         </div>
         <div style={{flex:1,display:"flex"}}>
-          {redPicks.map((p,i)=>(
+          {redPicksRTL.map((p,i)=>(
             <div key={i} style={{flex:1,aspectRatio:"1",position:"relative",borderLeft:i===0?`2px solid ${C.border}`:`1px solid ${C.border}`}}>
               {p?.hero?.name ? (
                 <HeroAvatar name={p.hero.name} team={redTeamTag} size={64} style={{width:"100%",height:"100%",borderRadius:0,border:"none"}}/>
@@ -8217,7 +8220,7 @@ function MyStatsPage({ session, roster, allGames, playerPhotos, onLinkPlayer }) 
 // ═══════════════════════════════════════════
 //  MAIN APP
 // ═══════════════════════════════════════════
-export default function RovApp() {
+function RovAppInner() {
   const { data: session, update: updateSession } = useSession();
   const toast = useToast();
   const userRole = session?.user?.role || "member"; // "admin" | "coach" | "member"
@@ -8570,7 +8573,6 @@ export default function RovApp() {
   }
 
   return (
-    <ToastProvider>
     <HeroPhotosContext.Provider value={app.heroPhotos || {}}>
     <div style={{minHeight:"100vh",background:C.bgBase,color:C.textMain,fontFamily:"'Segoe UI',sans-serif"}}>
 
@@ -9707,6 +9709,20 @@ export default function RovApp() {
       )}
     </div>
     </HeroPhotosContext.Provider>
+  );
+}
+
+// ── Outer wrapper ──
+// ToastProvider must wrap RovAppInner from OUTSIDE, not be rendered by it —
+// a component can never read a Context Provider that it renders itself
+// (Context only flows down to descendants). This is what fixed the
+// "toast is not a function" crash: handlers defined directly inside the
+// old RovApp (now RovAppInner) call useToast(), so RovAppInner itself
+// must be a *child* of ToastProvider, not its parent.
+export default function RovApp() {
+  return (
+    <ToastProvider>
+      <RovAppInner />
     </ToastProvider>
   );
 }
