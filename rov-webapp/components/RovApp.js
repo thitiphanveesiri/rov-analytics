@@ -3407,8 +3407,19 @@ function ScoutSessionCreator({ rivals, enemyRosters, onSave, onCancel }) {
             ))}
           </div>
         )}
+        {mode==="bo" && games.length>0 && (
+          <button onClick={()=>{
+            if(window.confirm(`จบ session นี้เลย? (บันทึกไว้แล้ว ${games.length} เกม ไม่ต้องครบ ${bo.total} เกมตามที่ตั้งไว้)`)) {
+              onSave({ teamA, teamB, mode, boType, category:scoutCat, games });
+            }
+          }}
+            style={{marginLeft:"auto",background:C.win+"20",border:`1px solid ${C.win}50`,
+              color:C.win,borderRadius:7,padding:"4px 12px",cursor:"pointer",fontSize:12,fontWeight:700}}>
+            ✅ จบ Session ({games.length} เกม)
+          </button>
+        )}
         <button onClick={()=>{if(window.confirm("ยกเลิกการบันทึก?"))onCancel();}}
-          style={{marginLeft:"auto",background:"transparent",border:`1px solid ${C.lose}40`,
+          style={{background:"transparent",border:`1px solid ${C.lose}40`,
             color:C.lose,borderRadius:7,padding:"4px 12px",cursor:"pointer",fontSize:12}}>
           ✕ ยกเลิก
         </button>
@@ -3427,9 +3438,157 @@ function ScoutSessionCreator({ rivals, enemyRosters, onSave, onCancel }) {
 // ═══════════════════════════════════════════
 //  SCOUT CARD — แสดงผลใน Scout Log
 // ═══════════════════════════════════════════
-function ScoutCard({ sm, onDelete }) {
+// ═══════════════════════════════════════════
+//  EDIT SCOUT GAME MODAL — แก้ไข hero/ban/ผู้เล่น/สกอร์/เวลา/K-D-A
+//  ของเกมที่ scout ไว้แล้ว (คล้าย EditGameModal ของ Match Log แต่ปรับ
+//  ให้เข้ากับรูปแบบข้อมูล teamA/teamB ของ Scout Log)
+// ═══════════════════════════════════════════
+function EditScoutGameModal({ game, teamA, teamB, onSave, onClose }) {
+  const [picksA, setPicksA] = useState(() =>
+    (game.picksA?.length ? game.picksA : ROLES_PICK.map(r=>({role:r,hero:null,player:""}))).map(p=>({...p})));
+  const [picksB, setPicksB] = useState(() =>
+    (game.picksB?.length ? game.picksB : ROLES_PICK.map(r=>({role:r,hero:null,player:""}))).map(p=>({...p})));
+  const [bansA, setBansA] = useState(() =>
+    (game.bansA?.length ? game.bansA : Array(BANS_PER_TEAM).fill(null)).slice());
+  const [bansB, setBansB] = useState(() =>
+    (game.bansB?.length ? game.bansB : Array(BANS_PER_TEAM).fill(null)).slice());
+  const [statsA, setStatsA] = useState(game.statsA || {});
+  const [statsB, setStatsB] = useState(game.statsB || {});
+  const [teamAResult, setTeamAResult] = useState(game.teamAResult || "WIN");
+  const [killsA, setKillsA] = useState(game.killsA ?? "");
+  const [killsB, setKillsB] = useState(game.killsB ?? "");
+  const [duration, setDuration] = useState(game.duration || "");
+  const [sideA, setSideA] = useState(game.sideA || "blue");
+
+  const setPickHero   = (side,i,name) => (side==="A"?setPicksA:setPicksB)(prev=>prev.map((p,idx)=>idx===i?{...p,hero:name?{name}:null}:p));
+  const setPickPlayer = (side,i,val)  => (side==="A"?setPicksA:setPicksB)(prev=>prev.map((p,idx)=>idx===i?{...p,player:val}:p));
+  const setBanHero    = (side,i,name) => (side==="A"?setBansA:setBansB)(prev=>prev.map((b,idx)=>idx===i?(name?{name}:null):b));
+
+  function save() {
+    onSave({
+      picksA, picksB, bansA, bansB, statsA, statsB,
+      teamAResult,
+      killsA: Math.max(0, Number(killsA)||0),
+      killsB: Math.max(0, Number(killsB)||0),
+      duration: normalizeDuration(duration),
+      sideA, sideB: sideA==="blue"?"red":"blue",
+    });
+  }
+
+  const selectStyle = {background:C.bgCard,border:`1px solid ${C.border}`,color:C.textMain,
+    borderRadius:6,padding:"5px 6px",fontSize:11,outline:"none"};
+
+  const PickBanSide = ({ side, teamName, color, bans, picks }) => (
+    <div>
+      <div style={{fontWeight:700,fontSize:12,color,marginBottom:8}}>
+        {side==="A"?"🔵":"🔴"} {teamName} — Ban
+      </div>
+      <div style={{display:"flex",gap:4,marginBottom:10,flexWrap:"wrap"}}>
+        {bans.map((b,i)=>(
+          <select key={i} value={b?.name||""} onChange={e=>setBanHero(side,i,e.target.value)} style={{...selectStyle,width:88}}>
+            <option value="">— ban —</option>
+            {HERO_DATA.map(h=><option key={h.name} value={h.name}>{h.name}</option>)}
+          </select>
+        ))}
+      </div>
+      <div style={{fontWeight:700,fontSize:12,color,marginBottom:8}}>Pick + ผู้เล่น</div>
+      {picks.map((p,i)=>(
+        <div key={i} style={{display:"flex",gap:6,marginBottom:6,alignItems:"center"}}>
+          <span style={{fontSize:10,color:C.textMuted,width:48,flexShrink:0}}>{p.role}</span>
+          <select value={p.hero?.name||""} onChange={e=>setPickHero(side,i,e.target.value)} style={{...selectStyle,flex:1}}>
+            <option value="">— hero —</option>
+            {HERO_DATA.map(h=><option key={h.name} value={h.name}>{h.name}</option>)}
+          </select>
+          <input value={p.player||""} onChange={e=>setPickPlayer(side,i,e.target.value)} placeholder="ผู้เล่น"
+            style={{...selectStyle,width:86}}/>
+        </div>
+      ))}
+    </div>
+  );
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.75)",zIndex:550,
+      display:"flex",alignItems:"center",justifyContent:"center",padding:16}}
+      onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()}
+        style={{background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:16,padding:24,
+          width:760,maxWidth:"100%",maxHeight:"85vh",overflowY:"auto"}}>
+        <div style={{fontWeight:800,fontSize:16,marginBottom:16,color:C.primaryLight}}>
+          ✏️ แก้ไขข้อมูล Scout — {teamA} vs {teamB}
+        </div>
+
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:16,marginBottom:16}}>
+          <PickBanSide side="A" teamName={teamA} color={C.blue} bans={bansA} picks={picksA}/>
+          <PickBanSide side="B" teamName={teamB} color={C.red}  bans={bansB} picks={picksB}/>
+        </div>
+
+        <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:16,alignItems:"flex-end"}}>
+          <div>
+            <div style={{fontSize:10,color:C.textMuted,marginBottom:4}}>ทีมไหนชนะ</div>
+            <select value={teamAResult} onChange={e=>setTeamAResult(e.target.value)}
+              style={{...selectStyle,fontWeight:700,padding:"7px 10px",fontSize:12,
+                color:teamAResult==="WIN"?C.blue:C.red}}>
+              <option value="WIN">{teamA} ชนะ</option>
+              <option value="LOSE">{teamB} ชนะ</option>
+            </select>
+          </div>
+          <div>
+            <div style={{fontSize:10,color:C.textMuted,marginBottom:4}}>ฝั่งของ {teamA}</div>
+            <select value={sideA} onChange={e=>setSideA(e.target.value)} style={{...selectStyle,padding:"7px 10px",fontSize:12}}>
+              <option value="blue">🔵 Blue</option>
+              <option value="red">🔴 Red</option>
+            </select>
+          </div>
+          <div>
+            <div style={{fontSize:10,color:C.textMuted,marginBottom:4}}>คิล {teamA}</div>
+            <input type="number" min="0" value={killsA} onChange={e=>setKillsA(e.target.value)}
+              style={{...selectStyle,width:70,padding:"7px 10px",fontSize:12}}/>
+          </div>
+          <div>
+            <div style={{fontSize:10,color:C.textMuted,marginBottom:4}}>คิล {teamB}</div>
+            <input type="number" min="0" value={killsB} onChange={e=>setKillsB(e.target.value)}
+              style={{...selectStyle,width:70,padding:"7px 10px",fontSize:12}}/>
+          </div>
+          <div>
+            <div style={{fontSize:10,color:C.textMuted,marginBottom:4}}>เวลา (นาที.วินาที)</div>
+            <input type="text" inputMode="decimal" value={duration}
+              onChange={e=>setDuration(e.target.value)}
+              onBlur={e=>setDuration(normalizeDuration(e.target.value))}
+              placeholder="09.45" style={{...selectStyle,width:90,padding:"7px 10px",fontSize:12}}/>
+          </div>
+        </div>
+
+        <div style={{marginBottom:20}}>
+          <div style={{fontWeight:700,fontSize:12,color:C.primaryLight,marginBottom:8}}>
+            📊 Stats รายผู้เล่น (K/D/A/Dmg/Gold)
+          </div>
+          <UnifiedStatsEditor
+            ourPicks={picksA} enemyPicks={picksB}
+            gameStats={{ our: statsA, enemy: statsB }}
+            onChangeStats={(next)=>{ setStatsA(next.our||{}); setStatsB(next.enemy||{}); }}
+            ourScore={Number(killsA)||0} enemyScore={Number(killsB)||0}
+          />
+        </div>
+
+        <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+          <button onClick={onClose} style={{background:"transparent",border:`1px solid ${C.border}`,
+            color:C.textMuted,borderRadius:8,padding:"9px 18px",cursor:"pointer",fontWeight:700,fontSize:13}}>
+            ยกเลิก
+          </button>
+          <button onClick={save} style={{background:C.primary,color:"#fff",border:"none",borderRadius:8,
+            padding:"9px 22px",cursor:"pointer",fontWeight:700,fontSize:13}}>
+            💾 บันทึก
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ScoutCard({ sm, onDelete, onUpdateGame }) {
   const [open, setOpen] = useState(false);
   const [showSummary, setShowSummary] = useState(false);
+  const [editingGameIdx, setEditingGameIdx] = useState(null);
   const gamesArr = sm.games||[];
   const aWins = gamesArr.filter(g=>g.teamAResult==="WIN").length;
   const bWins = gamesArr.length - aWins;
@@ -3495,6 +3654,11 @@ function ScoutCard({ sm, onDelete }) {
                   <span style={{fontWeight:800,fontSize:12,color:C.primaryLight}}>Game {gi+1}</span>
                   <span style={{padding:"2px 10px",borderRadius:99,fontSize:11,fontWeight:800,
                     background:C.win+"20",color:C.win}}>🏆 {winner}</span>
+                  <button onClick={()=>setEditingGameIdx(gi)}
+                    style={{marginLeft:"auto",background:"transparent",border:`1px solid ${C.border}`,
+                      color:C.textMuted,borderRadius:6,padding:"2px 9px",cursor:"pointer",fontSize:10,fontWeight:700}}>
+                    ✏️ แก้ไข
+                  </button>
                   {g.sideA&&(
                     <span style={{fontSize:10,color:C.textMuted}}>
                       <span style={{color:g.sideA==="blue"?C.blue:C.red,fontWeight:700}}>
@@ -3596,6 +3760,13 @@ function ScoutCard({ sm, onDelete }) {
                     fontSize:11,color:C.primaryLight,marginTop:6}}>
                     📝 {g.note}
                   </div>
+                )}
+                {editingGameIdx===gi && (
+                  <EditScoutGameModal
+                    game={g} teamA={sm.teamA} teamB={sm.teamB}
+                    onSave={updates => { onUpdateGame && onUpdateGame(gi, updates); setEditingGameIdx(null); }}
+                    onClose={()=>setEditingGameIdx(null)}
+                  />
                 )}
               </div>
             );
@@ -3752,7 +3923,7 @@ function calcMatchupStats(records, teamFocus) {
 }
 
 // ── Matchup Detail: A vs B ──
-function MatchupDetail({ rivalName, opponent, records, rivals, enemyRosters, onSaveScout, onDeleteScout, onBack }) {
+function MatchupDetail({ rivalName, opponent, records, rivals, enemyRosters, onSaveScout, onDeleteScout, onUpdateScoutGame, onBack }) {
   const [creating, setCreating] = useState(false);
   const [activeTab, setActiveTab] = useState("overview");
   const st = calcMatchupStats(records, rivalName);
@@ -3814,7 +3985,8 @@ function MatchupDetail({ rivalName, opponent, records, rivals, enemyRosters, onS
         </div>
       ) : activeTab==="log" ? (
         records.map(sm=>(
-          <ScoutCard key={sm.id} sm={sm} onDelete={id=>onDeleteScout(id)}/>
+          <ScoutCard key={sm.id} sm={sm} onDelete={id=>onDeleteScout(id)}
+            onUpdateGame={(gameIdx,updates)=>onUpdateScoutGame && onUpdateScoutGame(sm.id,gameIdx,updates)}/>
         ))
       ) : (
         <div style={{display:"flex",flexDirection:"column",gap:14}}>
@@ -4065,7 +4237,7 @@ function MatchupDetail({ rivalName, opponent, records, rivals, enemyRosters, onS
 }
 
 // ── Scout Log Page: matchup list ──
-function ScoutLogPage({ rivalName, scoutMatches, rivals, enemyRosters, onSaveScout, onDeleteScout }) {
+function ScoutLogPage({ rivalName, scoutMatches, rivals, enemyRosters, onSaveScout, onDeleteScout, onUpdateScoutGame }) {
   const [creating,       setCreating]       = useState(false);
   const [selOpponent,    setSelOpponent]    = useState(null);
   const [scoutCatFilter, setScoutCatFilter] = useState("all"); // "all" | "scrim" | "tournament"
@@ -4100,6 +4272,7 @@ function ScoutLogPage({ rivalName, scoutMatches, rivals, enemyRosters, onSaveSco
       enemyRosters={enemyRosters}
       onSaveScout={data=>{onSaveScout(data);}}
       onDeleteScout={onDeleteScout}
+      onUpdateScoutGame={onUpdateScoutGame}
       onBack={()=>setSelOpponent(null)}
     />
   );
@@ -7121,6 +7294,18 @@ function appReducer(state, action) {
     case "DELETE_SCOUT":
       return { ...state, scoutMatches: state.scoutMatches.filter(s=>s.id!==action.payload) };
 
+    // แก้ไขข้อมูลเกมใน Scout Log ย้อนหลัง (hero/ผู้เล่น/สกอร์/เวลา/K-D-A)
+    case "UPDATE_SCOUT_GAME": {
+      const { scoutId, gameIdx, updates } = action.payload;
+      const scoutMatches = state.scoutMatches.map(sm => {
+        if (sm.id !== scoutId) return sm;
+        const games = [...(sm.games||[])];
+        games[gameIdx] = { ...games[gameIdx], ...updates };
+        return { ...sm, games };
+      });
+      return { ...state, scoutMatches };
+    }
+
     case "MERGE_STATE":
       return { ...state, ...action.payload };
 
@@ -9161,6 +9346,7 @@ export default function RovApp() {
                           enemyRosters={enemyRosters}
                           onSaveScout={data=>dispatchApp({type:"SAVE_SCOUT",payload:data})}
                           onDeleteScout={id=>dispatchApp({type:"DELETE_SCOUT",payload:id})}
+                          onUpdateScoutGame={(scoutId,gameIdx,updates)=>dispatchApp({type:"UPDATE_SCOUT_GAME",payload:{scoutId,gameIdx,updates}})}
                           onBack={()=>dispatchUI({type:"SET_RIVAL_VIEW",payload:"history"})}
                         />
                       )}
