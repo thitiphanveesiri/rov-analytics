@@ -2,18 +2,19 @@
 // ── Extracted from components/RovApp.js ──
 // This is a plain (non "use client") module so it can be safely imported
 // from BOTH client components (RovApp.js) and server code (API routes,
-// analytics endpoints) — that's the main reason to pull it out: the
-// analytics routes need HERO_DATA's role mapping too, and importing a
-// "use client" file into a server Route Handler is asking for bundler
-// trouble.
+// analytics endpoints).
 //
-// NOTE ON MUTATION: RovApp.js currently mutates this array in place at
-// runtime (pushes custom heroes, rewrites .role from roleOverrides — see
-// the useEffect keyed on app.customHeroes/app.roleOverrides). That
-// behavior is preserved here on purpose: HERO_DATA is still a single
-// module-level singleton, so every file that imports it shares the same
-// array reference, exactly like before. Moving the declaration doesn't
-// change that.
+// NOTE ON MUTATION: RovApp.js mutates this array in place at runtime
+// (pushes custom heroes, rewrites .role from roleOverrides). That behavior
+// is preserved on purpose — HERO_DATA stays a single module-level singleton.
+//
+// ── Update log ──
+// Added a batch of heroes that weren't in the original list yet (checked
+// against multiple sources since a wrong `role` here throws off the
+// win-rate-by-role analytics). A few were genuinely hard to pin down with
+// confidence — Richter, Tamyn, Wiro — marked below. If any of these turn
+// out wrong for how your team actually plays them, just fix it via
+// Admin → Hero Images → role override in the app; no code change needed.
 
 export const HERO_DATA = [
   {name:"Airi",role:"Slayer",img:"airi"},{name:"Aleister",role:"Support",img:"aleister"},
@@ -67,6 +68,37 @@ export const HERO_DATA = [
   {name:"Zata",role:"Jungle",img:"zata"},{name:"Zephys",role:"Jungle",img:"zephys"},
   {name:"Zill",role:"Mid",img:"zill"},{name:"Zip",role:"Support",img:"zip"},
   {name:"Zuka",role:"Jungle",img:"zuka"},
+
+  // ── Added on request ──
+  {name:"Aoi",role:"Jungle",img:"aoi"},
+  {name:"Arduin",role:"Slayer",img:"arduin"},
+  {name:"Ata",role:"Support",img:"ata"},
+  {name:"Aya",role:"Support",img:"aya"},
+  {name:"Bonnie",role:"Mid",img:"bonnie"},
+  {name:"Bright",role:"Jungle",img:"bright"},
+  {name:"Cresht",role:"Support",img:"cresht"},
+  {name:"Dextra",role:"Slayer",img:"dextra"},
+  {name:"Erin",role:"Abyssal",img:"erin"},
+  {name:"Errol",role:"Slayer",img:"errol"},
+  {name:"Iggy",role:"Mid",img:"iggy"},
+  {name:"Liliana",role:"Mid",img:"liliana"},
+  {name:"Omega",role:"Support",img:"omega"},
+  {name:"Richter",role:"Slayer",img:"richter"},        // ไม่ชัวร์ 100% — เช็ค/แก้ผ่าน role override ในแอปได้
+  {name:"Superman",role:"Slayer",img:"superman"},
+  {name:"TeeMee",role:"Support",img:"teemee"},
+  {name:"The Flash",role:"Jungle",img:"theflash"},
+  {name:"Wiro",role:"Jungle",img:"wiro"},               // dual Warrior/Tank ในเกม — เช็คตามที่ทีมเล่นจริง
+  {name:"Wonder Woman",role:"Slayer",img:"wonderwoman"},
+  {name:"Dolia",role:"Support",img:"dolia"},
+  {name:"Dyadia",role:"Support",img:"dyadia"},
+  {name:"Billow",role:"Jungle",img:"billow"},
+  {name:"Heino",role:"Mid",img:"heino"},
+  {name:"Goverra",role:"Mid",img:"goverra"},
+  {name:"Biron",role:"Slayer",img:"biron"},
+  {name:"Bolt Baron",role:"Slayer",img:"boltbaron"},    // เข้าใจว่า "BoltBiron" ที่พิมพ์มาคือฮีโร่นี้ (ชื่อจริงมีวรรค)
+  {name:"Flowborn (Carry)",role:"Abyssal",img:"flowborncarry"},
+  {name:"Flowborn (Mage)",role:"Mid",img:"flowbornmage"},
+  {name:"Tamyn",role:"Support",img:"tamyn"},            // ไม่เจอข้อมูล role ที่ยืนยันได้ — เดาไว้ก่อน ต้องเช็คจริง
 ].sort((a,b)=>a.name.localeCompare(b.name));
 
 export const ROLES_FILTER = ["All","Slayer","Jungle","Mid","Abyssal","Support"];
@@ -75,14 +107,7 @@ export const ROLE_COLOR   = {Slayer:"#e17055",Jungle:"#00b894",Mid:"#6C5CE7",Aby
 
 /**
  * Resolve a hero's effective role, honoring role overrides and custom
- * (team-added) heroes — same precedence RovApp.js already uses at
- * runtime (roleOverrides[name] || original role), just factored out so
- * server-side analytics code can compute the same answer without
- * needing a live, mutated HERO_DATA array in memory.
- *
- * @param {string} heroName
- * @param {Array<{name:string, role:string}>} customHeroes - from TeamData.customHeroes
- * @param {Record<string,string>} roleOverrides - from TeamData.roleOverrides
+ * (team-added) heroes.
  */
 export function resolveHeroRole(heroName, customHeroes = [], roleOverrides = {}) {
   if (roleOverrides?.[heroName]) return roleOverrides[heroName];

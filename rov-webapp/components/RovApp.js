@@ -144,18 +144,13 @@ function useIsMobile(breakpoint = 860) {
 
 // ═══════════════════════════════════════════
 //  HERO IMAGE RESOLVER
-//  Fandom (arenaofvalor.fandom.com) uses hash-based image URLs that can't
-//  be guessed from hero name. We resolve the real URL at runtime via the
-//  MediaWiki API (action=query&prop=imageinfo), then cache the result so
-//  each hero is only looked up once per session. Falls back to a letter
-//  avatar if the API call fails (CORS, network, file not found, etc.)
-//
-//  IMPORTANT: Live Draft renders the full ~100-hero grid at once, which
-//  would otherwise fire 100+ simultaneous fetches and likely get rate
-//  limited / blocked. We queue all lookups and only run a few requests
-//  concurrently, so every hero still resolves — just staggered.
+//  Hero portraits come from files bundled with the app: public/heroes/<slug>.png
+//  (slug = the `img` field on each hero in lib/heroes.js / HERO_DATA, e.g.
+//  public/heroes/airi.png). No external API call — checked once per hero
+//  per session and cached. If a file is missing, the calling component
+//  falls back to a letter avatar (existing onError handling), and you can
+//  just drop the PNG into public/heroes/ later — no code change needed.
 // ═══════════════════════════════════════════
-const HERO_IMG_CACHE = {}; // { heroName: url | null }  null = lookup failed, don't retry
 const WB_IMG_ELEM_CACHE = {}; // { url: HTMLImageElement } — preloaded for canvas drawImage
 
 function getPreloadedImg(url, onReady) {
@@ -173,79 +168,42 @@ function getPreloadedImg(url, onReady) {
   WB_IMG_ELEM_CACHE[url] = img; // store immediately (complete=false until loaded)
   return null;
 }
-const HERO_IMG_LISTENERS = {}; // { heroName: Set<setStateFn> }
-const HERO_IMG_QUEUE = []; // pending heroNames waiting to be fetched
-let HERO_IMG_INFLIGHT = 0;
-const HERO_IMG_MAX_CONCURRENT = 4;
 
-function queueHeroImageFetch(heroName) {
-  if (HERO_IMG_CACHE[heroName] !== undefined) return; // already resolved or queued
-  HERO_IMG_CACHE[heroName] = null; // mark as "pending" so we don't queue twice
-  HERO_IMG_QUEUE.push(heroName);
-  pumpHeroImageQueue();
+// { heroName: url | null }  null = confirmed no local file for this hero
+const LOCAL_HERO_IMG_CACHE = {};
+
+function checkLocalHeroImage(slug) {
+  return new Promise((resolve) => {
+    if (!slug) { resolve(null); return; }
+    const url = `/heroes/${slug}.png`;
+    const img = new Image();
+    img.onload = () => resolve(url);
+    img.onerror = () => resolve(null);
+    img.src = url;
+  });
 }
 
-function pumpHeroImageQueue() {
-  while (HERO_IMG_INFLIGHT < HERO_IMG_MAX_CONCURRENT && HERO_IMG_QUEUE.length > 0) {
-    const heroName = HERO_IMG_QUEUE.shift();
-    HERO_IMG_INFLIGHT++;
-    fetchHeroImage(heroName).finally(() => {
-      HERO_IMG_INFLIGHT--;
-      pumpHeroImageQueue();
-    });
-  }
-}
-
-async function fetchHeroImage(heroName) {
-  // Build a few filename candidates to try in order (wiki naming isn't 100%
-  // consistent for names with apostrophes/spaces, e.g. "Azzen'Ka", "D'Arcy")
-  const candidates = [
-    `${heroName}.png`,
-    `${heroName}.jpg`,
-    `${heroName.replace(/'/g,"")}.png`,
-    `${heroName.replace(/\s+/g,"_")}.png`,
-  ];
-
-  for (const fileName of candidates) {
-    try {
-      const apiUrl = `https://arenaofvalor.fandom.com/api.php?action=query&format=json&prop=imageinfo&titles=${encodeURIComponent("File:"+fileName)}&iiprop=url&origin=*`;
-      const res  = await fetch(apiUrl);
-      const data = await res.json();
-      const pages = data?.query?.pages;
-      const page  = pages ? Object.values(pages)[0] : null;
-      const url   = page?.imageinfo?.[0]?.url || null;
-      if (url) {
-        HERO_IMG_CACHE[heroName] = url;
-        (HERO_IMG_LISTENERS[heroName]||[]).forEach(fn=>fn(url));
-        return;
-      }
-    } catch {
-      // try next candidate
-    }
-  }
-  // all candidates failed
-  HERO_IMG_CACHE[heroName] = null;
-  (HERO_IMG_LISTENERS[heroName]||[]).forEach(fn=>fn(null));
-}
-
-// Hook: returns resolved image URL for a hero (or null while loading/failed)
+// Hook: returns resolved image URL for a hero (or null while loading/missing)
+// Priority: 1) team's own uploaded photo  2) bundled local image (public/heroes/)
 function useHeroImage(hero) {
   const name = hero?.name;
+  const slug = hero?.img;
   const heroPhotos = useContext(HeroPhotosContext);
   const uploadedUrl = name ? heroPhotos[name] : null;
-  const [webUrl, setWebUrl] = useState(()=> name ? HERO_IMG_CACHE[name] : null);
+  const [localUrl, setLocalUrl] = useState(() => (name ? LOCAL_HERO_IMG_CACHE[name] ?? null : null));
 
   useEffect(() => {
-    if (!name || uploadedUrl) return; // user-uploaded photo takes priority — skip web lookup entirely
-    const cached = HERO_IMG_CACHE[name];
-    if (cached) { setWebUrl(cached); return; } // already resolved to a real URL
-    if (!HERO_IMG_LISTENERS[name]) HERO_IMG_LISTENERS[name] = new Set();
-    HERO_IMG_LISTENERS[name].add(setWebUrl);
-    queueHeroImageFetch(name);
-    return () => { HERO_IMG_LISTENERS[name]?.delete(setWebUrl); };
-  }, [name, uploadedUrl]);
+    if (!name || uploadedUrl) return; // user-uploaded photo takes priority — skip local lookup
+    if (LOCAL_HERO_IMG_CACHE[name] !== undefined) { setLocalUrl(LOCAL_HERO_IMG_CACHE[name]); return; }
+    let cancelled = false;
+    checkLocalHeroImage(slug).then((url) => {
+      LOCAL_HERO_IMG_CACHE[name] = url; // cache the answer either way
+      if (!cancelled) setLocalUrl(url);
+    });
+    return () => { cancelled = true; };
+  }, [name, slug, uploadedUrl]);
 
-  return uploadedUrl || webUrl;
+  return uploadedUrl || localUrl;
 }
 
 // ═══════════════════════════════════════════
@@ -5891,10 +5849,18 @@ function TacticalWhiteboard() {
         const col = TEAM_COLORS[el.team] || TEAM_COLORS.our;
         const r   = el.r || 22;
         ctx.lineWidth   = isSel ? 3 : 2;
-        // resolve best URL: user-uploaded first, then wiki cache
+        // resolve best URL: user-uploaded first, then bundled local image
         const uploadedUrl = heroPhotos?.[el.name] || null;
-        const wikiUrl     = HERO_IMG_CACHE[el.name] || null;
-        const imgUrl      = uploadedUrl || wikiUrl;
+        const localCached = LOCAL_HERO_IMG_CACHE[el.name];
+        if (localCached === undefined && !uploadedUrl) {
+          // not checked yet this session — kick off the check, redraw once we know
+          const heroDef = HERO_DATA.find(h => h.name === el.name);
+          checkLocalHeroImage(heroDef?.img).then((url) => {
+            LOCAL_HERO_IMG_CACHE[el.name] = url;
+            redraw();
+          });
+        }
+        const imgUrl = uploadedUrl || localCached || null;
         // trigger preload if needed — onReady redraws the canvas
         const preloaded   = imgUrl ? getPreloadedImg(imgUrl, () => redraw()) : null;
         ctx.save();
