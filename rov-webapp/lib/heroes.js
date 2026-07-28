@@ -82,8 +82,7 @@ export const HERO_DATA = [
   {name:"Errol",role:"Slayer",img:"errol"},
   {name:"Iggy",role:"Mid",img:"iggy"},
   {name:"Liliana",role:"Mid",img:"liliana"},
-  {name:"Omega",role:"Support",img:"omega"},
-  {name:"Richter",role:"Slayer",img:"richter"},        // ไม่ชัวร์ 100% — เช็ค/แก้ผ่าน role override ในแอปได้
+  {name:"Omega",role:"Support",img:"omega"},     // ไม่ชัวร์ 100% — เช็ค/แก้ผ่าน role override ในแอปได้
   {name:"Superman",role:"Slayer",img:"superman"},
   {name:"TeeMee",role:"Support",img:"teemee"},
   {name:"The Flash",role:"Jungle",img:"theflash"},
