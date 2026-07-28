@@ -174,21 +174,12 @@ const LOCAL_HERO_IMG_CACHE = {};
 
 function checkLocalHeroImage(slug) {
   return new Promise((resolve) => {
-    const png = `/heroes/${slug}.png`;
-    const jpg = `/heroes/${slug}.jpg`;
-
+    if (!slug) { resolve(null); return; }
+    const url = `/heroes/${slug}.png`;
     const img = new Image();
-
-    img.onload = () => resolve(img.src);
-
-    img.onerror = () => {
-      const img2 = new Image();
-      img2.onload = () => resolve(jpg);
-      img2.onerror = () => resolve(null);
-      img2.src = jpg;
-    };
-
-    img.src = png;
+    img.onload = () => resolve(url);
+    img.onerror = () => resolve(null);
+    img.src = url;
   });
 }
 
@@ -213,6 +204,62 @@ function useHeroImage(hero) {
   }, [name, slug, uploadedUrl]);
 
   return uploadedUrl || localUrl;
+}
+
+// ═══════════════════════════════════════════
+//  PATCH FILTER — ให้ Overview / Rivals / Roster (Player Profile) / My Stats
+//  ดูข้อมูลแยกตาม patch ได้ (ปัจจุบัน / patch เก่า / ทั้งหมด)
+//
+//  ทำงานจากจุดเดียว: filter `app.matches` ก่อนส่งเข้า `allGames` (ตัวแปร
+//  กลางที่ทุกหน้าดึงสถิติจาก) — ไม่ต้องแก้ทีละหน้า เพราะทุกหน้าอ่าน allGames
+//  ตัวเดียวกันอยู่แล้ว
+//
+//  ใช้ match.id (epoch timestamp จาก Date.now() ตอนสร้างแมตช์ — ดู
+//  case "SAVE_MATCH") เทียบกับ PatchVersion.effectiveFrom แทนการ parse
+//  m.date ที่เป็น string ภาษาไทย (แม่นกว่า ไม่ต้องยุ่งกับ locale parsing)
+// ═══════════════════════════════════════════
+function usePatchVersions() {
+  const [versions, setVersions] = useState([]);
+  useEffect(() => {
+    fetch("/api/admin/patch-versions")
+      .then(r => r.ok ? r.json() : [])
+      .then(data => setVersions(Array.isArray(data) ? data : []))
+      .catch(() => {}); // ไม่มีประวัติ patch ก็ปล่อยเป็น [] — filterMatchesByPatch จะ fallback เป็น "ทั้งหมด" เอง
+  }, []);
+  return versions;
+}
+
+function filterMatchesByPatch(matches, patchVersions, selectedPatch) {
+  if (selectedPatch === "all" || !patchVersions.length) return matches;
+  const sorted = [...patchVersions].sort((a,b) => new Date(a.effectiveFrom) - new Date(b.effectiveFrom));
+
+  let from, to = Infinity;
+  if (selectedPatch === "current") {
+    from = new Date(sorted[sorted.length-1].effectiveFrom).getTime();
+  } else {
+    const idx = sorted.findIndex(v => v.version === selectedPatch);
+    if (idx === -1) return matches; // เผื่อ patch ที่เลือกไว้โดนลบไปแล้ว
+    from = new Date(sorted[idx].effectiveFrom).getTime();
+    if (idx+1 < sorted.length) to = new Date(sorted[idx+1].effectiveFrom).getTime();
+  }
+  return matches.filter(m => m.id >= from && m.id < to);
+}
+
+function PatchSelector({ versions, value, onChange }) {
+  if (!versions.length) return null; // ยังไม่มีใคร log patch ไว้เลย — ไม่ต้องโชว์ dropdown ให้งง
+  const sorted = [...versions].sort((a,b) => new Date(b.effectiveFrom) - new Date(a.effectiveFrom)); // ใหม่→เก่า
+  const current = sorted[0];
+  return (
+    <select value={value} onChange={e=>onChange(e.target.value)}
+      style={{background:C.bgPanel,border:`1px solid ${C.border}`,color:C.textMain,
+        borderRadius:8,padding:"6px 10px",fontSize:12,fontWeight:700,cursor:"pointer",flexShrink:0}}>
+      <option value="current">🕐 ปัจจุบัน (v{current.version})</option>
+      {sorted.slice(1).map(v=>(
+        <option key={v.id} value={v.version}>v{v.version}</option>
+      ))}
+      <option value="all">📚 ทั้งหมด (all-time)</option>
+    </select>
+  );
 }
 
 // ═══════════════════════════════════════════
@@ -292,6 +339,94 @@ function PlayerAvatar({ name, photoUrl, size=44, team="our", style={} }) {
           {(name||"?").charAt(0).toUpperCase()}
         </span>
       )}
+    </div>
+  );
+}
+
+// ── Roster player card — คลิกเพื่อดู Profile ปกติ, กด ✏️ เพื่อแก้ชื่อ/รูป ──
+function RosterPlayerCard({ player, photoUrl, pg, pw, pwr, top, onSelect, onRemove, onRename, onSetPhoto }) {
+  const [editing, setEditing] = useState(false);
+  const [nameVal, setNameVal] = useState(player);
+  const [error,   setError]   = useState("");
+
+  function startEdit(e) {
+    e.stopPropagation();
+    setNameVal(player);
+    setError("");
+    setEditing(true);
+  }
+
+  function save(e) {
+    e.stopPropagation();
+    const trimmed = nameVal.trim();
+    if (!trimmed) { setError("กรุณากรอกชื่อ"); return; }
+    if (trimmed !== player) onRename(trimmed); // เปลี่ยนแค่ตอนชื่อจริงๆ เปลี่ยน — เลี่ยง dispatch เปล่าๆ
+    setEditing(false);
+  }
+
+  if (editing) {
+    return (
+      <div onClick={e=>e.stopPropagation()}
+        style={{background:C.bgPanel,border:`1px solid ${C.primary}`,borderRadius:12,
+          padding:"14px 20px",display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
+        <PhotoPicker value={photoUrl} onChange={onSetPhoto} size={48} team="our"/>
+        <div style={{flex:1,minWidth:160}}>
+          <input autoFocus value={nameVal} onChange={e=>{setNameVal(e.target.value);setError("");}}
+            onKeyDown={e=>{ if(e.key==="Enter") save(e); if(e.key==="Escape") setEditing(false); }}
+            style={{...iStyle,width:"100%"}}/>
+          {error && <div style={{fontSize:11,color:C.lose,marginTop:4}}>{error}</div>}
+        </div>
+        <button onClick={save}
+          style={{background:C.win,color:"#fff",border:"none",borderRadius:8,
+            padding:"8px 16px",fontWeight:700,cursor:"pointer",fontSize:12}}>✓ บันทึก</button>
+        <button onClick={e=>{e.stopPropagation();setEditing(false);}}
+          style={{background:"transparent",border:`1px solid ${C.border}`,color:C.textMuted,
+            borderRadius:8,padding:"8px 14px",fontWeight:700,cursor:"pointer",fontSize:12}}>ยกเลิก</button>
+      </div>
+    );
+  }
+
+  return (
+    <div onClick={onSelect}
+      style={{background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:12,
+        padding:"14px 20px",display:"flex",alignItems:"center",
+        justifyContent:"space-between",cursor:"pointer"}}
+      onMouseEnter={e=>e.currentTarget.style.borderColor=C.primary}
+      onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
+      <div style={{display:"flex",alignItems:"center",gap:14}}>
+        <PlayerAvatar name={player} photoUrl={photoUrl} size={48} team="our"/>
+        <div>
+          <div style={{fontWeight:800,fontSize:16}}>{player}</div>
+          {top ? (
+            <div style={{display:"flex",alignItems:"center",gap:5,marginTop:4}}>
+              <span style={{fontSize:11,color:C.textMuted}}>Main:</span>
+              <HeroChip name={top[0]} size={18} fontSize={11}/>
+              <span style={{fontSize:10,color:C.textMuted}}>({top[1]} เกม)</span>
+            </div>
+          ) : (
+            <div style={{fontSize:12,color:C.textMuted,marginTop:3}}>ยังไม่มีข้อมูล</div>
+          )}
+        </div>
+      </div>
+      <div style={{display:"flex",gap:14,alignItems:"center"}}>
+        <div style={{textAlign:"center"}}>
+          <div style={{fontSize:18,fontWeight:800}}>{pg}</div>
+          <div style={{fontSize:10,color:C.textMuted}}>GAMES</div>
+        </div>
+        <div style={{textAlign:"center",minWidth:52}}>
+          <div style={{fontSize:18,fontWeight:800,color:pwr>=50?C.win:C.lose}}>
+            {pg?`${pwr}%`:"-"}</div>
+          <div style={{fontSize:10,color:C.textMuted}}>{pw}W-{pg-pw}L</div>
+        </div>
+        <span style={{fontSize:12,color:C.primaryLight}}>ดู Profile →</span>
+        <button onClick={startEdit} title="แก้ไขชื่อ/รูป"
+          style={{background:C.primary+"20",color:C.primaryLight,border:"none",
+            width:34,height:34,borderRadius:8,cursor:"pointer",fontSize:14}}>✏️</button>
+        <button
+          onClick={e=>{e.stopPropagation();onRemove();}}
+          style={{background:C.lose+"20",color:C.lose,border:"none",
+            width:34,height:34,borderRadius:8,cursor:"pointer",fontSize:14}}>🗑️</button>
+      </div>
     </div>
   );
 }
@@ -5289,7 +5424,7 @@ function CoachNotesHub({ allGames, rivals }) {
 //  Bulk-upload images from the user's computer + auto-match by filename,
 //  with a per-hero editor for fixing any mismatches.
 // ═══════════════════════════════════════════
-function HeroImageManager({ heroPhotos, onSetPhoto, onSetPhotosBulk, onRemovePhoto, onAddHero, onSetRole }) {
+function HeroImageManager({ heroPhotos, onSetPhoto, onSetPhotosBulk, onRemovePhoto, onAddHero, onSetRole, onRemoveHero }) {
   const [search,     setSearch]     = useState("");
   const [roleFilter, setRoleFilter] = useState("All");
   const [dragOver,   setDragOver]   = useState(false);
@@ -5452,7 +5587,12 @@ function HeroImageManager({ heroPhotos, onSetPhoto, onSetPhotosBulk, onRemovePho
             photoUrl={heroPhotos[hero.name]}
             onSet={(dataUrl)=>onSetPhoto(hero.name, dataUrl)}
             onRemove={()=>onRemovePhoto(hero.name)}
-            onSetRole={(role)=>onSetRole(hero.name, role)}/>
+            onSetRole={(role)=>onSetRole(hero.name, role)}
+            onDelete={hero._custom ? () => {
+              if (window.confirm(`ลบ "${hero.name}" ออกจากรายชื่อ Hero? (ลบได้เฉพาะ Hero ที่เพิ่มเอง ข้อมูลแมตช์ที่เคยใช้ฮีโร่นี้จะยังอยู่เหมือนเดิม แค่ระบบจะไม่รู้จัก role ของมันแล้ว)`)) {
+                onRemoveHero(hero.name);
+              }
+            } : undefined}/>
         ))}
         {filtered.length===0 && (
           <div style={{gridColumn:"1/-1",textAlign:"center",padding:30,color:C.textMuted}}>
@@ -5546,7 +5686,7 @@ function AddHeroModal({ onAdd, onClose }) {
   );
 }
 
-function HeroImageSlot({ hero, photoUrl, onSet, onRemove, onSetRole }) {
+function HeroImageSlot({ hero, photoUrl, onSet, onRemove, onSetRole, onDelete }) {
   const [err, setErr] = useState(false);
   const [editingRole, setEditingRole] = useState(false);
   const fileRef = useRef(null);
@@ -5647,6 +5787,13 @@ function HeroImageSlot({ hero, photoUrl, onSet, onRemove, onSetRole }) {
             style={{background:C.lose+"20",border:`1px solid ${C.lose}40`,color:C.lose,
               borderRadius:6,padding:"3px 8px",cursor:"pointer",fontSize:10,fontWeight:700}}>
             ✕
+          </button>
+        )}
+        {onDelete && (
+          <button onClick={onDelete} title="ลบ Hero นี้ (Hero ที่เพิ่มเองเท่านั้น)"
+            style={{background:C.lose+"20",border:`1px solid ${C.lose}40`,color:C.lose,
+              borderRadius:6,padding:"3px 8px",cursor:"pointer",fontSize:10,fontWeight:700}}>
+            🗑️
           </button>
         )}
       </div>
@@ -7137,6 +7284,44 @@ function appReducer(state, action) {
       return { ...state, roster: state.roster.filter(p => p !== action.payload), playerPhotos: restPhotos };
     }
 
+    case "RENAME_PLAYER": {
+      // payload: { oldName, newName }
+      // ต้องอัปเดตทุกที่ที่อ้างชื่อผู้เล่นแบบ string ตรงๆ ไม่งั้นสถิติ/รูป
+      // เก่าจะ "หาย" (จริงๆ ยังอยู่ แต่ผูกกับชื่อเก่าที่ไม่มีใครค้นหาแล้ว):
+      //   roster, playerPhotos (key our:<name>), matches[].ourPicks[].player,
+      //   practiceAssignments[].player
+      const { oldName, newName: rawNewName } = action.payload;
+      const newName = rawNewName.trim();
+      if (!newName || oldName === newName) return state;
+      if (state.roster.includes(newName)) return state; // กันชื่อซ้ำกับคนที่มีอยู่แล้ว
+
+      const roster = state.roster.map(p => p === oldName ? newName : p);
+
+      const oldPhotoKey = `our:${oldName}`, newPhotoKey = `our:${newName}`;
+      let playerPhotos = state.playerPhotos;
+      if (Object.prototype.hasOwnProperty.call(playerPhotos, oldPhotoKey)) {
+        const { [oldPhotoKey]: movedPhoto, ...rest } = playerPhotos;
+        playerPhotos = { ...rest, [newPhotoKey]: movedPhoto };
+      }
+
+      const renamePicksInGame = (g) => (
+        Array.isArray(g.ourPicks) && g.ourPicks.some(s => s.player === oldName)
+          ? { ...g, ourPicks: g.ourPicks.map(s => s.player === oldName ? { ...s, player: newName } : s) }
+          : g
+      );
+      const matches = state.matches.map(m =>
+        Array.isArray(m.games) && m.games.length > 0
+          ? { ...m, games: m.games.map(renamePicksInGame) }
+          : renamePicksInGame(m)
+      );
+
+      const practiceAssignments = (state.practiceAssignments || []).map(a =>
+        a.player === oldName ? { ...a, player: newName } : a
+      );
+
+      return { ...state, roster, playerPhotos, matches, practiceAssignments };
+    }
+
     case "ADD_ENEMY_PLAYER": {
       const { rivalName, playerName } = action.payload;
       const cur = state.enemyRosters[rivalName] || [];
@@ -7250,6 +7435,19 @@ function appReducer(state, action) {
       const exists = [...HERO_DATA, ...state.customHeroes].some(h=>h.name.toLowerCase()===name.toLowerCase());
       if (exists) return state; // don't add duplicates
       return { ...state, customHeroes: [...state.customHeroes, { name, role: action.payload.role, img: name.toLowerCase() }] };
+    }
+
+    case "REMOVE_CUSTOM_HERO": {
+      // ลบได้เฉพาะ Hero ที่ทีมเพิ่มเอง (customHeroes) — ปุ่มลบใน UI โชว์เฉพาะ
+      // การ์ดที่ hero._custom===true อยู่แล้ว แต่กันซ้ำอีกชั้น: ถ้าชื่อที่ส่งมา
+      // ไม่ได้อยู่ใน customHeroes (เช่นเป็น Hero หลักของเกม) จะไม่มีผลอะไรเลย
+      const name = action.payload;
+      return {
+        ...state,
+        customHeroes: state.customHeroes.filter(h => h.name !== name),
+        // เผื่อเคยตั้ง role override ให้ฮีโร่ตัวนี้ไว้ — ล้างทิ้งกันขยะค้าง
+        roleOverrides: Object.fromEntries(Object.entries(state.roleOverrides).filter(([k]) => k !== name)),
+      };
     }
 
     case "SET_ROLE_OVERRIDE": {
@@ -8205,6 +8403,10 @@ function RovAppInner() {
   const [ui,   dispatchUI]   = useReducer(uiReducer,   null, initUIState);
   const [draft, dispatchDraft]= useReducer(draftReducer, null, initDraftState);
 
+  // ── Patch filter — ใช้ทั่วทั้งแอป (Overview/Rivals/Roster/My Stats อ่าน allGames ตัวเดียวกัน) ──
+  const patchVersions = usePatchVersions();
+  const [selectedPatch, setSelectedPatch] = useState("current");
+
   // ── Autosave in-progress draft ไว้ที่ localStorage ──
   // ป้องกันเสีย progress ทั้งหมดถ้าแท็บ crash/refresh/ปิดพลาดกลางคันตอน
   // กำลัง ban/pick อยู่ (ระหว่างแข่งจริง ที่กดดันเรื่องเวลามาก เสียแล้วเสียเลย)
@@ -8285,7 +8487,10 @@ function RovAppInner() {
   }, [app.customHeroes, app.roleOverrides, app._loaded]);
 
   // ── derived: allGames flat list ──
-  const allGames = app.matches.flatMap(m =>
+  // กรองตาม patch ที่เลือกก่อน — ทุกหน้า (Overview/Rivals/Roster/My Stats)
+  // อ่านจาก allGames ตัวนี้ตัวเดียว เลยกรองที่จุดนี้จุดเดียวพอ
+  const patchFilteredMatches = filterMatchesByPatch(app.matches, patchVersions, selectedPatch);
+  const allGames = patchFilteredMatches.flatMap(m =>
     Array.isArray(m.games) && m.games.length > 0
       ? m.games.map((g, gi) => ({ ...g, rivalName:m.rivalName, date:m.date, _matchId:m.id, _gameIdx:gi }))
       : [{ ...m, _matchId:m.id, _gameIdx:null }]
@@ -8574,6 +8779,9 @@ function RovAppInner() {
             </>
           )}
         </span>
+        <div style={{marginLeft:isMobile?8:14,flexShrink:0}}>
+          <PatchSelector versions={patchVersions} value={selectedPatch} onChange={setSelectedPatch} />
+        </div>
         <div style={{flex:1}}/>
 
         {/* เมนู ☰ เดียวกันทุกขนาดจอ — กันเมนูล้น/ตกบรรทัดไม่สวยเมื่อเพิ่มเมนูใหม่ในอนาคต */}
@@ -9432,6 +9640,12 @@ function RovAppInner() {
                 dispatchApp({type:"ADD_CUSTOM_HERO", payload:{ name, role }});
                 if (photo) dispatchApp({type:"SET_HERO_PHOTO", payload:{ heroName:name, dataUrl:photo }});
               }}
+              onRemoveHero={(heroName) => {
+                const photoUrl = app.heroPhotos?.[heroName];
+                if (photoUrl) deleteBlobUrls(photoUrl);
+                dispatchApp({type:"REMOVE_CUSTOM_HERO", payload:heroName});
+                toast(`ลบ Hero "${heroName}" แล้ว`, "success");
+              }}
             />
           )}
 
@@ -9502,45 +9716,15 @@ function RovAppInner() {
                           const top=Object.entries(ph).sort((a,b)=>b[1]-a[1])[0];
                           const photoKey = `our:${player}`;
                           return (
-                            <div key={player}
-                              onClick={()=>dispatchUI({type:"SET_SEL_PLAYER",payload:{name:player,isEnemy:false}})}
-                              style={{background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:12,
-                                padding:"14px 20px",display:"flex",alignItems:"center",
-                                justifyContent:"space-between",cursor:"pointer"}}
-                              onMouseEnter={e=>e.currentTarget.style.borderColor=C.primary}
-                              onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
-                              <div style={{display:"flex",alignItems:"center",gap:14}}>
-                                <PlayerAvatar name={player} photoUrl={app.playerPhotos?.[photoKey]} size={48} team="our"/>
-                                <div>
-                                  <div style={{fontWeight:800,fontSize:16}}>{player}</div>
-                                  {top ? (
-                                    <div style={{display:"flex",alignItems:"center",gap:5,marginTop:4}}>
-                                      <span style={{fontSize:11,color:C.textMuted}}>Main:</span>
-                                      <HeroChip name={top[0]} size={18} fontSize={11}/>
-                                      <span style={{fontSize:10,color:C.textMuted}}>({top[1]} เกม)</span>
-                                    </div>
-                                  ) : (
-                                    <div style={{fontSize:12,color:C.textMuted,marginTop:3}}>ยังไม่มีข้อมูล</div>
-                                  )}
-                                </div>
-                              </div>
-                              <div style={{display:"flex",gap:20,alignItems:"center"}}>
-                                <div style={{textAlign:"center"}}>
-                                  <div style={{fontSize:18,fontWeight:800}}>{pg}</div>
-                                  <div style={{fontSize:10,color:C.textMuted}}>GAMES</div>
-                                </div>
-                                <div style={{textAlign:"center",minWidth:52}}>
-                                  <div style={{fontSize:18,fontWeight:800,color:pwr>=50?C.win:C.lose}}>
-                                    {pg?`${pwr}%`:"-"}</div>
-                                  <div style={{fontSize:10,color:C.textMuted}}>{pw}W-{pg-pw}L</div>
-                                </div>
-                                <span style={{fontSize:12,color:C.primaryLight}}>ดู Profile →</span>
-                                <button
-                                  onClick={e=>{e.stopPropagation();handleRemovePlayer(player);}}
-                                  style={{background:C.lose+"20",color:C.lose,border:"none",
-                                    width:34,height:34,borderRadius:8,cursor:"pointer",fontSize:14}}>🗑️</button>
-                              </div>
-                            </div>
+                            <RosterPlayerCard key={player}
+                              player={player}
+                              photoUrl={app.playerPhotos?.[photoKey]}
+                              pg={pg} pw={pw} pwr={pwr} top={top}
+                              onSelect={()=>dispatchUI({type:"SET_SEL_PLAYER",payload:{name:player,isEnemy:false}})}
+                              onRemove={()=>handleRemovePlayer(player)}
+                              onRename={(newName)=>dispatchApp({type:"RENAME_PLAYER",payload:{oldName:player,newName}})}
+                              onSetPhoto={(url)=>dispatchApp({type:"SET_PHOTO",payload:{key:photoKey,dataUrl:url}})}
+                            />
                           );
                         })}
                         {roster.length===0&&(
