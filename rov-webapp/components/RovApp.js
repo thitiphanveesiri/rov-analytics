@@ -174,12 +174,21 @@ const LOCAL_HERO_IMG_CACHE = {};
 
 function checkLocalHeroImage(slug) {
   return new Promise((resolve) => {
-    if (!slug) { resolve(null); return; }
-    const url = `/heroes/${slug}.png`;
+    const png = `/heroes/${slug}.png`;
+    const jpg = `/heroes/${slug}.jpg`;
+
     const img = new Image();
-    img.onload = () => resolve(url);
-    img.onerror = () => resolve(null);
-    img.src = url;
+
+    img.onload = () => resolve(img.src);
+
+    img.onerror = () => {
+      const img2 = new Image();
+      img2.onload = () => resolve(jpg);
+      img2.onerror = () => resolve(null);
+      img2.src = jpg;
+    };
+
+    img.src = png;
   });
 }
 
