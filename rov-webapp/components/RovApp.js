@@ -344,10 +344,17 @@ function PlayerAvatar({ name, photoUrl, size=44, team="our", style={} }) {
 }
 
 // ── Roster player card — คลิกเพื่อดู Profile ปกติ, กด ✏️ เพื่อแก้ชื่อ/รูป ──
-function RosterPlayerCard({ player, photoUrl, pg, pw, pwr, top, onSelect, onRemove, onRename, onSetPhoto }) {
+function RosterPlayerCard({ player, photoUrl, pg, pw, pwr, top, onSelect, onRemove, onRename, onSetPhoto, team="our" }) {
   const [editing, setEditing] = useState(false);
   const [nameVal, setNameVal] = useState(player);
   const [error,   setError]   = useState("");
+
+  const isEnemy      = team === "enemy";
+  const accentCol    = isEnemy ? C.lose : C.primaryLight;
+  const borderHover  = isEnemy ? C.lose : C.primary;
+  // pwr สำหรับ enemy นับเฉพาะตอน "ทีมเราแพ้" (ดู pw ที่ส่งเข้ามา) — pwr สูง
+  // แปลว่าคู่แข่งเก่ง เลยกลับสีให้ตรงอารมณ์ (สูง=แดง/อันตราย, ต่ำ=เขียว/ok)
+  const winStatCol   = isEnemy ? (pwr>=50?C.lose:C.win) : (pwr>=50?C.win:C.lose);
 
   function startEdit(e) {
     e.stopPropagation();
@@ -367,9 +374,9 @@ function RosterPlayerCard({ player, photoUrl, pg, pw, pwr, top, onSelect, onRemo
   if (editing) {
     return (
       <div onClick={e=>e.stopPropagation()}
-        style={{background:C.bgPanel,border:`1px solid ${C.primary}`,borderRadius:12,
+        style={{background:C.bgPanel,border:`1px solid ${borderHover}`,borderRadius:12,
           padding:"14px 20px",display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
-        <PhotoPicker value={photoUrl} onChange={onSetPhoto} size={48} team="our"/>
+        <PhotoPicker value={photoUrl} onChange={onSetPhoto} size={48} team={team}/>
         <div style={{flex:1,minWidth:160}}>
           <input autoFocus value={nameVal} onChange={e=>{setNameVal(e.target.value);setError("");}}
             onKeyDown={e=>{ if(e.key==="Enter") save(e); if(e.key==="Escape") setEditing(false); }}
@@ -391,16 +398,16 @@ function RosterPlayerCard({ player, photoUrl, pg, pw, pwr, top, onSelect, onRemo
       style={{background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:12,
         padding:"14px 20px",display:"flex",alignItems:"center",
         justifyContent:"space-between",cursor:"pointer"}}
-      onMouseEnter={e=>e.currentTarget.style.borderColor=C.primary}
+      onMouseEnter={e=>e.currentTarget.style.borderColor=borderHover}
       onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
       <div style={{display:"flex",alignItems:"center",gap:14}}>
-        <PlayerAvatar name={player} photoUrl={photoUrl} size={48} team="our"/>
+        <PlayerAvatar name={player} photoUrl={photoUrl} size={48} team={team}/>
         <div>
           <div style={{fontWeight:800,fontSize:16}}>{player}</div>
           {top ? (
             <div style={{display:"flex",alignItems:"center",gap:5,marginTop:4}}>
               <span style={{fontSize:11,color:C.textMuted}}>Main:</span>
-              <HeroChip name={top[0]} size={18} fontSize={11}/>
+              <HeroChip name={top[0]} size={18} fontSize={11} accentCol={isEnemy?C.lose:undefined}/>
               <span style={{fontSize:10,color:C.textMuted}}>({top[1]} เกม)</span>
             </div>
           ) : (
@@ -414,13 +421,13 @@ function RosterPlayerCard({ player, photoUrl, pg, pw, pwr, top, onSelect, onRemo
           <div style={{fontSize:10,color:C.textMuted}}>GAMES</div>
         </div>
         <div style={{textAlign:"center",minWidth:52}}>
-          <div style={{fontSize:18,fontWeight:800,color:pwr>=50?C.win:C.lose}}>
+          <div style={{fontSize:18,fontWeight:800,color:winStatCol}}>
             {pg?`${pwr}%`:"-"}</div>
           <div style={{fontSize:10,color:C.textMuted}}>{pw}W-{pg-pw}L</div>
         </div>
-        <span style={{fontSize:12,color:C.primaryLight}}>ดู Profile →</span>
+        <span style={{fontSize:12,color:accentCol}}>ดู Profile →</span>
         <button onClick={startEdit} title="แก้ไขชื่อ/รูป"
-          style={{background:C.primary+"20",color:C.primaryLight,border:"none",
+          style={{background:accentCol+"20",color:accentCol,border:"none",
             width:34,height:34,borderRadius:8,cursor:"pointer",fontSize:14}}>✏️</button>
         <button
           onClick={e=>{e.stopPropagation();onRemove();}}
@@ -7345,6 +7352,45 @@ function appReducer(state, action) {
       };
     }
 
+    case "RENAME_ENEMY_PLAYER": {
+      // payload: { rivalName, oldName, newName } — เหมือน RENAME_PLAYER แต่
+      // scope เฉพาะทีมคู่แข่งทีมนั้น (enemyRosters[rivalName], enemyPicks
+      // ในเกมที่ rivalName ตรงกัน, photo key แบบ enemy:<rival>:<name>)
+      const { rivalName, oldName, newName: rawNewName } = action.payload;
+      const newName = rawNewName.trim();
+      const currentRoster = state.enemyRosters[rivalName] || [];
+      if (!newName || oldName === newName) return state;
+      if (currentRoster.includes(newName)) return state; // กันชื่อซ้ำในทีมเดียวกัน
+
+      const enemyRosters = {
+        ...state.enemyRosters,
+        [rivalName]: currentRoster.map(p => p === oldName ? newName : p),
+      };
+
+      const oldPhotoKey = `enemy:${rivalName}:${oldName}`, newPhotoKey = `enemy:${rivalName}:${newName}`;
+      let playerPhotos = state.playerPhotos;
+      if (Object.prototype.hasOwnProperty.call(playerPhotos, oldPhotoKey)) {
+        const { [oldPhotoKey]: movedPhoto, ...rest } = playerPhotos;
+        playerPhotos = { ...rest, [newPhotoKey]: movedPhoto };
+      }
+
+      const renameInGame = (g) => (
+        g.rivalName === rivalName && Array.isArray(g.enemyPicks) && g.enemyPicks.some(s => s.player === oldName)
+          ? { ...g, enemyPicks: g.enemyPicks.map(s => s.player === oldName ? { ...s, player: newName } : s) }
+          : g
+      );
+      // match ระดับบนสุดก็มี rivalName ติดอยู่ (ไม่ใช่แค่ game) — เช็ค m.rivalName
+      // ก่อนเข้าไปวนแก้ games เพื่อไม่ต้องไล่ทุกแมตช์ของทุกทีมเปล่าๆ
+      const matches = state.matches.map(m => {
+        if (m.rivalName !== rivalName) return m;
+        return Array.isArray(m.games) && m.games.length > 0
+          ? { ...m, games: m.games.map(renameInGame) }
+          : renameInGame(m);
+      });
+
+      return { ...state, enemyRosters, playerPhotos, matches };
+    }
+
     case "SET_PHOTO": {
       // payload: { key, dataUrl }  key e.g. "our:Name" or "enemy:Team:Name"
       return { ...state, playerPhotos: { ...state.playerPhotos, [action.payload.key]: action.payload.dataUrl } };
@@ -9809,45 +9855,16 @@ function RovAppInner() {
                               const top=Object.entries(ph).sort((a,b)=>b[1]-a[1])[0];
                               const photoKey = `enemy:${selEnemyTeam}:${player}`;
                               return (
-                                <div key={player}
-                                  onClick={()=>dispatchUI({type:"SET_SEL_PLAYER",payload:{name:player,isEnemy:true}})}
-                                  style={{background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:12,
-                                    padding:"14px 20px",display:"flex",alignItems:"center",
-                                    justifyContent:"space-between",cursor:"pointer"}}
-                                  onMouseEnter={e=>e.currentTarget.style.borderColor=C.lose}
-                                  onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
-                                  <div style={{display:"flex",alignItems:"center",gap:14}}>
-                                    <PlayerAvatar name={player} photoUrl={app.playerPhotos?.[photoKey]} size={48} team="enemy"/>
-                                    <div>
-                                      <div style={{fontWeight:800,fontSize:16}}>{player}</div>
-                                      {top ? (
-                                        <div style={{display:"flex",alignItems:"center",gap:5,marginTop:4}}>
-                                          <span style={{fontSize:11,color:C.textMuted}}>Main:</span>
-                                          <HeroChip name={top[0]} size={18} fontSize={11} accentCol={C.lose}/>
-                                          <span style={{fontSize:10,color:C.textMuted}}>({top[1]} เกม)</span>
-                                        </div>
-                                      ) : (
-                                        <div style={{fontSize:12,color:C.textMuted,marginTop:3}}>ยังไม่มีข้อมูล</div>
-                                      )}
-                                    </div>
-                                  </div>
-                                  <div style={{display:"flex",gap:20,alignItems:"center"}}>
-                                    <div style={{textAlign:"center"}}>
-                                      <div style={{fontSize:18,fontWeight:800}}>{pg}</div>
-                                      <div style={{fontSize:10,color:C.textMuted}}>GAMES</div>
-                                    </div>
-                                    <div style={{textAlign:"center",minWidth:52}}>
-                                      <div style={{fontSize:18,fontWeight:800,color:pwr>=50?C.lose:C.win}}>
-                                        {pg?`${pwr}%`:"-"}</div>
-                                      <div style={{fontSize:10,color:C.textMuted}}>{pw}W-{pg-pw}L</div>
-                                    </div>
-                                    <span style={{fontSize:12,color:C.lose}}>ดู Profile →</span>
-                                    <button
-                                      onClick={e=>{e.stopPropagation();handleRemoveEnemyPlayer(selEnemyTeam,player);}}
-                                      style={{background:C.lose+"20",color:C.lose,border:"none",
-                                        width:34,height:34,borderRadius:8,cursor:"pointer",fontSize:14}}>🗑️</button>
-                                  </div>
-                                </div>
+                                <RosterPlayerCard key={player}
+                                  team="enemy"
+                                  player={player}
+                                  photoUrl={app.playerPhotos?.[photoKey]}
+                                  pg={pg} pw={pw} pwr={pwr} top={top}
+                                  onSelect={()=>dispatchUI({type:"SET_SEL_PLAYER",payload:{name:player,isEnemy:true}})}
+                                  onRemove={()=>handleRemoveEnemyPlayer(selEnemyTeam,player)}
+                                  onRename={(newName)=>dispatchApp({type:"RENAME_ENEMY_PLAYER",payload:{rivalName:selEnemyTeam,oldName:player,newName}})}
+                                  onSetPhoto={(url)=>dispatchApp({type:"SET_PHOTO",payload:{key:photoKey,dataUrl:url}})}
+                                />
                               );
                             })}
                             {(enemyRosters[selEnemyTeam]||[]).length===0&&(
