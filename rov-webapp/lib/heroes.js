@@ -81,7 +81,6 @@ export const HERO_DATA = [
   {name:"Iggy",role:"Mid",img:"iggy"},
   {name:"Liliana",role:"Mid",img:"liliana"},
   {name:"Omega",role:"Support",img:"omega"},
-  {name:"Richter",role:"Slayer",img:"richter"},
   {name:"Superman",role:"Slayer",img:"superman"},
   {name:"TeeMee",role:"Support",img:"teemee"},
   {name:"The Flash",role:"Jungle",img:"theflash"},
