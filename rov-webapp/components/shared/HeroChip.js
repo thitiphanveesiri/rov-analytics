@@ -6,7 +6,8 @@
 // the original file, so splitting them out together keeps that grouping.
 
 import { useState } from "react";
-import { HERO_DATA, ROLE_COLOR, useHeroImage } from "@/lib/heroes";
+import { HERO_DATA, ROLE_COLOR } from "@/lib/heroes";
+import { useHeroImage } from "@/lib/useHeroImage";
 import { C } from "@/lib/theme";
 
 // ── HeroCard: big square card with name banner (Hero Pool grid, draft grid) ──
