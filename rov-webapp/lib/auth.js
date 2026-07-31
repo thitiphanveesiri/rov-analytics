@@ -1,6 +1,20 @@
 import CredentialsProvider from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
 import { prisma } from "./prisma";
+import { checkRateLimit } from "./rateLimit";
+
+// ดึง client IP จาก request ที่ NextAuth ส่งเข้า authorize() —
+// เขียนแบบ defensive เพราะรูปแบบของ req.headers ต่างกันได้ระหว่าง
+// runtime context (บางที เป็น plain object, บางที เป็น Headers instance
+// ที่มี .get()) แล้วแต่ว่า NextAuth ห่อ request มายังไงใน App Router
+function getClientIp(req) {
+  const headers = req?.headers;
+  if (!headers) return "unknown";
+  const raw = typeof headers.get === "function"
+    ? headers.get("x-forwarded-for")
+    : headers["x-forwarded-for"];
+  return raw?.split(",")[0]?.trim() || "unknown";
+}
 
 export const authOptions = {
   providers: [
@@ -10,11 +24,30 @@ export const authOptions = {
         email:    { label: "Email",    type: "email"    },
         password: { label: "Password", type: "password" },
       },
-      async authorize(credentials) {
+      async authorize(credentials, req) {
         if (!credentials?.email || !credentials?.password) return null;
 
+        const email = credentials.email.toLowerCase().trim();
+        const ip = getClientIp(req);
+
+        // ── Rate limit ป้องกัน brute force ──
+        // - ต่อ IP: กันคนยิงสุ่มหลายบัญชีจากเครื่องเดียว (credential stuffing)
+        // - ต่อบัญชี: กันคนเจาะรหัสบัญชีใดบัญชีหนึ่งโดยเฉพาะ ต่อให้สลับ IP ไปเรื่อยๆ
+        // เช็คคู่กันทั้ง 2 แบบ ไม่ใช่แค่แบบเดียว เพราะป้องกันคนละรูปแบบการโจมตี
+        const [ipOk, emailOk] = await Promise.all([
+          checkRateLimit(`login:ip:${ip}`, 20, 300),      // 20 ครั้ง / 5 นาที ต่อ IP
+          checkRateLimit(`login:email:${email}`, 8, 300), // 8 ครั้ง / 5 นาที ต่อบัญชี
+        ]);
+        if (!ipOk || !emailOk) {
+          // NextAuth จะจับ Error ที่ throw ใน authorize() แล้วส่งกลับเป็น
+          // error code ให้ฝั่ง client — ถ้าหน้า login ยังไม่ได้โชว์ข้อความนี้
+          // ตรงๆ (เช่นโชว์แค่ "เข้าสู่ระบบไม่สำเร็จ" แบบรวมๆ) บอกได้ เดี๋ยวช่วยดู
+          // หน้า login ให้ด้วย
+          throw new Error("พยายาม login บ่อยเกินไป กรุณารอสักครู่แล้วลองใหม่");
+        }
+
         const user = await prisma.user.findUnique({
-          where: { email: credentials.email.toLowerCase().trim() },
+          where: { email },
           include: { team: { select: { name: true, inviteCode: true } } }
         });
         if (!user) return null;

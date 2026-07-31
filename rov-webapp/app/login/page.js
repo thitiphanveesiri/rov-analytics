@@ -29,7 +29,19 @@ export default function LoginPage() {
 
     setLoading(false);
     if (res?.error) {
-      setError("อีเมลหรือรหัสผ่านไม่ถูกต้อง");
+      // NextAuth v4's CredentialsProvider forwards whatever message we
+      // `throw` inside authorize() as res.error — the default
+      // "CredentialsSignin" only shows up for the plain `return null`
+      // case (wrong email/password), so anything else is a message we
+      // wrote on purpose (e.g. the rate-limit one) and should be shown
+      // to the user as-is instead of getting papered over with a
+      // generic "wrong password" message that would be actively
+      // misleading here.
+      setError(
+        res.error === "CredentialsSignin"
+          ? "อีเมลหรือรหัสผ่านไม่ถูกต้อง"
+          : res.error
+      );
     } else {
       router.push("/");
       router.refresh();

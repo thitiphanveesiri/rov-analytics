@@ -10,6 +10,7 @@ import { HeroPhotosContext, checkLocalHeroImage, LOCAL_HERO_IMG_CACHE, useHeroIm
 import { C, iStyle } from "@/lib/theme";
 import { HeroCard, HeroChip } from "@/components/shared/HeroChip";
 import { PlayerAvatar, PhotoPicker, ImageCropModal } from "@/components/shared/PlayerMedia";
+import { ScheduleReminder } from "@/components/shared/ScheduleReminder";
 import {
   normalizeDuration,
   durationToMinutes,
@@ -8555,6 +8556,9 @@ function RovAppInner() {
           )}
         </div>
       )}
+
+      {/* ── SCHEDULE REMINDER — เตือนนัดซ้อม/แข่งที่ใกล้ถึง เห็นได้ทุกหน้า ── */}
+      <ScheduleReminder schedules={app.schedules}/>
 
       {/* ── MY STATS PAGE ── */}
       {page==="mystats" && (
