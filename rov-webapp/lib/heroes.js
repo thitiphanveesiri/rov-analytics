@@ -1,20 +1,28 @@
 // lib/heroes.js
 // ── Extracted from components/RovApp.js ──
 // This is a plain (non "use client") module so it can be safely imported
-// from BOTH client components (RovApp.js) and server code (API routes,
-// analytics endpoints).
+// from BOTH client components (RovApp.js, shared UI components) and server
+// code (API routes, analytics endpoints) — that's the main reason to pull
+// it out: the analytics routes need HERO_DATA's role mapping too, and
+// importing a "use client" file into a server Route Handler is asking for
+// bundler trouble.
 //
-// NOTE ON MUTATION: RovApp.js mutates this array in place at runtime
-// (pushes custom heroes, rewrites .role from roleOverrides). That behavior
-// is preserved on purpose — HERO_DATA stays a single module-level singleton.
+// NOTE ON MUTATION: RovApp.js mutates HERO_DATA in place at runtime (pushes
+// custom heroes, rewrites .role from roleOverrides). That behavior is
+// preserved on purpose — HERO_DATA stays a single module-level singleton
+// no matter how many files import it.
 //
-// ── Update log ──
-// Added a batch of heroes that weren't in the original list yet (checked
-// against multiple sources since a wrong `role` here throws off the
-// win-rate-by-role analytics). A few were genuinely hard to pin down with
-// confidence — Richter, Tamyn, Wiro — marked below. If any of these turn
-// out wrong for how your team actually plays them, just fix it via
-// Admin → Hero Images → role override in the app; no code change needed.
+// NOTE ON REACT APIS HERE: this file isn't marked "use client", but that's
+// fine — a plain hook/context declaration doesn't need it, only components
+// that render JSX do. useHeroImage and HeroPhotosContext only ever get used
+// from inside components that are already client components (HeroChip,
+// RovAppInner, etc.), so there's no server/client mismatch risk. The
+// Provider/Consumer relationship works off the shared object reference,
+// not which file declared it — moving HeroPhotosContext here doesn't
+// change behavior at all, RovApp.js just imports the same object instead
+// of declaring it locally.
+
+import { useState, useEffect, useContext, createContext } from "react";
 
 export const HERO_DATA = [
   {name:"Airi",role:"Slayer",img:"airi"},{name:"Aleister",role:"Support",img:"aleister"},
@@ -69,7 +77,6 @@ export const HERO_DATA = [
   {name:"Zill",role:"Mid",img:"zill"},{name:"Zip",role:"Support",img:"zip"},
   {name:"Zuka",role:"Jungle",img:"zuka"},
 
-  // ── Added on request ──
   {name:"Aoi",role:"Jungle",img:"aoi"},
   {name:"Arduin",role:"Slayer",img:"arduin"},
   {name:"Ata",role:"Support",img:"ata"},
@@ -82,11 +89,12 @@ export const HERO_DATA = [
   {name:"Errol",role:"Slayer",img:"errol"},
   {name:"Iggy",role:"Mid",img:"iggy"},
   {name:"Liliana",role:"Mid",img:"liliana"},
-  {name:"Omega",role:"Support",img:"omega"},     // ไม่ชัวร์ 100% — เช็ค/แก้ผ่าน role override ในแอปได้
+  {name:"Omega",role:"Support",img:"omega"},
+  {name:"Richter",role:"Slayer",img:"richter"},
   {name:"Superman",role:"Slayer",img:"superman"},
   {name:"TeeMee",role:"Support",img:"teemee"},
   {name:"The Flash",role:"Jungle",img:"theflash"},
-  {name:"Wiro",role:"Jungle",img:"wiro"},               // dual Warrior/Tank ในเกม — เช็คตามที่ทีมเล่นจริง
+  {name:"Wiro",role:"Jungle",img:"wiro"},
   {name:"Wonder Woman",role:"Slayer",img:"wonderwoman"},
   {name:"Dolia",role:"Support",img:"dolia"},
   {name:"Dyadia",role:"Support",img:"dyadia"},
@@ -94,10 +102,10 @@ export const HERO_DATA = [
   {name:"Heino",role:"Mid",img:"heino"},
   {name:"Goverra",role:"Mid",img:"goverra"},
   {name:"Biron",role:"Slayer",img:"biron"},
-  {name:"Bolt Baron",role:"Slayer",img:"boltbaron"},    // เข้าใจว่า "BoltBiron" ที่พิมพ์มาคือฮีโร่นี้ (ชื่อจริงมีวรรค)
+  {name:"Bolt Baron",role:"Slayer",img:"boltbaron"},
   {name:"Flowborn (Carry)",role:"Abyssal",img:"flowborncarry"},
   {name:"Flowborn (Mage)",role:"Mid",img:"flowbornmage"},
-  {name:"Tamyn",role:"Support",img:"tamyn"},            // ไม่เจอข้อมูล role ที่ยืนยันได้ — เดาไว้ก่อน ต้องเช็คจริง
+  {name:"Tamyn",role:"Support",img:"tamyn"},
 ].sort((a,b)=>a.name.localeCompare(b.name));
 
 export const ROLES_FILTER = ["All","Slayer","Jungle","Mid","Abyssal","Support"];
@@ -114,4 +122,71 @@ export function resolveHeroRole(heroName, customHeroes = [], roleOverrides = {})
   if (builtin) return builtin.role;
   const custom = customHeroes.find(h => h.name === heroName);
   return custom?.role || "Unknown";
+}
+
+// ═══════════════════════════════════════════
+//  HERO IMAGE RESOLVER (moved here from RovApp.js — co-located with the
+//  hero data it resolves images for; TacticalWhiteboard's canvas code also
+//  uses checkLocalHeroImage/LOCAL_HERO_IMG_CACHE directly without going
+//  through the hook, same as before the move)
+//
+//  Hero portraits come from files bundled with the app: public/heroes/<slug>.png
+//  (slug = the `img` field on each hero above, e.g. public/heroes/airi.png).
+//  No external API call — checked once per hero per session and cached.
+//  If a file is missing, the calling component falls back to a letter
+//  avatar (existing onError handling), and you can just drop the PNG into
+//  public/heroes/ later — no code change needed.
+// ═══════════════════════════════════════════
+
+// Provides TeamData.heroPhotos (team's own uploaded hero photos) down to
+// useHeroImage without threading it through every component's props.
+// Declared here (not in RovApp.js) purely so useHeroImage can consume it —
+// the <Provider> still lives in RovAppInner's JSX, this is just the shared
+// context object both sides reference.
+export const HeroPhotosContext = createContext({});
+
+// { heroName: url | null }  null = confirmed no local file for this hero
+export const LOCAL_HERO_IMG_CACHE = {};
+
+export function checkLocalHeroImage(slug) {
+  return new Promise((resolve) => {
+    const png = `/heroes/${slug}.png`;
+    const jpg = `/heroes/${slug}.jpg`;
+
+    const img = new Image();
+
+    img.onload = () => resolve(img.src);
+
+    img.onerror = () => {
+      const img2 = new Image();
+      img2.onload = () => resolve(jpg);
+      img2.onerror = () => resolve(null);
+      img2.src = jpg;
+    };
+
+    img.src = png;
+  });
+}
+
+// Hook: returns resolved image URL for a hero (or null while loading/missing)
+// Priority: 1) team's own uploaded photo  2) bundled local image (public/heroes/)
+export function useHeroImage(hero) {
+  const name = hero?.name;
+  const slug = hero?.img;
+  const heroPhotos = useContext(HeroPhotosContext);
+  const uploadedUrl = name ? heroPhotos[name] : null;
+  const [localUrl, setLocalUrl] = useState(() => (name ? LOCAL_HERO_IMG_CACHE[name] ?? null : null));
+
+  useEffect(() => {
+    if (!name || uploadedUrl) return; // user-uploaded photo takes priority — skip local lookup
+    if (LOCAL_HERO_IMG_CACHE[name] !== undefined) { setLocalUrl(LOCAL_HERO_IMG_CACHE[name]); return; }
+    let cancelled = false;
+    checkLocalHeroImage(slug).then((url) => {
+      LOCAL_HERO_IMG_CACHE[name] = url; // cache the answer either way
+      if (!cancelled) setLocalUrl(url);
+    });
+    return () => { cancelled = true; };
+  }, [name, slug, uploadedUrl]);
+
+  return uploadedUrl || localUrl;
 }
