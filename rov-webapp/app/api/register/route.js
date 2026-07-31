@@ -73,6 +73,7 @@ export async function POST(req) {
           name: name?.trim() || null,
           teamId: team.id,
           role: "admin", // คนสร้างทีมเป็น admin อัตโนมัติ
+          status: "active", // คนแรกของทีม ไม่มีใครให้รออนุมัติ เข้าได้ทันที
         },
       });
 
@@ -104,10 +105,15 @@ export async function POST(req) {
           name: name?.trim() || null,
           teamId: team.id,
           role: "member",
+          status: "pending", // ต้องรอ admin ของทีมกดอนุมัติก่อน ถึงจะเห็น/แก้ข้อมูลทีมได้
         },
       });
 
-      return NextResponse.json({ ok: true, message: "เข้าร่วมทีมสำเร็จ" });
+      return NextResponse.json({
+        ok: true,
+        message: "เข้าร่วมทีมสำเร็จ — กรุณารอ Admin ของทีมอนุมัติก่อนเริ่มใช้งาน",
+        pending: true,
+      });
     }
 
     return NextResponse.json({ error: "action ไม่ถูกต้อง" }, { status: 400 });

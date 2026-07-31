@@ -11,7 +11,7 @@ import { syncMatchesToRelational } from "@/lib/matchSync";
 async function getTeamUser(session) {
   const user = await prisma.user.findUnique({
     where: { email: session.user.email },
-    select: { teamId: true, role: true }
+    select: { teamId: true, role: true, status: true }
   });
   return user;
 }
@@ -24,15 +24,25 @@ export async function GET() {
   const teamId = user?.teamId;
   if (!teamId) return NextResponse.json({ error: "ยังไม่ได้เข้าทีม" }, { status: 403 });
 
+  const team = await prisma.team.findUnique({
+    where: { id: teamId },
+    select: { name: true, inviteCode: true }
+  });
+
+  // ── Pending-approval gate ──
+  // คนที่เข้าทีมผ่าน invite code ยังไม่ได้รับอนุมัติจาก admin — ให้เข้าแอปได้
+  // ปกติ (เห็นเมนู, เห็นชื่อทีม) แต่ "ไม่เห็นข้อมูลทีมจริง" ตามที่ตกลงกันไว้
+  // เลย return ไปแค่ pending:true โดยไม่แตะ/ส่ง TeamData เลย ฝั่ง client
+  // (lib/storage.js) จะ fallback เป็นค่า default ว่างๆ ให้เองเมื่อไม่เจอ field
+  // พวกนั้นในผลลัพธ์ + โชว์ banner "รออนุมัติ" จาก flag pending นี้
+  if (user.status === "pending") {
+    return NextResponse.json({ pending: true, teamName: team?.name });
+  }
+
   const data = await prisma.teamData.upsert({
     where: { teamId },
     update: {},
     create: { teamId },
-  });
-
-  const team = await prisma.team.findUnique({
-    where: { id: teamId },
-    select: { name: true, inviteCode: true }
   });
 
   return NextResponse.json({ ...data, teamName: team?.name, inviteCode: team?.inviteCode });
@@ -46,6 +56,15 @@ export async function PUT(req) {
   const teamId = user?.teamId;
   if (!teamId) return NextResponse.json({ error: "ยังไม่ได้เข้าทีม" }, { status: 403 });
 
+  // pending user บันทึกอะไรไม่ได้เลยจนกว่าจะได้รับอนุมัติ — กันไว้ตั้งแต่
+  // ต้นทาง ต่อให้ client ถูกแก้ให้ส่ง PUT มาตรงๆ ก็ยังโดนบล็อกที่นี่อยู่ดี
+  if (user.status === "pending") {
+    return NextResponse.json(
+      { error: "บัญชีของคุณยังไม่ได้รับอนุมัติจาก Admin ของทีม กรุณารอก่อนบันทึกข้อมูล" },
+      { status: 403 }
+    );
+  }
+
   let body;
   try {
     body = await req.json();
@@ -54,12 +73,6 @@ export async function PUT(req) {
   }
 
   // ── Schema validation ──
-  // Rejects structurally malformed payloads (wrong types, oversized text,
-  // unexpected shapes) before they ever reach the database. This is what
-  // makes it safe to eventually open this app to other teams: right now
-  // ANY authenticated user could write literally any JSON shape into
-  // TeamData, and every page that reads app.matches/app.roster/etc. would
-  // just break with no clear error.
   const validation = validateTeamData(body);
   if (!validation.success) {
     console.error("Validation error for team", teamId, validation.error);
@@ -85,11 +98,8 @@ export async function PUT(req) {
 
   // ── Field-level permission gate ──
   // Patch notes & the meta tier list are meant to be coach/admin-managed
-  // calls, but the UI restriction alone is client-side and trivially
-  // bypassed by calling this endpoint directly. If a plain "member" tries
-  // to change either field, silently keep the existing DB value instead —
-  // this protects the data without failing the rest of their (legitimate)
-  // save in the same request.
+  // calls — if a plain "member" tries to change either field, silently
+  // keep the existing DB value instead of failing the whole save.
   const isCoachOrAdmin = user.role === "admin" || user.role === "coach";
   if (!isCoachOrAdmin && (writeData.patchInfo !== undefined || writeData.heroTiers !== undefined)) {
     const existing = await prisma.teamData.findUnique({
@@ -108,8 +118,6 @@ export async function PUT(req) {
     if (expectedUpdatedAt) {
       // ── Optimistic locking: ป้องกันคนสองคน (หรือ 2 แท็บของคนเดียว) save
       //    พร้อมกันแล้วคนหลังทับข้อมูลคนแรกแบบเงียบๆ ──
-      // updateMany + WHERE ที่รวม updatedAt เดิมไว้ด้วย เป็น atomic
-      // compare-and-swap ระดับ DB กัน race condition ระหว่างเช็คกับเขียนจริง
       const result = await prisma.teamData.updateMany({
         where: { teamId, updatedAt: new Date(expectedUpdatedAt) },
         data: writeData,
@@ -118,22 +126,17 @@ export async function PUT(req) {
       if (result.count === 0) {
         const existing = await prisma.teamData.findUnique({ where: { teamId } });
         if (existing) {
-          // มีข้อมูลอยู่แล้ว แต่ updatedAt ไม่ตรงกับที่ client เห็นล่าสุด
-          // แปลว่ามีคนอื่น (หรือแท็บอื่น) save ทับไปก่อนหน้านี้แล้ว
           return NextResponse.json({
             error: "CONFLICT",
             message: "ข้อมูลถูกแก้ไขจากที่อื่นระหว่างที่คุณกำลังแก้ไข กรุณารีเฟรชหน้าเพื่อดูข้อมูลล่าสุดก่อนบันทึกต่อ",
             currentUpdatedAt: existing.updatedAt,
           }, { status: 409 });
         }
-        // ยังไม่เคยมีแถวนี้เลย (ทีมใหม่ที่ยังไม่เคย save) — สร้างใหม่
         updated = await prisma.teamData.create({ data: { teamId, ...writeData } });
       } else {
         updated = await prisma.teamData.findUnique({ where: { teamId } });
       }
     } else {
-      // ไม่มี expectedUpdatedAt ส่งมา (client เก่า หรือ save ครั้งแรกในเซสชัน) —
-      // ยัง upsert ตามปกติเพื่อ backward compatibility
       updated = await prisma.teamData.upsert({
         where: { teamId },
         update: writeData,
@@ -141,15 +144,6 @@ export async function PUT(req) {
       });
     }
 
-    // Best-effort mirror into normalized tables for analytics. Deliberately
-    // NOT allowed to fail the save: if this throws (bad data shape we didn't
-    // anticipate, transient DB hiccup), the user's actual save already
-    // succeeded above and must not be rolled back or reported as failed —
-    // analytics being briefly stale is fine, losing a coach's match entry
-    // because of an analytics bug is not.
-    // NOTE: awaited (not fire-and-forget) — on Vercel, a serverless function
-    // can freeze/terminate the instant the response is sent, so a detached
-    // background promise here would randomly never finish.
     if (matches) {
       try {
         await syncMatchesToRelational(teamId, matches, customHeroes || [], roleOverrides || {});

@@ -27,8 +27,22 @@ export async function loadFromStorage() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     lastKnownUpdatedAt = data.updatedAt || null;
+
+    // ── Pending-approval account ──
+    // Server intentionally sends back only { pending: true, teamName }
+    // (no real team data) while an admin hasn't approved this member yet
+    // — see the status check in app/api/data GET. Build state from
+    // FALLBACK (keeps the exact shape other code expects, e.g.
+    // patchInfo.version) but override `roster` specifically — FALLBACK's
+    // roster is ["Player 1","Player 2"], meant as starter placeholders
+    // for a brand-new team, which would confusingly look like real team
+    // data here. Everything else in FALLBACK is already empty/neutral.
+    if (data.pending) {
+      return { ...FALLBACK, roster: [], _loaded: true, pending: true };
+    }
+
     // Build state from DB data, falling back to safe defaults per field
-    const state = { _loaded: true };
+    const state = { _loaded: true, pending: false };
     FIELDS.forEach(f => { state[f] = data[f] ?? FALLBACK[f]; });
     return state;
   } catch (err) {
@@ -38,6 +52,11 @@ export async function loadFromStorage() {
 }
 
 export async function saveToStorage(appState) {
+  // Pending-approval accounts can't save anything — server blocks this
+  // with a 403 anyway (see app/api/data PUT), but skip the network
+  // round-trip entirely rather than let it fail every 600ms via autosave.
+  if (appState.pending) return true;
+
   // Only send the fields that belong in the DB — strip all React/internal state
   const payload = {};
   FIELDS.forEach(f => { payload[f] = appState[f] ?? FALLBACK[f]; });

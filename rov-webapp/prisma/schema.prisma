@@ -19,6 +19,11 @@ model User {
   createdAt        DateTime  @default(now())
   teamId           String?   // null = ยังไม่ได้เข้าทีม
   role             String    @default("member") // "admin" | "coach" | "member"
+  // "active" | "pending" — คนสร้างทีมใหม่ได้ active ทันที (เป็นคนแรกของทีม
+  // ไม่มีใครให้รออนุมัติ) ส่วนคนเข้าทีมผ่าน invite code ต้องรอ admin ของทีม
+  // นั้นกด "อนุมัติ" ก่อน ถึงจะเห็น/แก้ข้อมูลทีมได้ — ดู app/api/register และ
+  // app/api/data สำหรับจุดที่เช็ค status นี้
+  status           String    @default("active")
   playerName       String?   // ผูกกับชื่อใน roster เพื่อใช้หน้า "My Stats"
   team             Team?     @relation(fields: [teamId], references: [id])
   // Reset password
