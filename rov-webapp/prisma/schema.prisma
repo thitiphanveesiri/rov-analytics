@@ -29,6 +29,8 @@ model User {
   // Reset password
   resetToken       String?   @unique
   resetTokenExpiry DateTime?
+
+  googleCalendar   GoogleCalendarConnection?
 }
 
 // ── Team ──
@@ -42,6 +44,7 @@ model Team {
   auditLogs   AdminAuditLog[]
   matches     Match[]
   patchVersions PatchVersion[]
+  calendarSyncs GoogleCalendarSync[]
 }
 
 // ── Admin action history (role changes, member removals) ──
@@ -162,4 +165,45 @@ model PatchVersion {
   createdAt  DateTime @default(now())
 
   @@index([teamId, effectiveFrom])
+}
+
+// ══════════════════════════════════════════════════════════════
+//  GOOGLE CALENDAR SYNC
+//  Each user connects their OWN Google account — schedules created in the
+//  app get auto-pushed to every connected member's own calendar (each
+//  person has their own copy/event, not one shared calendar). That's why
+//  this is 2 tables: one for each user's OAuth tokens, one tracking which
+//  Google event ID corresponds to which schedule item for which user (so
+//  we know whether to create/update/delete on future syncs).
+// ══════════════════════════════════════════════════════════════
+
+model GoogleCalendarConnection {
+  id           String   @id @default(cuid())
+  userId       String   @unique
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  googleEmail  String   // connected Google account, shown in UI ("เชื่อมต่อกับ x@gmail.com")
+  // Tokens stored encrypted (AES-256-GCM, see lib/googleCalendar.js) — never
+  // store OAuth refresh tokens in plaintext, they're long-lived credentials.
+  accessTokenEnc  String   @db.Text
+  refreshTokenEnc String   @db.Text
+  expiresAt       DateTime // access token expiry — refresh when past this
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// Tracks the Google Calendar event created for a given (schedule item,
+// user) pair, so future edits/deletes in the app update or remove the
+// right event instead of creating duplicates every sync.
+model GoogleCalendarSync {
+  id            String   @id @default(cuid())
+  teamId        String
+  team          Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  userId        String   // whose Google Calendar this event lives in
+  scheduleId    String   // the client-generated `id` (Date.now()) from TeamData.schedules
+  googleEventId String   // Google Calendar's event id — needed to PATCH/DELETE later
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([userId, scheduleId])
+  @@index([teamId, scheduleId])
 }

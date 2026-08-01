@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { validateTeamData } from "@/lib/validation";
 import { syncMatchesToRelational } from "@/lib/matchSync";
+import { syncScheduleForTeam } from "@/lib/googleCalendar";
 
 // NOTE: no body-size-limit config for App Router Route Handlers.
 // Photos are stored as Vercel Blob URLs (not base64) so payload stays small.
@@ -149,6 +150,20 @@ export async function PUT(req) {
         await syncMatchesToRelational(teamId, matches, customHeroes || [], roleOverrides || {});
       } catch (err) {
         console.error("matchSync error (non-fatal) for team", teamId, err);
+      }
+    }
+
+    // Best-effort Google Calendar sync for every connected team member —
+    // same non-fatal pattern as matchSync above: a calendar sync failure
+    // (expired refresh token, Google API hiccup, whatever) must never make
+    // the user's actual save look like it failed. Only runs the network
+    // calls at all if `schedules` was part of this save; most saves touch
+    // other fields and shouldn't pay this cost.
+    if (schedules) {
+      try {
+        await syncScheduleForTeam(teamId, schedules);
+      } catch (err) {
+        console.error("Google Calendar sync error (non-fatal) for team", teamId, err);
       }
     }
 

@@ -24,6 +24,18 @@ let lastKnownUpdatedAt = null;
 export async function loadFromStorage() {
   try {
     const res = await fetch("/api/data");
+
+    // ── Not in a team (removed, or never joined) ──
+    // /api/data GET returns 403 specifically when the account has no
+    // teamId — distinct from a real network/server error, and needs its
+    // own UI (a blocking "enter an invite code" modal) instead of quietly
+    // falling back to an empty-looking team, which is what used to happen
+    // here (silently caught below, autosave then kept failing every
+    // 600ms with no explanation to the user).
+    if (res.status === 403) {
+      return { ...FALLBACK, roster: [], _loaded: true, noTeam: true };
+    }
+
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     lastKnownUpdatedAt = data.updatedAt || null;
@@ -42,7 +54,7 @@ export async function loadFromStorage() {
     }
 
     // Build state from DB data, falling back to safe defaults per field
-    const state = { _loaded: true, pending: false };
+    const state = { _loaded: true, pending: false, noTeam: false };
     FIELDS.forEach(f => { state[f] = data[f] ?? FALLBACK[f]; });
     return state;
   } catch (err) {
@@ -52,10 +64,12 @@ export async function loadFromStorage() {
 }
 
 export async function saveToStorage(appState) {
-  // Pending-approval accounts can't save anything — server blocks this
-  // with a 403 anyway (see app/api/data PUT), but skip the network
-  // round-trip entirely rather than let it fail every 600ms via autosave.
-  if (appState.pending) return true;
+  // Pending-approval / no-team accounts can't save anything — server
+  // blocks this with a 403 anyway (see app/api/data PUT), but skip the
+  // network round-trip entirely rather than let it fail every 600ms via
+  // autosave (this is exactly the repeated "บันทึกไม่สำเร็จ" toast spam a
+  // removed team member used to see).
+  if (appState.pending || appState.noTeam) return true;
 
   // Only send the fields that belong in the DB — strip all React/internal state
   const payload = {};
