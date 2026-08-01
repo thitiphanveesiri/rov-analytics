@@ -531,6 +531,8 @@ function EditGameModal({ game, roster, videos=[], onSave, onClose }) {
   const [ourScore,   setOurScore]   = useState(game.ourScore ?? "");
   const [enemyScore, setEnemyScore] = useState(game.enemyScore ?? "");
   const [duration,   setDuration]   = useState(game.duration || "");
+  const [hasPause,   setHasPause]   = useState(!!game.pauseDuration);
+  const [pauseDuration, setPauseDuration] = useState(game.pauseDuration || "");
   const [videoId,    setVideoId]    = useState(game.videoId || "");
 
   const setOurHero   = (i,name) => setOurPicks(prev => prev.map((p,idx)=> idx===i ? {...p, hero: name?{name}:null} : p));
@@ -543,6 +545,7 @@ function EditGameModal({ game, roster, videos=[], onSave, onClose }) {
       ourScore: Math.max(0, ourScore===""?0:Number(ourScore)||0),
       enemyScore: Math.max(0, enemyScore===""?0:Number(enemyScore)||0),
       duration: normalizeDuration(duration),
+      pauseDuration: hasPause && pauseDuration ? normalizeDuration(pauseDuration) : null,
       videoId: videoId || null,
     });
     onClose();
@@ -616,6 +619,22 @@ function EditGameModal({ game, roster, videos=[], onSave, onClose }) {
               onBlur={e=>setDuration(normalizeDuration(e.target.value))}
               placeholder="09.45"
               style={{...selectStyle,width:90,padding:"7px 10px",fontSize:12}}/>
+          </div>
+          <div>
+            <label style={{display:"flex",alignItems:"center",gap:5,fontSize:10,color:C.textMuted,
+              marginBottom:4,cursor:"pointer",userSelect:"none",whiteSpace:"nowrap"}}>
+              <input type="checkbox" checked={hasPause}
+                onChange={e=>{setHasPause(e.target.checked); if(!e.target.checked) setPauseDuration("");}}/>
+              ⏸️ มีหยุดเกม
+            </label>
+            {hasPause && (
+              <input type="text" inputMode="decimal" placeholder="00.00"
+                title="เวลาที่หยุดเกมไปทั้งหมด (นาที.วินาที)"
+                value={pauseDuration}
+                onChange={e=>setPauseDuration(e.target.value)}
+                onBlur={e=>setPauseDuration(normalizeDuration(e.target.value))}
+                style={{...selectStyle,width:90,padding:"7px 10px",fontSize:12}}/>
+            )}
           </div>
         </div>
 
@@ -4021,7 +4040,7 @@ function MatchupDetail({ rivalName, opponent, records, rivals, enemyRosters, onS
 }
 
 // ── Scout Log Page: matchup list ──
-function ScoutLogPage({ rivalName, scoutMatches, rivals, enemyRosters, onSaveScout, onDeleteScout, onUpdateScoutGame }) {
+function ScoutLogPage({ rivalName, scoutMatches, rivals, enemyRosters, isCoach, onSaveScout, onDeleteScout, onUpdateScoutGame }) {
   const [creating,       setCreating]       = useState(false);
   const [selOpponent,    setSelOpponent]    = useState(null);
   const [scoutCatFilter, setScoutCatFilter] = useState("all"); // "all" | "scrim" | "tournament"
@@ -4068,13 +4087,24 @@ function ScoutLogPage({ rivalName, scoutMatches, rivals, enemyRosters, onSaveSco
         <h3 style={{margin:0,fontSize:15,fontWeight:800,color:C.primaryLight}}>
           🔍 Scout Log — {rivalName}
         </h3>
-        <button onClick={()=>setCreating(true)}
-          style={{marginLeft:"auto",background:`linear-gradient(135deg,${C.primary},${C.primaryLight})`,
-            color:"#fff",border:"none",borderRadius:9,padding:"7px 16px",
-            cursor:"pointer",fontWeight:800,fontSize:12}}>
-          + บันทึก Scout ใหม่
-        </button>
+        {isCoach && (
+          <button onClick={()=>setCreating(true)}
+            style={{marginLeft:"auto",background:`linear-gradient(135deg,${C.primary},${C.primaryLight})`,
+              color:"#fff",border:"none",borderRadius:9,padding:"7px 16px",
+              cursor:"pointer",fontWeight:800,fontSize:12}}>
+            + บันทึก Scout ใหม่
+          </button>
+        )}
       </div>
+
+      {!isCoach && (
+        <div style={{background:C.primary+"12",border:`1px solid ${C.primary}30`,borderRadius:10,
+          padding:"9px 14px",marginBottom:14,fontSize:12,color:C.textMuted,
+          display:"flex",alignItems:"center",gap:8}}>
+          <span>🔒</span>
+          <span>Scout log เป็นข้อมูลที่โค้ช/แอดมินจัดการ — ข้อมูลจากการซ้อมของทีมคู่แข่งดูได้เฉพาะโค้ช/แอดมินเท่านั้น ข้อมูลจากแมตช์แข่งจริงดูได้ตามปกติ</span>
+        </div>
+      )}
 
       {related.length===0 ? (
         <div style={{textAlign:"center",padding:"40px 20px",background:C.bgPanel,
@@ -7334,7 +7364,7 @@ function initDraftState() {
     redPicks:       ROLES_PICK.map(r => ({ role: r, hero: null, player: "" })),
     roleFilter:     "All",
     search:         "",
-    meta:           { result:"WIN", ourScore:"", enemyScore:"", duration:"", note:"" },
+    meta:           { result:"WIN", ourScore:"", enemyScore:"", duration:"", hasPause:false, pauseDuration:"", note:"" },
   };
 }
 
@@ -7419,7 +7449,7 @@ function draftReducer(state, action) {
         redBans:   Array(BANS_PER_TEAM).fill(null),
         bluePicks: ROLES_PICK.map(r => ({ role: r, hero: null, player: "" })),
         redPicks:  ROLES_PICK.map(r => ({ role: r, hero: null, player: "" })),
-        meta: { result:"WIN", ourScore:"", enemyScore:"", duration:"", note:"" },
+        meta: { result:"WIN", ourScore:"", enemyScore:"", duration:"", hasPause:false, pauseDuration:"", note:"" },
       };
     }
 
@@ -8542,8 +8572,11 @@ function RovAppInner() {
   const tG = allGames.length, tW = allGames.filter(g=>g.result==="WIN").length;
   const wr = tG ? Math.round(tW/tG*100) : 0;
   const gamesWithDuration = allGames.filter(g=>g.duration);
+  // หัก pauseDuration ออกก่อนคำนวณ — เวลาที่จดไว้รวมช่วงที่เกมหยุด (ผู้เล่น/
+  // คนดูขอหยุด) ด้วย ถ้าไม่หักออก ค่าเฉลี่ยจะสูงกว่าเวลาเล่นจริง
+  const effectiveDuration = g => Math.max(0, durationToMinutes(g.duration) - (g.pauseDuration ? durationToMinutes(g.pauseDuration) : 0));
   const avgGameDuration = gamesWithDuration.length
-    ? minutesToDurationStr(gamesWithDuration.reduce((s,g)=>s+durationToMinutes(g.duration),0) / gamesWithDuration.length)
+    ? minutesToDurationStr(gamesWithDuration.reduce((s,g)=>s+effectiveDuration(g),0) / gamesWithDuration.length)
     : null;
   const uniq = new Set();
   allGames.forEach(g=>(g.ourPicks||[]).forEach(s=>{if(s.hero?.name)uniq.add(s.hero.name);}));
@@ -9446,6 +9479,7 @@ function RovAppInner() {
                           scoutMatches={scoutMatches}
                           rivals={rivals}
                           enemyRosters={enemyRosters}
+                          isCoach={isCoach}
                           onSaveScout={data=>dispatchApp({type:"SAVE_SCOUT",payload:data})}
                           onDeleteScout={id=>dispatchApp({type:"DELETE_SCOUT",payload:id})}
                           onUpdateScoutGame={(scoutId,gameIdx,updates)=>dispatchApp({type:"UPDATE_SCOUT_GAME",payload:{scoutId,gameIdx,updates}})}
@@ -10289,7 +10323,9 @@ function DraftPageR({ draft, dispatch, roster, rivals, enemyRosters, onFinishSes
     const finishedGame = {
       ourSide, result:meta.result,
       ourScore:meta.ourScore, enemyScore:meta.enemyScore,
-      duration:meta.duration, note:meta.note,
+      duration:meta.duration,
+      pauseDuration: meta.hasPause && meta.pauseDuration ? normalizeDuration(meta.pauseDuration) : null,
+      note:meta.note,
       ourBans:ourBansData, enemyBans:enemyBansData,
       ourPicks:ourPicksData, enemyPicks:enemyPicksData,
       gameStats:{ our:{}, enemy:{} },
@@ -10766,6 +10802,22 @@ function DraftPageR({ draft, dispatch, roster, rivals, enemyRosters, onFinishSes
               }
             </div>
           ))}
+          <div>
+            <label style={{display:"flex",alignItems:"center",gap:5,fontSize:10,color:C.textMuted,
+              marginBottom:3,cursor:"pointer",userSelect:"none",whiteSpace:"nowrap"}}>
+              <input type="checkbox" checked={meta.hasPause}
+                onChange={e=>dispatch({type:"SET_META",payload:{hasPause:e.target.checked, ...(e.target.checked?{}:{pauseDuration:""})}})}/>
+              ⏸️ มีหยุดเกม
+            </label>
+            {meta.hasPause && (
+              <input type="text" inputMode="decimal" placeholder="00.00"
+                title="เวลาที่หยุดเกมไปทั้งหมด (นาที.วินาที)"
+                value={meta.pauseDuration}
+                onChange={e=>dispatch({type:"SET_META",payload:{pauseDuration:e.target.value}})}
+                onBlur={e=>dispatch({type:"SET_META",payload:{pauseDuration:normalizeDuration(e.target.value)}})}
+                style={{...iStyle,width:96,padding:"5px 8px",fontSize:12}}/>
+            )}
+          </div>
           <div style={{flex:1}}>
             <div style={{fontSize:10,color:C.textMuted,marginBottom:3}}>Coach Notes</div>
             <input placeholder="วิเคราะห์เกมนี้..." value={meta.note}

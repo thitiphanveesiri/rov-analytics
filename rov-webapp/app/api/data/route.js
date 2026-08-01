@@ -46,7 +46,27 @@ export async function GET() {
     create: { teamId },
   });
 
-  return NextResponse.json({ ...data, teamName: team?.name, inviteCode: team?.inviteCode });
+  // ── Scout log visibility gate (scrim/practice scouting only) ──
+  // Coaches wanted opponent PRACTICE scouting hidden from regular players
+  // specifically — the concern being a player could leak it to someone on
+  // the scouted team. Official TOURNAMENT scouting stays visible to
+  // everyone as before (that's public information once it's been played).
+  // This has to happen here, not just hidden in the UI — the whole point
+  // is that a player shouldn't be able to see this even via devtools/the
+  // network tab, so it's filtered out of the response entirely rather
+  // than sent and hidden client-side.
+  let scoutMatches = data.scoutMatches;
+  const isCoachOrAdminForRead = user.role === "admin" || user.role === "coach";
+  if (!isCoachOrAdminForRead && Array.isArray(scoutMatches)) {
+    scoutMatches = scoutMatches.filter(sm => sm.category !== "scrim");
+  }
+
+  return NextResponse.json({
+    ...data,
+    scoutMatches,
+    teamName: team?.name,
+    inviteCode: team?.inviteCode,
+  });
 }
 
 export async function PUT(req) {
@@ -101,15 +121,24 @@ export async function PUT(req) {
   // Patch notes & the meta tier list are meant to be coach/admin-managed
   // calls — if a plain "member" tries to change either field, silently
   // keep the existing DB value instead of failing the whole save.
+  //
+  // scoutMatches gets the same treatment for a different reason: members
+  // never receive the scrim-category entries in the first place (see the
+  // GET handler above), so their client-side scoutMatches array is
+  // ALREADY missing those entries. If we let their PUT write it back
+  // as-is, autosave would silently wipe every hidden scrim scout entry
+  // out of the database — this isn't a permission nicety here, it's
+  // preventing real data loss from an incomplete read being written back.
   const isCoachOrAdmin = user.role === "admin" || user.role === "coach";
-  if (!isCoachOrAdmin && (writeData.patchInfo !== undefined || writeData.heroTiers !== undefined)) {
+  if (!isCoachOrAdmin && (writeData.patchInfo !== undefined || writeData.heroTiers !== undefined || writeData.scoutMatches !== undefined)) {
     const existing = await prisma.teamData.findUnique({
       where: { teamId },
-      select: { patchInfo: true, heroTiers: true },
+      select: { patchInfo: true, heroTiers: true, scoutMatches: true },
     });
     if (existing) {
       if (writeData.patchInfo !== undefined) writeData.patchInfo = existing.patchInfo;
       if (writeData.heroTiers !== undefined) writeData.heroTiers = existing.heroTiers;
+      if (writeData.scoutMatches !== undefined) writeData.scoutMatches = existing.scoutMatches;
     }
   }
 
