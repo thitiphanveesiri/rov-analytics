@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { disconnectUser } from "@/lib/googleCalendar";
+import { disconnectUser } from "@/lib/googleAuth";
 
 // ── GET /api/google-calendar/status ──
 // Returns whether the current user has connected Google Calendar, and

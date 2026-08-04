@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { exchangeCodeForTokens, fetchGoogleEmail, saveConnection } from "@/lib/googleCalendar";
+import { exchangeCodeForTokens, fetchGoogleEmail, saveConnection } from "@/lib/googleAuth";
 
 // ── GET /api/google-calendar/callback ──
 // Google redirects here after the user approves (or denies) access.

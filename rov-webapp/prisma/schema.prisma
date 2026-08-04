@@ -45,6 +45,9 @@ model Team {
   matches     Match[]
   patchVersions PatchVersion[]
   calendarSyncs GoogleCalendarSync[]
+  youtubeChannels YoutubeWatchChannel[]
+  youtubeSyncedVideos YoutubeSyncedVideo[]
+  youtubeKeywords String[] @default(["scrim", "ซ้อม"])
 }
 
 // ── Admin action history (role changes, member removals) ──
@@ -206,4 +209,41 @@ model GoogleCalendarSync {
 
   @@unique([userId, scheduleId])
   @@index([teamId, scheduleId])
+}
+
+// ══════════════════════════════════════════════════════════════
+//  YOUTUBE AUTO-IMPORT
+//  Multiple team members can each add their own YouTube channel to a
+//  watch list — since different people take turns Live-streaming scrims
+//  from their personal channels, not one shared team channel. A cron job
+//  polls every watched channel's uploads playlist periodically; any new
+//  video whose title starts with one of Team.youtubeKeywords gets
+//  auto-added to TeamData.videos.
+// ══════════════════════════════════════════════════════════════
+
+model YoutubeWatchChannel {
+  id                String   @id @default(cuid())
+  teamId            String
+  team              Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  userId            String   // whose Google connection to poll with — has to be the channel owner's own token to see unlisted uploads
+  channelId         String   // YouTube channel id (starts with "UC...")
+  channelTitle      String?  // cached display name, shown in the admin UI
+  uploadsPlaylistId String   // resolved once when the channel is added — saves a channels.list call on every poll
+  addedByEmail      String   // display only
+  createdAt         DateTime @default(now())
+
+  @@unique([teamId, channelId])
+}
+
+// Tracks which YouTube videos have already been synced into a team's
+// video library, so the cron job never adds the same video twice even
+// across many polling runs.
+model YoutubeSyncedVideo {
+  id        String   @id @default(cuid())
+  teamId    String
+  team      Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  youtubeId String
+  createdAt DateTime @default(now())
+
+  @@unique([teamId, youtubeId])
 }
