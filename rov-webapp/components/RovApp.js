@@ -12,6 +12,7 @@ import { HeroCard, HeroChip } from "@/components/shared/HeroChip";
 import { PlayerAvatar, PhotoPicker, ImageCropModal } from "@/components/shared/PlayerMedia";
 import { ScheduleReminder } from "@/components/shared/ScheduleReminder";
 import { GoogleCalendarConnect } from "@/components/shared/GoogleCalendarConnect";
+import { YoutubeAutoImport } from "@/components/shared/YoutubeAutoImport";
 import {
   normalizeDuration,
   durationToMinutes,
@@ -7001,6 +7002,13 @@ function appReducer(state, action) {
       return { ...state, videos: [v, ...state.videos] };
     }
 
+    // ── ใช้ตอนกด "เช็ควิดีโอใหม่" ในหน้า Video Library ──
+    // ดึง videos ล่าสุดจาก server มา merge เข้า state ปัจจุบัน (ไม่ทับ field
+    // อื่นๆ ที่อาจกำลังแก้ค้างอยู่ — ต่างจาก LOAD_FROM_STORAGE ที่ replace
+    // ทั้งก้อน) เผื่อ cron job เพิ่งนำเข้าวิดีโอใหม่จาก YouTube ให้
+    case "SET_VIDEOS":
+      return { ...state, videos: action.payload };
+
     case "UPDATE_VIDEO":
       return { ...state, videos: state.videos.map(v => v.id===action.payload.id ? { ...v, ...action.payload } : v) };
 
@@ -9569,14 +9577,17 @@ function RovAppInner() {
 
           {/* ═══ VIDEO LIBRARY ═══ */}
           {page==="video" && (
-            <VideoLibrary
-              videos={app.videos||[]}
-              onAddVideo={v=>dispatchApp({type:"ADD_VIDEO",payload:v})}
-              onUpdateVideo={v=>dispatchApp({type:"UPDATE_VIDEO",payload:v})}
-              onDeleteVideo={id=>dispatchApp({type:"DELETE_VIDEO",payload:id})}
-              focusVideoId={ui.focusVideoId}
-              onClearFocusVideo={()=>dispatchUI({type:"CLEAR_FOCUS_VIDEO"})}
-            />
+            <>
+              <YoutubeAutoImport onVideosRefreshed={videos=>dispatchApp({type:"SET_VIDEOS",payload:videos})}/>
+              <VideoLibrary
+                videos={app.videos||[]}
+                onAddVideo={v=>dispatchApp({type:"ADD_VIDEO",payload:v})}
+                onUpdateVideo={v=>dispatchApp({type:"UPDATE_VIDEO",payload:v})}
+                onDeleteVideo={id=>dispatchApp({type:"DELETE_VIDEO",payload:id})}
+                focusVideoId={ui.focusVideoId}
+                onClearFocusVideo={()=>dispatchUI({type:"CLEAR_FOCUS_VIDEO"})}
+              />
+            </>
           )}
 
           {/* ═══ HERO IMAGES ═══ */}
