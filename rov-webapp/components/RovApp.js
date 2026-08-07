@@ -6520,12 +6520,108 @@ function TimestampedNote({ note, onSeek }) {
   );
 }
 
+// ── VideoDrawOverlay: วาดทับวิดีโอสดๆ ตอนอธิบายให้ผู้เล่นดู (ไม่บันทึกอะไรลง
+//    database เลย — ปิดโหมดวาด/ปิดการ์ดวิดีโอแล้วลายเส้นหายไปเลย เหมือน
+//    ปากกาเลเซอร์ ไม่ใช่การบันทึกเป็นวิดีโอใหม่) ──
+const DRAW_COLORS = ["#ff4757", "#ffd93d", "#1dd1a1", "#54a0ff", "#ffffff"];
+
+function VideoDrawOverlay({ active }) {
+  const canvasRef = useRef(null);
+  const containerRef = useRef(null);
+  const drawingRef = useRef(false);
+  const lastPointRef = useRef(null);
+  const [color, setColor] = useState(DRAW_COLORS[0]);
+  const colorRef = useRef(color);
+  useEffect(() => { colorRef.current = color; }, [color]);
+
+  // ปรับขนาด canvas ให้เท่ากับกล่องวิดีโอเป๊ะเสมอ (รวมตอน resize จอ)
+  useEffect(() => {
+    const canvas = canvasRef.current, container = containerRef.current;
+    if (!canvas || !container) return;
+    function resize() {
+      const rect = container.getBoundingClientRect();
+      // เก็บลายเส้นเดิมไว้ไม่ได้ตอน resize (canvas resize = เคลียร์เอง
+      // โดยธรรมชาติ) — โอเคเพราะฟีเจอร์นี้ตั้งใจให้เป็นของชั่วคราวอยู่แล้ว
+      canvas.width = rect.width;
+      canvas.height = rect.height;
+    }
+    resize();
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  }, []);
+
+  function getPoint(e) {
+    const rect = canvasRef.current.getBoundingClientRect();
+    const t = e.touches ? e.touches[0] : e;
+    return { x: t.clientX - rect.left, y: t.clientY - rect.top };
+  }
+
+  function start(e) {
+    if (!active) return;
+    e.preventDefault();
+    drawingRef.current = true;
+    lastPointRef.current = getPoint(e);
+  }
+  function move(e) {
+    if (!active || !drawingRef.current) return;
+    e.preventDefault();
+    const ctx = canvasRef.current.getContext("2d");
+    const p = getPoint(e);
+    const last = lastPointRef.current;
+    ctx.strokeStyle = colorRef.current;
+    ctx.lineWidth = 4;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    ctx.moveTo(last.x, last.y);
+    ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+    lastPointRef.current = p;
+  }
+  function end() { drawingRef.current = false; }
+
+  function clearCanvas() {
+    const canvas = canvasRef.current;
+    canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+  }
+
+  return (
+    <div ref={containerRef} style={{position:"absolute", inset:0, pointerEvents: active ? "auto" : "none"}}>
+      <canvas ref={canvasRef}
+        onMouseDown={start} onMouseMove={move} onMouseUp={end} onMouseLeave={end}
+        onTouchStart={start} onTouchMove={move} onTouchEnd={end}
+        style={{position:"absolute", inset:0, width:"100%", height:"100%",
+          cursor: active ? "crosshair" : "default", touchAction:"none"}}/>
+      {active && (
+        <div style={{position:"absolute", bottom:8, left:8, display:"flex", gap:6,
+          background:"rgba(10,10,22,0.85)", borderRadius:10, padding:"6px 8px", alignItems:"center"}}>
+          {DRAW_COLORS.map(c => (
+            <button key={c} onClick={()=>setColor(c)}
+              style={{width:20, height:20, borderRadius:"50%", background:c, cursor:"pointer",
+                border: color===c ? "2px solid #fff" : "2px solid transparent", padding:0}}/>
+          ))}
+          <button onClick={clearCanvas}
+            style={{background:"transparent", border:`1px solid ${C.border}`, color:"#fff",
+              borderRadius:6, padding:"3px 8px", cursor:"pointer", fontSize:11, fontWeight:700, marginLeft:4}}>
+            🧹 ลบทั้งหมด
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function VideoCard({ v, onDelete, onEdit, forceOpen, onForceOpenHandled }) {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editData, setEditData] = useState({...v});
+  const [drawMode, setDrawMode] = useState(false);
   const iframeRef = useRef(null);
   const cardRef = useRef(null);
+
+  // ปิดโหมดวาดทุกครั้งที่ปิดการ์ด — ลายเส้นเป็นของชั่วคราวจริงๆ ไม่ใช่แค่ซ่อนไว้
+  useEffect(() => { if (!open) setDrawMode(false); }, [open]);
+
 
   // ── ถ้าถูกเปิดมาจากปุ่ม "ดูวิดีโอ" ใน Match Log ให้ขยายอัตโนมัติ + เลื่อนจอมาหา ──
   useEffect(() => {
@@ -6651,14 +6747,26 @@ function VideoCard({ v, onDelete, onEdit, forceOpen, onForceOpenHandled }) {
       {open&&!editing&&(
         <div style={{padding:"0 16px 16px"}}>
           {/* YouTube embed with JS API enabled for seeking */}
-          {embedSrc ? (
-            <iframe
-              ref={iframeRef}
-              style={{width:"100%",aspectRatio:"16/9",border:"none",borderRadius:8}}
-              src={embedSrc} title={v.title} allowFullScreen/>
-          ) : (
-            <VideoEmbed src={v.url} title={v.title}/>
-          )}
+          <div style={{position:"relative", width:"100%", aspectRatio:"16/9", borderRadius:8, overflow:"hidden"}}>
+            {embedSrc ? (
+              <iframe
+                ref={iframeRef}
+                style={{width:"100%",height:"100%",border:"none"}}
+                src={embedSrc} title={v.title} allowFullScreen/>
+            ) : (
+              <VideoEmbed src={v.url} title={v.title}/>
+            )}
+            <VideoDrawOverlay active={drawMode}/>
+          </div>
+          <div style={{display:"flex",justifyContent:"flex-end",marginTop:6}}>
+            <button onClick={()=>setDrawMode(m=>!m)}
+              style={{background: drawMode ? C.primary : "transparent",
+                border:`1px solid ${drawMode ? C.primary : C.border}`,
+                color: drawMode ? "#fff" : C.textMuted,
+                borderRadius:8, padding:"6px 14px", cursor:"pointer", fontSize:12, fontWeight:700}}>
+              {drawMode ? "✅ กำลังวาดอยู่ (กดเพื่อหยุด)" : "✏️ วาดอธิบายทับคลิป"}
+            </button>
+          </div>
           {v.note&&(
             v.note.match(/\[\d{1,2}:\d{2}(?::\d{2})?\]/)
               ? <TimestampedNote note={v.note} onSeek={seekTo}/>
