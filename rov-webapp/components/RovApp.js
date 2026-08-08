@@ -1663,7 +1663,159 @@ function PatchMetaCard({ patchInfo, heroTiers, onSavePatch, onSetTier, isCoach }
 }
 
 // ═══════════════════════════════════════════
-//  PHASE TRACKER
+//  WEEKLY / MONTHLY SUMMARY — สรุปผลซ้อม 7 วัน / 30 วันล่าสุด เทียบกับ
+//  ช่วงก่อนหน้า (ไม่มี AI แค่คำนวณจากข้อมูลจริงล้วนๆ)
+// ═══════════════════════════════════════════
+function summarizePeriod(matches, days) {
+  const now = Date.now();
+  const periodStart = now - days*24*60*60*1000;
+  const prevStart = now - days*2*24*60*60*1000;
+
+  const flatten = (ms) => ms.flatMap(m =>
+    Array.isArray(m.games) && m.games.length > 0
+      ? m.games.map(g => ({ ...g, _matchId: m.id }))
+      : [{ ...m, _matchId: m.id }]
+  );
+
+  const inRange = (g, start, end) => g._matchId >= start && g._matchId < end;
+
+  const allGames = flatten(matches);
+  const current  = allGames.filter(g => inRange(g, periodStart, now));
+  const previous = allGames.filter(g => inRange(g, prevStart, periodStart));
+
+  function stats(games) {
+    const total = games.length;
+    const wins  = games.filter(g=>g.result==="WIN").length;
+    const wr    = total ? Math.round(wins/total*100) : null;
+    return { total, wins, losses: total-wins, wr };
+  }
+
+  const cur = stats(current), prev = stats(previous);
+
+  // hero ที่เล่นบ่อยสุด 3 อันดับในช่วงนี้ พร้อม win rate ของฮีโร่นั้น
+  const heroTally = {};
+  current.forEach(g => {
+    (g.ourPicks||[]).forEach(p => {
+      const name = p.hero?.name;
+      if (!name) return;
+      if (!heroTally[name]) heroTally[name] = { picks:0, wins:0 };
+      heroTally[name].picks++;
+      if (g.result==="WIN") heroTally[name].wins++;
+    });
+  });
+  const topHeroes = Object.entries(heroTally)
+    .sort((a,b)=>b[1].picks-a[1].picks)
+    .slice(0,3)
+    .map(([name,v])=>({ name, games:v.picks, wr: Math.round(v.wins/v.picks*100) }));
+
+  // win rate แยกตาม role ในช่วงนี้
+  const roleTally = {};
+  current.forEach(g => {
+    (g.ourPicks||[]).forEach(p => {
+      const role = p.hero?.role || p.role;
+      if (!role) return;
+      if (!roleTally[role]) roleTally[role] = { games:0, wins:0 };
+      roleTally[role].games++;
+      if (g.result==="WIN") roleTally[role].wins++;
+    });
+  });
+  const roleBreakdown = ROLES_PICK.map(role => ({
+    role,
+    games: roleTally[role]?.games || 0,
+    wr: roleTally[role]?.games ? Math.round(roleTally[role].wins/roleTally[role].games*100) : null,
+  })).filter(r=>r.games>0);
+
+  // เช็ค streak จากเกมล่าสุดในช่วงนี้ (เรียงตามเวลาจริง)
+  const sorted = [...current].sort((a,b)=>b._matchId-a._matchId);
+  let streak = 0, streakType = null;
+  for (const g of sorted) {
+    if (streakType===null) { streakType = g.result; streak = 1; }
+    else if (g.result === streakType) streak++;
+    else break;
+  }
+
+  return { ...cur, wrDelta: cur.wr!=null && prev.wr!=null ? cur.wr-prev.wr : null, topHeroes, roleBreakdown, streak, streakType };
+}
+
+function PeriodSummaryCard({ title, dateRangeLabel, data }) {
+  const wrColor = data.wr==null ? C.textMuted : data.wr>=50 ? C.win : C.lose;
+  return (
+    <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:14,padding:18,flex:1,minWidth:260}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:12}}>
+        <div style={{fontWeight:800,fontSize:14}}>{title}</div>
+        <div style={{fontSize:11,color:C.textMuted}}>{dateRangeLabel}</div>
+      </div>
+
+      {data.total===0 ? (
+        <div style={{color:C.textMuted,fontSize:12,padding:"10px 0"}}>ยังไม่มีข้อมูลในช่วงนี้</div>
+      ) : (
+        <>
+          <div style={{display:"flex",alignItems:"baseline",gap:10,marginBottom:4}}>
+            <span style={{fontSize:30,fontWeight:900,color:wrColor}}>{data.wr}%</span>
+            <span style={{fontSize:12,color:C.textMuted}}>{data.wins}W-{data.losses}L ({data.total} เกม)</span>
+            {data.wrDelta!=null && (
+              <span style={{fontSize:12,fontWeight:700,color:data.wrDelta>=0?C.win:C.lose}}>
+                {data.wrDelta>=0?"▲":"▼"} {Math.abs(data.wrDelta)}% เทียบช่วงก่อนหน้า
+              </span>
+            )}
+          </div>
+
+          {data.streak>=2 && (
+            <div style={{fontSize:12,marginTop:6,marginBottom:10,fontWeight:700,
+              color: data.streakType==="WIN" ? C.win : C.lose}}>
+              {data.streakType==="WIN" ? "🔥" : "⚠️"} {data.streakType==="WIN"?"ชนะ":"แพ้"}ติดต่อกัน {data.streak} เกม
+            </div>
+          )}
+
+          {data.roleBreakdown.length>0 && (
+            <div style={{marginTop:10}}>
+              <div style={{fontSize:10,color:C.textMuted,marginBottom:5}}>WIN RATE ตาม ROLE</div>
+              {data.roleBreakdown.map(r=>(
+                <div key={r.role} style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+                  <span style={{fontSize:11,width:60,color:ROLE_COLOR[r.role]}}>{r.role}</span>
+                  <div style={{flex:1,height:6,background:C.card,borderRadius:99,overflow:"hidden"}}>
+                    <div style={{width:`${r.wr}%`,height:"100%",background:r.wr>=50?C.win:C.lose}}/>
+                  </div>
+                  <span style={{fontSize:11,color:C.textMuted,width:60,textAlign:"right"}}>{r.wr}% ({r.games})</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {data.topHeroes.length>0 && (
+            <div style={{marginTop:10}}>
+              <div style={{fontSize:10,color:C.textMuted,marginBottom:5}}>ฮีโร่ที่เล่นบ่อยสุด</div>
+              <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                {data.topHeroes.map(h=>(
+                  <HeroChip key={h.name} name={h.name} size={20} fontSize={11}
+                    textCol={h.wr>=50?C.win:C.lose}/>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function WeeklyMonthlySummary({ matches }) {
+  const weekly  = summarizePeriod(matches||[], 7);
+  const monthly = summarizePeriod(matches||[], 30);
+  const fmt = (d) => d.toLocaleDateString("th-TH",{day:"numeric",month:"short"});
+  const now = new Date();
+  const weekAgo = new Date(now - 7*24*60*60*1000);
+  const monthAgo = new Date(now - 30*24*60*60*1000);
+
+  return (
+    <div style={{display:"flex",gap:16,flexWrap:"wrap",marginBottom:20}}>
+      <PeriodSummaryCard title="📅 สัปดาห์นี้" dateRangeLabel={`${fmt(weekAgo)} - ${fmt(now)}`} data={weekly}/>
+      <PeriodSummaryCard title="🗓️ เดือนนี้" dateRangeLabel={`${fmt(monthAgo)} - ${fmt(now)}`} data={monthly}/>
+    </div>
+  );
+}
+
+
 // ═══════════════════════════════════════════
 function PhaseTracker({ step }) {
   return (
@@ -8979,6 +9131,7 @@ function RovAppInner() {
                 onSetTier={(hero,tier)=>dispatchApp({type:"SET_HERO_TIER",payload:{hero,tier}})}
                 isCoach={isCoach}
               />
+              <WeeklyMonthlySummary matches={app.matches}/>
               {/* ── Upcoming match reminder ── */}
               {(()=>{
                 const now = new Date();
