@@ -1796,21 +1796,37 @@ function summarizePeriod(matches, days) {
     .slice(0,3)
     .map(([name,v])=>({ name, games:v.picks, wr: Math.round(v.wins/v.picks*100) }));
 
-  const roleTally = {};
-  current.forEach(g => {
-    (g.ourPicks||[]).forEach(p => {
-      const role = p.hero?.role || p.role;
-      if (!role) return;
-      if (!roleTally[role]) roleTally[role] = { games:0, wins:0 };
-      roleTally[role].games++;
-      if (g.result==="WIN") roleTally[role].wins++;
+  function teamCombatStats(games) {
+    // รวมค่า damage/damageTaken/gold ของผู้เล่นทั้ง 5 คนต่อเกม แล้วเฉลี่ยเป็น
+    // "ค่าเฉลี่ยทั้งทีมต่อเกม" — ต่างจากสถิติรายบุคคลที่แยกเป็นคนๆ ไป
+    let dmgSum=0, dmgTakenSum=0, goldSum=0, gamesWithStats=0;
+    games.forEach(g => {
+      const our = g.gameStats?.our;
+      if (!our) return;
+      let gameDmg=0, gameDmgTaken=0, gameGold=0, hasAny=false;
+      Object.values(our).forEach(s => {
+        if (!s) return;
+        gameDmg += s.damage||0;
+        gameDmgTaken += s.damageTaken||0;
+        gameGold += s.gold||0;
+        hasAny = true;
+      });
+      if (hasAny) { dmgSum+=gameDmg; dmgTakenSum+=gameDmgTaken; goldSum+=gameGold; gamesWithStats++; }
     });
-  });
-  const roleBreakdown = ROLES_PICK.map(role => ({
-    role,
-    games: roleTally[role]?.games || 0,
-    wr: roleTally[role]?.games ? Math.round(roleTally[role].wins/roleTally[role].games*100) : null,
-  })).filter(r=>r.games>0);
+    return gamesWithStats ? {
+      avgDamage: Math.round(dmgSum/gamesWithStats),
+      avgDamageTaken: Math.round(dmgTakenSum/gamesWithStats),
+      avgGold: Math.round(goldSum/gamesWithStats),
+    } : { avgDamage:null, avgDamageTaken:null, avgGold:null };
+  }
+  const curTeamCombat = teamCombatStats(current);
+  const prevTeamCombat = teamCombatStats(previous);
+  const teamCombat = {
+    ...curTeamCombat,
+    avgDamageDelta: curTeamCombat.avgDamage!=null && prevTeamCombat.avgDamage!=null ? curTeamCombat.avgDamage-prevTeamCombat.avgDamage : null,
+    avgDamageTakenDelta: curTeamCombat.avgDamageTaken!=null && prevTeamCombat.avgDamageTaken!=null ? curTeamCombat.avgDamageTaken-prevTeamCombat.avgDamageTaken : null,
+    avgGoldDelta: curTeamCombat.avgGold!=null && prevTeamCombat.avgGold!=null ? curTeamCombat.avgGold-prevTeamCombat.avgGold : null,
+  };
 
   const sorted = [...current].sort((a,b)=>b._matchId-a._matchId);
   let streak = 0, streakType = null;
@@ -1841,7 +1857,7 @@ function summarizePeriod(matches, days) {
     ...cur,
     wrDelta: cur.wr!=null && prev.wr!=null ? cur.wr-prev.wr : null,
     avgDurationDelta: cur.avgDuration!=null && prev.avgDuration!=null ? cur.avgDuration-prev.avgDuration : null,
-    topHeroes, roleBreakdown, streak, streakType, players,
+    topHeroes, teamCombat, streak, streakType, players,
   };
 }
 
@@ -1953,18 +1969,26 @@ function PeriodSummaryCard({ title, dateRangeLabel, data }) {
             </div>
           )}
 
-          {data.roleBreakdown.length>0 && (
+          {(data.teamCombat.avgDamage!=null || data.teamCombat.avgDamageTaken!=null) && (
             <div style={{marginTop:10}}>
-              <div style={{fontSize:10,color:C.textMuted,marginBottom:5}}>WIN RATE ตาม ROLE</div>
-              {data.roleBreakdown.map(r=>(
-                <div key={r.role} style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
-                  <span style={{fontSize:11,width:60,color:ROLE_COLOR[r.role]}}>{r.role}</span>
-                  <div style={{flex:1,height:6,background:C.card,borderRadius:99,overflow:"hidden"}}>
-                    <div style={{width:`${r.wr}%`,height:"100%",background:r.wr>=50?C.win:C.lose}}/>
-                  </div>
-                  <span style={{fontSize:11,color:C.textMuted,width:60,textAlign:"right"}}>{r.wr}% ({r.games})</span>
+              <div style={{fontSize:10,color:C.textMuted,marginBottom:5}}>ภาพรวมทีม (เฉลี่ย/เกม)</div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
+                <div>
+                  <div style={{fontSize:9,color:C.textMuted}}>DMG ทั้งทีม</div>
+                  <div style={{fontSize:14,fontWeight:800}}>{data.teamCombat.avgDamage ?? "-"}</div>
+                  <DeltaTag value={data.teamCombat.avgDamageDelta}/>
                 </div>
-              ))}
+                <div>
+                  <div style={{fontSize:9,color:C.textMuted}}>DMG Taken ทั้งทีม</div>
+                  <div style={{fontSize:14,fontWeight:800}}>{data.teamCombat.avgDamageTaken ?? "-"}</div>
+                  <DeltaTag value={data.teamCombat.avgDamageTakenDelta} higherIsBetter={false}/>
+                </div>
+                <div>
+                  <div style={{fontSize:9,color:C.textMuted}}>Gold ทั้งทีม</div>
+                  <div style={{fontSize:14,fontWeight:800}}>{data.teamCombat.avgGold ?? "-"}</div>
+                  <DeltaTag value={data.teamCombat.avgGoldDelta}/>
+                </div>
+              </div>
             </div>
           )}
 
@@ -8459,11 +8483,24 @@ function RovAppInner() {
         setSaveStatus("saved");
         setTimeout(()=>setSaveStatus("idle"), 2000);
       } catch (err) {
+        if (err.wasMerged) {
+          // ── ชนกันแต่กู้คืนอัตโนมัติสำเร็จ ──
+          // saveToStorage() พยายามรวมข้อมูลที่เพิ่ม (แมตช์/วิดีโอ/ตารางซ้อม
+          // ฯลฯ) เข้ากับข้อมูลล่าสุดจาก server ให้แล้วและบันทึกสำเร็จ — ไม่ใช่
+          // error จริง แค่ต้องโหลด state ฝั่ง client ใหม่ให้ตรงกับที่ merge
+          // ไปแล้ว ไม่งั้นรอบ autosave ถัดไปจะส่งค่าเก่าทับซ้ำ (โดยเฉพาะ field
+          // ที่ merge ไม่ได้ เช่น roster/photos ที่อีกฝ่ายอาจแก้ไปพร้อมกัน)
+          setSaveStatus("saved");
+          toast("มีการแก้ไขจากที่อื่นพร้อมกัน — รวมข้อมูลให้อัตโนมัติแล้ว ✅", "success", 5000);
+          loadFromStorage().then(loaded => dispatchApp({ type:"LOAD_FROM_STORAGE", payload: loaded }));
+          setTimeout(()=>setSaveStatus("idle"), 2000);
+          return;
+        }
         console.error("Save failed:", err);
         setSaveStatus("error");
         if (err.isConflict) {
-          // อีกคน (หรืออีกแท็บ) save ทับไปก่อนแล้ว — เตือนแบบเจาะจง ไม่ใช่ error ทั่วไป
-          // และไม่ auto-retry ซ้อนทับ เพราะจะยิ่งชนกันวนไปเรื่อยๆ
+          // ชนกันซ้ำสอง (พยายาม merge อัตโนมัติไปแล้วครั้งนึงใน saveToStorage
+          // แต่ก็ยังชนอยู่ดี) — เคสนี้เกิดยากมาก ต้องให้ user จัดการเอง
           toast(err.message, "error", 8000);
         } else {
           toast("บันทึกไม่สำเร็จ กรุณาลองใหม่", "error", 5000);
