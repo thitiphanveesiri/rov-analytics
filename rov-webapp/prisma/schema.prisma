@@ -91,6 +91,8 @@ model TeamData {
   patchInfo     Json     @default("{}") // { version, notes, updatedAt }
   heroTiers     Json     @default("{}") // { [heroName]: "S+"|"S"|"A"|"B"|"C" }
   practiceAssignments Json @default("[]") // [{ id, player, title, note, dueDate, done, createdAt, createdBy }]
+  whiteboardElements   Json @default("[]") // Tactical Whiteboard current board (paths/arrows/hero markers/text)
+  whiteboardFormations Json @default("[]") // saved named formation snapshots — [{ id, name, elements, createdAt }]
   updatedAt     DateTime @updatedAt
   updatedBy     String?
 }
