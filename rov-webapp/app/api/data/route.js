@@ -107,6 +107,7 @@ export async function PUT(req) {
     matches, rivals, roster, enemyRosters, scoutMatches,
     playerPhotos, heroPhotos, customHeroes, roleOverrides, videos,
     teamLogo, rivalLogos, schedules, patchInfo, heroTiers, practiceAssignments,
+    whiteboardElements, whiteboardFormations,
     expectedUpdatedAt, // เวลาที่ client เห็นข้อมูลล่าสุดตอนโหลด — ใช้เช็ค conflict
   } = validation.data;
 
@@ -114,6 +115,7 @@ export async function PUT(req) {
     matches, rivals, roster, enemyRosters, scoutMatches,
     playerPhotos, heroPhotos, customHeroes, roleOverrides, videos,
     teamLogo, rivalLogos, schedules, patchInfo, heroTiers, practiceAssignments,
+    whiteboardElements, whiteboardFormations,
     updatedBy: session.user.email,
   };
 

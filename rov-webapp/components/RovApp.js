@@ -6043,7 +6043,7 @@ function HeroAvatar({ name, team, size=40, style={} }) {
 // ═══════════════════════════════════════════
 //  MAIN APP
 // ═══════════════════════════════════════════
-function TacticalWhiteboard() {
+function TacticalWhiteboard({ initialElements, initialFormations, onSetElements, onAddFormation, onDeleteFormation }) {
   const canvasRef    = useRef(null);
   const overlayRef   = useRef(null); // for drawing preview
   const fileInputRef = useRef(null);
@@ -6062,10 +6062,21 @@ function TacticalWhiteboard() {
 
   // ── canvas state ──
   const [mapImg,     setMapImg]     = useState(null); // background image dataURL
-  const [elements,   setElements]   = useState([]);   // drawn elements
+  const [elements,   setElements]   = useState(() => initialElements || []);   // drawn elements
   const [history,    setHistory]    = useState([]);   // undo stack
-  const [formations, setFormations] = useState([]); // saved formations
+  const formations = initialFormations || []; // saved formations — add/delete dispatch straight to app state (no local copy needed, prop stays in sync via the reducer)
   const [showFormations, setShowFormations] = useState(false);
+
+  // ── sync ขึ้น app state (แล้ว autosave ที่มีอยู่แล้วจัดการบันทึกให้) ──
+  // ก่อนหน้านี้ elements เป็นแค่ local state เฉยๆ ไม่เคยถูกส่งไปไหนเลย
+  // พอออกจากหน้า/refresh เลยหายหมด — sync ทุกครั้งที่เปลี่ยนแทน (ข้าม
+  // effect แรกตอน mount เพราะตอนนั้น elements ยังเป็นค่าที่โหลดมาเป๊ะๆ
+  // ไม่มีอะไรเปลี่ยนจริง ไม่งั้นจะ trigger save เปล่าๆ ทุกครั้งที่แค่เปิดหน้านี้)
+  const mountedRef = useRef(false);
+  useEffect(() => {
+    if (!mountedRef.current) { mountedRef.current = true; return; }
+    onSetElements?.(elements);
+  }, [elements]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── drawing state ──
   const drawing    = useRef(false);
@@ -6431,7 +6442,7 @@ function TacticalWhiteboard() {
   function saveFormation() {
     const name = prompt("ชื่อ Formation นี้:");
     if (!name?.trim()) return;
-    setFormations(prev=>[...prev,{name:name.trim(), elements:[...elements], time:new Date().toLocaleString("th-TH")}]);
+    onAddFormation?.({name:name.trim(), elements:[...elements], time:new Date().toLocaleString("th-TH")});
   }
 
   function loadFormation(f) {
@@ -6759,8 +6770,8 @@ function TacticalWhiteboard() {
               </div>
             ):(
               <div style={{overflowY:"auto",display:"flex",flexDirection:"column",gap:8}}>
-                {formations.map((f,i)=>(
-                  <div key={i} style={{background:C.card,border:`1px solid ${C.border}`,
+                {formations.map((f)=>(
+                  <div key={f.id} style={{background:C.card,border:`1px solid ${C.border}`,
                     borderRadius:10,padding:"10px 14px",display:"flex",alignItems:"center",gap:10}}>
                     <div style={{flex:1}}>
                       <div style={{fontWeight:700,fontSize:13,color:C.primaryLight}}>{f.name}</div>
@@ -6773,7 +6784,7 @@ function TacticalWhiteboard() {
                         borderRadius:7,padding:"5px 12px",cursor:"pointer",fontSize:11,fontWeight:700}}>
                       โหลด
                     </button>
-                    <button onClick={()=>setFormations(prev=>prev.filter((_,j)=>j!==i))}
+                    <button onClick={()=>onDeleteFormation?.(f.id)}
                       style={{background:"#ff475720",border:"1px solid #ff475740",color:"#ff4757",
                         borderRadius:7,padding:"5px 8px",cursor:"pointer",fontSize:11}}>
                       ✕
@@ -7446,6 +7457,8 @@ function defaultAppState() {
     patchInfo:     {version:"",notes:"",updatedAt:null}, // ข้อมูล patch ปัจจุบัน
     heroTiers:     {}, // { [heroName]: "S+"|"S"|"A"|"B"|"C" } — meta tier list
     practiceAssignments: [], // [{ id, player, title, note, dueDate, done, createdAt, createdBy }]
+    whiteboardElements: [],   // Tactical Whiteboard current board — paths/arrows/hero markers/text
+    whiteboardFormations: [], // saved named boards — [{ id, name, elements, createdAt }]
   };
 }
 
@@ -7737,6 +7750,23 @@ function appReducer(state, action) {
 
     case "DELETE_PRACTICE":
       return { ...state, practiceAssignments: (state.practiceAssignments||[]).filter(p=>p.id!==action.payload) };
+
+    // ── Tactical Whiteboard persistence ──
+    // ก่อนหน้านี้ elements/formations เก็บแค่ local useState ใน
+    // TacticalWhiteboard เอง ไม่เคยถูกบันทึกลง database เลย — พอออกจากหน้า
+    // หรือ refresh ข้อมูลเลยหายหมด (ทั้งกระดานที่วาดค้างและ formation ที่
+    // "บันทึก" ไว้) ย้ายมาไว้ใน app state ตรงนี้แทน ให้ autosave ที่มีอยู่
+    // แล้วจัดการให้เหมือน field อื่นๆ ทั้งหมด
+    case "SET_WHITEBOARD_ELEMENTS":
+      return { ...state, whiteboardElements: action.payload };
+
+    case "ADD_WHITEBOARD_FORMATION": {
+      const item = { id: Date.now(), createdAt: new Date().toISOString(), ...action.payload };
+      return { ...state, whiteboardFormations: [item, ...(state.whiteboardFormations||[])] };
+    }
+
+    case "DELETE_WHITEBOARD_FORMATION":
+      return { ...state, whiteboardFormations: (state.whiteboardFormations||[]).filter(f=>f.id!==action.payload) };
 
     case "ADD_CUSTOM_HERO": {
       // payload: { name, role, img? }
@@ -8967,7 +8997,13 @@ function RovAppInner() {
       )}
 
       {/* ── WHITEBOARD PAGE (full-screen, no padding) ── */}
-      {page==="board" && <TacticalWhiteboard/>}
+      {page==="board" && <TacticalWhiteboard
+        initialElements={app.whiteboardElements}
+        initialFormations={app.whiteboardFormations}
+        onSetElements={els=>dispatchApp({type:"SET_WHITEBOARD_ELEMENTS",payload:els})}
+        onAddFormation={f=>dispatchApp({type:"ADD_WHITEBOARD_FORMATION",payload:f})}
+        onDeleteFormation={id=>dispatchApp({type:"DELETE_WHITEBOARD_FORMATION",payload:id})}
+      />}
       {page==="schedule" && (
         <div style={{padding:"16px 28px 0",maxWidth:1300,margin:"0 auto"}}>
           <GoogleCalendarConnect/>

@@ -5,6 +5,7 @@ const FIELDS = [
   "matches","rivals","roster","enemyRosters","scoutMatches",
   "playerPhotos","heroPhotos","customHeroes","roleOverrides","videos",
   "teamLogo","rivalLogos","schedules","patchInfo","heroTiers","practiceAssignments",
+  "whiteboardElements","whiteboardFormations",
 ];
 
 const FALLBACK = {
@@ -12,7 +13,8 @@ const FALLBACK = {
   enemyRosters:{}, scoutMatches:[], playerPhotos:{}, heroPhotos:{},
   customHeroes:[], roleOverrides:{}, videos:[],
   teamLogo:null, rivalLogos:{}, schedules:[],
-  patchInfo:{version:"",notes:"",updatedAt:null}, heroTiers:{}, practiceAssignments:[], _loaded:true,
+  patchInfo:{version:"",notes:"",updatedAt:null}, heroTiers:{}, practiceAssignments:[],
+  whiteboardElements:[], whiteboardFormations:[], _loaded:true,
 };
 
 // Tracks the last-known `updatedAt` timestamp of TeamData as this client
@@ -68,7 +70,7 @@ export async function loadFromStorage() {
 // server array is a genuine new addition, not an edit to something that
 // already exists, so adding it back in can't silently clobber someone
 // else's change to an existing item).
-const MERGEABLE_LIST_FIELDS = ["matches", "rivals", "scoutMatches", "videos", "schedules", "practiceAssignments"];
+const MERGEABLE_LIST_FIELDS = ["matches", "rivals", "scoutMatches", "videos", "schedules", "practiceAssignments", "whiteboardFormations"];
 
 function unionMergeById(freshArr, localArr) {
   if (!Array.isArray(freshArr) || !Array.isArray(localArr)) return freshArr ?? localArr ?? [];
