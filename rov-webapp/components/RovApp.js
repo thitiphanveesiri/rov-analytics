@@ -6370,26 +6370,36 @@ function TacticalWhiteboard({ initialElements, initialFormations, onSetElements,
     if(ov) ov.getContext("2d").clearRect(0,0,canvasW,canvasH);
 
     if (tool==="pen" && currentPath.current.length>1) {
-      // วาด path ลง main canvas ทันที (ก่อน React state update cycle)
-      // เพื่อไม่ให้ stroke หายไประหว่างรอ re-render
+      // สำคัญ: ต้อง snapshot ค่าออกมาเป็นตัวแปรใหม่ตรงนี้ก่อน ห้ามอ่าน
+      // currentPath.current ทีหลังข้างใน setElements(prev=>...) เพราะ React
+      // จะเรียก updater function นั้นทีหลัง (ไม่ใช่ตอนนี้ทันที) — ถ้าอ่านจาก
+      // ref ตรงนั้น จะได้ค่าที่ currentPath.current ถูก reset เป็น [] ไปแล้ว
+      // (บรรทัดท้ายฟังก์ชันนี้) กลายเป็นเส้นที่บันทึกไว้มี points ว่างเปล่า
+      // วาดออกมาไม่เห็นอะไรเลย — นี่คือสาเหตุที่ปากกาดูเหมือน "เขียนแล้วหาย"
+      const pathPoints = [...currentPath.current];
       const mainCtx = canvasRef.current?.getContext("2d");
-      if (mainCtx && currentPath.current.length > 1) {
+      if (mainCtx && pathPoints.length > 1) {
         mainCtx.strokeStyle = color;
         mainCtx.lineWidth   = size;
         mainCtx.lineCap     = "round";
         mainCtx.lineJoin    = "round";
         mainCtx.beginPath();
-        currentPath.current.forEach((p, i) =>
+        pathPoints.forEach((p, i) =>
           i === 0 ? mainCtx.moveTo(p.x, p.y) : mainCtx.lineTo(p.x, p.y)
         );
         mainCtx.stroke();
       }
       // บันทึกเข้า state (redraw จาก state จะ sync ในภายหลัง)
       pushHistory();
-      setElements(prev=>[...prev,{type:"path",points:currentPath.current,color,size}]);
+      setElements(prev=>[...prev,{type:"path",points:pathPoints,color,size}]);
     } else if (tool==="arrow") {
+      // เก็บ snapshot ไว้เหมือนกัน แม้ตอนนี้ startPt.current จะไม่ได้ถูก
+      // reset ก่อนหน้า setElements ตรงนี้ (เลยไม่เคยเกิดบั๊กแบบเดียวกัน) —
+      // กันไว้ล่วงหน้าเผื่อมีคนแก้โค้ดส่วนอื่นทีหลังแล้วเผลอไปเพิ่ม reset
+      // เข้ามาระหว่างนี้
+      const x1 = startPt.current.x, y1 = startPt.current.y;
       pushHistory();
-      setElements(prev=>[...prev,{type:"arrow",x1:startPt.current.x,y1:startPt.current.y,x2:pos.x,y2:pos.y,color,size}]);
+      setElements(prev=>[...prev,{type:"arrow",x1,y1,x2:pos.x,y2:pos.y,color,size}]);
     }
     currentPath.current=[];
   }
