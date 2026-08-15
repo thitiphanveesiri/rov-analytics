@@ -5,7 +5,7 @@ const FIELDS = [
   "matches","rivals","roster","enemyRosters","scoutMatches",
   "playerPhotos","heroPhotos","customHeroes","roleOverrides","videos",
   "teamLogo","rivalLogos","schedules","patchInfo","heroTiers","practiceAssignments",
-  "whiteboardElements","whiteboardFormations",
+  "whiteboardElements","whiteboardFormations","whiteboardMapUrl",
 ];
 
 const FALLBACK = {
@@ -14,7 +14,7 @@ const FALLBACK = {
   customHeroes:[], roleOverrides:{}, videos:[],
   teamLogo:null, rivalLogos:{}, schedules:[],
   patchInfo:{version:"",notes:"",updatedAt:null}, heroTiers:{}, practiceAssignments:[],
-  whiteboardElements:[], whiteboardFormations:[], _loaded:true,
+  whiteboardElements:[], whiteboardFormations:[], whiteboardMapUrl:null, _loaded:true,
 };
 
 // Tracks the last-known `updatedAt` timestamp of TeamData as this client
@@ -72,11 +72,55 @@ export async function loadFromStorage() {
 // else's change to an existing item).
 const MERGEABLE_LIST_FIELDS = ["matches", "rivals", "scoutMatches", "videos", "schedules", "practiceAssignments", "whiteboardFormations"];
 
+// Fields that are plain key→value maps (hero name → photo URL, rival name
+// → roster, etc.) — same idea as MERGEABLE_LIST_FIELDS but merging by
+// object key instead of an `id` field. A key present only locally is a
+// new addition (safe to keep); a key present in both defers to the fresh
+// server value rather than risk clobbering someone else's edit to that
+// same entry.
+const MERGEABLE_MAP_FIELDS = ["enemyRosters", "playerPhotos", "heroPhotos", "roleOverrides", "rivalLogos", "heroTiers"];
+
+// customHeroes is an array of objects but keyed by `name`, not `id` (see
+// the ADD_CUSTOM_HERO reducer in RovApp.js) — needs its own merge that
+// matches on name instead of id.
+const MERGEABLE_BY_NAME_FIELDS = ["customHeroes"];
+
+// roster is a plain array of player-name strings (no id, no key — the
+// string itself IS the identity) — union merge is just a Set union.
+const MERGEABLE_STRING_LIST_FIELDS = ["roster"];
+
 function unionMergeById(freshArr, localArr) {
   if (!Array.isArray(freshArr) || !Array.isArray(localArr)) return freshArr ?? localArr ?? [];
   const freshIds = new Set(freshArr.map(item => item?.id));
   const localOnly = localArr.filter(item => item?.id !== undefined && !freshIds.has(item.id));
   return [...freshArr, ...localOnly];
+}
+
+function unionMergeByName(freshArr, localArr) {
+  if (!Array.isArray(freshArr) || !Array.isArray(localArr)) return freshArr ?? localArr ?? [];
+  const freshNames = new Set(freshArr.map(item => item?.name));
+  const localOnly = localArr.filter(item => item?.name !== undefined && !freshNames.has(item.name));
+  return [...freshArr, ...localOnly];
+}
+
+function unionMergeMap(freshMap, localMap) {
+  if (typeof freshMap !== "object" || freshMap === null) return localMap ?? {};
+  if (typeof localMap !== "object" || localMap === null) return freshMap ?? {};
+  const merged = { ...freshMap };
+  Object.keys(localMap).forEach(key => {
+    if (!(key in merged)) merged[key] = localMap[key]; // local-only key = new addition, keep it
+    // key exists in both → defer to fresh's value (already copied above),
+    // don't let the local (possibly stale) value overwrite it
+  });
+  return merged;
+}
+
+function unionMergeStringList(freshArr, localArr) {
+  if (!Array.isArray(freshArr)) return localArr ?? [];
+  if (!Array.isArray(localArr)) return freshArr;
+  const merged = [...freshArr];
+  localArr.forEach(name => { if (!merged.includes(name)) merged.push(name); });
+  return merged;
 }
 
 async function fetchFreshData() {
@@ -124,9 +168,26 @@ export async function saveToStorage(appState) {
       // collision, or a conflict in a field we can't safely auto-merge).
       const fresh = await fetchFreshData();
       if (fresh) {
-        const merged = { ...payload };
+        // เริ่มจาก "fresh" (ค่าล่าสุดจาก server) เป็นฐาน ไม่ใช่ payload เดิม
+        // — สำคัญมาก: field ที่ merge ไม่ได้ (teamLogo, patchInfo,
+        // whiteboardElements ฯลฯ) ต้อง "แพ้" ให้ค่าฝั่ง server เสมอ ไม่งั้น
+        // การ retry นี้จะเอาค่า local (ที่อาจจะเก่ากว่าคนอื่นไปแล้ว) ไปทับ
+        // สิ่งที่อีกคนเพิ่งบันทึกไว้ซ้ำ กลายเป็นบั๊กเดิมที่ optimistic lock
+        // มีไว้กันตั้งแต่แรกเป๊ะๆ — เอาแค่ field ที่รู้วิธี merge อย่าง
+        // ปลอดภัยแล้วเท่านั้นที่เอาของ local มาเสริมทับ fresh
+        const merged = {};
+        FIELDS.forEach(f => { merged[f] = fresh[f] ?? FALLBACK[f]; });
         MERGEABLE_LIST_FIELDS.forEach(f => {
           merged[f] = unionMergeById(fresh[f], payload[f]);
+        });
+        MERGEABLE_BY_NAME_FIELDS.forEach(f => {
+          merged[f] = unionMergeByName(fresh[f], payload[f]);
+        });
+        MERGEABLE_MAP_FIELDS.forEach(f => {
+          merged[f] = unionMergeMap(fresh[f], payload[f]);
+        });
+        MERGEABLE_STRING_LIST_FIELDS.forEach(f => {
+          merged[f] = unionMergeStringList(fresh[f], payload[f]);
         });
         merged.expectedUpdatedAt = fresh.updatedAt;
 

@@ -7,6 +7,7 @@
 // before upload).
 
 import { useState, useEffect, useRef } from "react";
+import Image from "next/image";
 import { upload } from "@vercel/blob/client";
 import { deleteBlobUrls } from "@/lib/blobCleanup";
 import { compressImage } from "@/lib/imageCompress";
@@ -21,8 +22,9 @@ export function PlayerAvatar({ name, photoUrl, size=44, team="our", style={} }) 
       overflow:"hidden",background:col+"22",border:`2px solid ${col}55`,
       flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",...style}}>
       {photoUrl && !err ? (
-        <img src={photoUrl} onError={()=>setErr(true)} alt={name}
-          style={{width:"100%",height:"100%",objectFit:"cover"}}/>
+        <Image src={photoUrl} alt={name} fill sizes={`${size}px`} loading="lazy"
+          onError={()=>setErr(true)}
+          style={{objectFit:"cover"}}/>
       ) : (
         <span style={{fontSize:size*0.38,fontWeight:800,color:col}}>
           {(name||"?").charAt(0).toUpperCase()}

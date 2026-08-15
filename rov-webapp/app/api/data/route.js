@@ -17,6 +17,38 @@ async function getTeamUser(session) {
   return user;
 }
 
+// Compares the "before" snapshot against the fields present in this save
+// and produces one short, human-readable summary line — not a deep diff
+// of exactly which values changed, just enough for the team to see "who
+// touched what" at a glance. Only looks at array-length deltas (added N /
+// removed N) since that's cheap, reliable, and covers the common cases
+// (someone added a match, added a video, edited the roster) without
+// needing to deep-compare every nested field.
+function buildActivitySummary(before, after) {
+  if (!before) return null; // first-ever save for this team — nothing to diff against
+  const parts = [];
+
+  const arrayDelta = (label, beforeArr, afterArr) => {
+    if (afterArr === undefined) return; // this field wasn't part of this save
+    const b = Array.isArray(beforeArr) ? beforeArr.length : 0;
+    const a = Array.isArray(afterArr) ? afterArr.length : 0;
+    if (a > b) parts.push(`เพิ่ม${label} ${a - b} รายการ`);
+    else if (a < b) parts.push(`ลบ${label} ${b - a} รายการ`);
+    else if (JSON.stringify(beforeArr) !== JSON.stringify(afterArr)) parts.push(`แก้ไข${label}`);
+  };
+
+  arrayDelta("แมตช์", before.matches, after.matches);
+  arrayDelta("ตารางนัด", before.schedules, after.schedules);
+  arrayDelta("scout log", before.scoutMatches, after.scoutMatches);
+  arrayDelta("วิดีโอ", before.videos, after.videos);
+
+  if (after.roster !== undefined && JSON.stringify(before.roster) !== JSON.stringify(after.roster)) {
+    parts.push("แก้ไข roster ทีม");
+  }
+
+  return parts.length ? parts.join(", ") : null;
+}
+
 export async function GET() {
   const session = await getServerSession(authOptions);
   if (!session) return NextResponse.json({ error: "ไม่ได้ login" }, { status: 401 });
@@ -107,7 +139,7 @@ export async function PUT(req) {
     matches, rivals, roster, enemyRosters, scoutMatches,
     playerPhotos, heroPhotos, customHeroes, roleOverrides, videos,
     teamLogo, rivalLogos, schedules, patchInfo, heroTiers, practiceAssignments,
-    whiteboardElements, whiteboardFormations,
+    whiteboardElements, whiteboardFormations, whiteboardMapUrl,
     expectedUpdatedAt, // เวลาที่ client เห็นข้อมูลล่าสุดตอนโหลด — ใช้เช็ค conflict
   } = validation.data;
 
@@ -115,7 +147,7 @@ export async function PUT(req) {
     matches, rivals, roster, enemyRosters, scoutMatches,
     playerPhotos, heroPhotos, customHeroes, roleOverrides, videos,
     teamLogo, rivalLogos, schedules, patchInfo, heroTiers, practiceAssignments,
-    whiteboardElements, whiteboardFormations,
+    whiteboardElements, whiteboardFormations, whiteboardMapUrl,
     updatedBy: session.user.email,
   };
 
@@ -143,6 +175,17 @@ export async function PUT(req) {
       if (writeData.scoutMatches !== undefined) writeData.scoutMatches = existing.scoutMatches;
     }
   }
+
+  // ── Snapshot "before" state for the activity log ──
+  // Fetched regardless of role/gate — separate from the coach-only field
+  // gate above, which only fetches patchInfo/heroTiers/scoutMatches for a
+  // different reason (reverting a member's incomplete write). This is a
+  // small extra query on every save, but it's what lets the team see a
+  // real "who changed what, when" log instead of just "who saved last".
+  const beforeState = await prisma.teamData.findUnique({
+    where: { teamId },
+    select: { matches: true, roster: true, schedules: true, scoutMatches: true, videos: true },
+  });
 
   try {
     let updated;
@@ -196,6 +239,21 @@ export async function PUT(req) {
       } catch (err) {
         console.error("Google Calendar sync error (non-fatal) for team", teamId, err);
       }
+    }
+
+    // Best-effort activity log for the team (visible to everyone, not
+    // just admins) — separate from matchSync/calendar sync above, but
+    // same non-fatal pattern: never let a logging failure make the
+    // user's actual save look like it failed.
+    try {
+      const summary = buildActivitySummary(beforeState, { matches, roster, schedules, scoutMatches, videos });
+      if (summary) {
+        await prisma.activityLog.create({
+          data: { teamId, userEmail: session.user.email, summary },
+        });
+      }
+    } catch (err) {
+      console.error("Activity log write error (non-fatal) for team", teamId, err);
     }
 
     return NextResponse.json({ ok: true, updatedAt: updated.updatedAt });

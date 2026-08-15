@@ -48,6 +48,21 @@ model Team {
   youtubeChannels YoutubeWatchChannel[]
   youtubeSyncedVideos YoutubeSyncedVideo[]
   youtubeKeywords String[] @default(["scrim", "ซ้อม"])
+  activityLogs ActivityLog[]
+}
+
+// ── Content activity log (matches/roster/schedules edited — visible to
+//    the whole team, not just admins) — separate from AdminAuditLog below,
+//    which only covers membership actions (role changes, approvals).
+model ActivityLog {
+  id        String   @id @default(cuid())
+  teamId    String
+  team      Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  userEmail String
+  summary   String   // human-readable, e.g. "เพิ่มแมตช์ 1 รายการ, แก้ไข roster ทีม"
+  createdAt DateTime @default(now())
+
+  @@index([teamId, createdAt])
 }
 
 // ── Admin action history (role changes, member removals) ──
@@ -92,7 +107,8 @@ model TeamData {
   heroTiers     Json     @default("{}") // { [heroName]: "S+"|"S"|"A"|"B"|"C" }
   practiceAssignments Json @default("[]") // [{ id, player, title, note, dueDate, done, createdAt, createdBy }]
   whiteboardElements   Json @default("[]") // Tactical Whiteboard current board (paths/arrows/hero markers/text)
-  whiteboardFormations Json @default("[]") // saved named formation snapshots — [{ id, name, elements, createdAt }]
+  whiteboardFormations Json @default("[]") // saved named formation snapshots — [{ id, name, elements, mapUrl, createdAt }]
+  whiteboardMapUrl     String? @db.Text // uploaded background map image — a Vercel Blob URL, not raw image data
   updatedAt     DateTime @updatedAt
   updatedBy     String?
 }

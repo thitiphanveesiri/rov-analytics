@@ -4,6 +4,11 @@ const nextConfig = {
     remotePatterns: [
       { protocol: "https", hostname: "static.wikia.nocookie.net" },
       { protocol: "https", hostname: "*.fandom.com" },
+      // Vercel Blob storage — team logos, player/hero photos, rival logos
+      // all get uploaded here (see app/api/upload/route.js). Wildcard
+      // because Blob assigns a random subdomain per store, not one fixed
+      // hostname.
+      { protocol: "https", hostname: "*.public.blob.vercel-storage.com" },
     ],
   },
   // NOTE: removed the old `experimental.serverActions.bodySizeLimit` +

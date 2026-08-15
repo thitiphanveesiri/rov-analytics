@@ -1,11 +1,14 @@
 "use client";
 // components/shared/HeroChip.js
 // ── Extracted from components/RovApp.js ──
-// Small shared hero-display components, moved verbatim (no logic changes).
-// Both were already grouped under a "SMALL SHARED COMPONENTS" comment in
-// the original file, so splitting them out together keeps that grouping.
+// Small shared hero-display components. Uses next/image (fill mode) for
+// automatic resizing/format conversion — needs the image's parent to be
+// position:relative (already true here) and needs remote image domains
+// allowlisted in next.config.js (Vercel Blob + the wikia/fandom hosts
+// bundled hero art sometimes references).
 
 import { useState } from "react";
+import Image from "next/image";
 import { HERO_DATA, ROLE_COLOR } from "@/lib/heroes";
 import { useHeroImage } from "@/lib/useHeroImage";
 import { C } from "@/lib/theme";
@@ -19,9 +22,9 @@ export function HeroCard({hero, size=72, banned=false, showName=true}) {
     <div style={{position:"relative",width:size,height:size,borderRadius:8,overflow:"hidden",
       background:col+"22",border:`1.5px solid ${col}44`,flexShrink:0}}>
       {imgUrl && !err
-        ? <img src={imgUrl}
-            onError={()=>setErr(true)} alt={hero.name}
-            style={{width:"100%",height:"100%",objectFit:"cover"}}/>
+        ? <Image src={imgUrl} alt={hero.name} fill sizes={`${size}px`} loading="lazy"
+            onError={()=>setErr(true)}
+            style={{objectFit:"cover"}}/>
         : <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center"}}>
             <span style={{fontSize:size*0.38,fontWeight:900,color:col}}>{hero.name.charAt(0)}</span>
           </div>
@@ -52,9 +55,9 @@ export function HeroChip({ name, size=24, accentCol, textCol, bold=true, fontSiz
       <div style={{position:"relative",width:size,height:size,borderRadius:6,overflow:"hidden",
         background:col+"22",border:`1.5px solid ${col}44`,flexShrink:0}}>
         {hero && imgUrl && !err ? (
-          <img src={imgUrl}
-            onError={()=>setErr(true)} alt={name}
-            style={{width:"100%",height:"100%",objectFit:"cover"}}/>
+          <Image src={imgUrl} alt={name} fill sizes={`${size}px`} loading="lazy"
+            onError={()=>setErr(true)}
+            style={{objectFit:"cover"}}/>
         ) : (
           <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center"}}>
             <span style={{fontSize:size*0.42,fontWeight:900,color:col}}>{(name||"?").charAt(0)}</span>
