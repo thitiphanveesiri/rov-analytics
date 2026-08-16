@@ -43,9 +43,11 @@ function getPreloadedImg(url, onReady) {
     const img = WB_IMG_ELEM_CACHE[url];
     return img.complete && img.naturalWidth > 0 ? img : null;
   }
-  // start loading
+  // start loading — no crossOrigin (see the note in redraw()'s map-image
+  // loading for why: Vercel Blob's CORS headers aren't reliable enough for
+  // this, and setting crossOrigin makes the browser refuse to display the
+  // image entirely rather than degrade gracefully)
   const img = new Image();
-  img.crossOrigin = "anonymous";
   img.onload = () => { WB_IMG_ELEM_CACHE[url] = img; if (onReady) onReady(); };
   img.onerror = () => { WB_IMG_ELEM_CACHE[url] = null; };
   img.src = url;
@@ -173,11 +175,14 @@ export default function TacticalWhiteboard({ initialElements, initialFormations,
     // map image
     if (mapImg) {
       const img = new Image();
-      // สำคัญ: mapImg ตอนนี้เป็น URL ข้าม origin (Vercel Blob) ไม่ใช่ data
-      // URL แบบเดิมแล้ว — ถ้าไม่ตั้ง crossOrigin ตรงนี้ canvas จะ "tainted"
-      // (เรียก toDataURL()/getImageData() ไม่ได้อีกเลย) พังฟีเจอร์ดาวน์โหลด
-      // รูป PNG ที่ใช้ toDataURL() อยู่
-      img.crossOrigin = "anonymous";
+      // ไม่ตั้ง crossOrigin ตรงนี้ตั้งใจ — เคยลองตั้ง "anonymous" เพื่อให้
+      // ปุ่มดาวน์โหลด PNG ใช้งานได้ (toDataURL ต้องการ CORS approval) แต่
+      // Vercel Blob ไม่ได้ส่ง CORS header ที่แน่นอน/สม่ำเสมอพอสำหรับเคสนี้
+      // เลย — ผลคือ browser ปฏิเสธไม่โหลดรูปเลยทั้งที่ URL ถูกต้อง (เห็นเป็น
+      // จอดำ) แก้โดยตัด crossOrigin ออก: รูปจะโหลด/แสดงผลได้ปกติเสมอ แลกกับ
+      // canvas จะ "tainted" (เรียก toDataURL()/ดาวน์โหลด PNG ไม่ได้เฉพาะตอน
+      // มีรูปแมพอยู่บนบอร์ด — ดู downloadCanvas() ที่ห่อ try/catch ไว้ให้
+      // fail แบบมีข้อความบอกเหตุผล ไม่ throw error ค้าง)
       img.onload = () => {
         ctx.drawImage(img, 0, 0, canvasW, canvasH);
         drawElements(ctx);
@@ -536,10 +541,18 @@ export default function TacticalWhiteboard({ initialElements, initialFormations,
     out.width=canvasW; out.height=canvasH;
     const ctx=out.getContext("2d");
     ctx.drawImage(canvasRef.current,0,0);
-    const a=document.createElement("a");
-    a.download=`formation_${Date.now()}.png`;
-    a.href=out.toDataURL("image/png");
-    a.click();
+    try {
+      const a=document.createElement("a");
+      a.download=`formation_${Date.now()}.png`;
+      a.href=out.toDataURL("image/png");
+      a.click();
+    } catch (err) {
+      // canvas "tainted" — เกิดเฉพาะตอนมีรูปแมพอยู่บนบอร์ด (Vercel Blob
+      // ไม่ส่ง CORS header ที่ใช้ export ได้ ดู redraw()'s comment) ดักไว้
+      // ให้ error message ชัดเจน แทนที่จะปล่อยให้ throw เงียบๆ
+      console.error("Canvas export failed (likely tainted by cross-origin map image):", err);
+      alert("ดาวน์โหลดรูปไม่ได้ เพราะมีรูปแผนที่ที่โหลดจากภายนอกอยู่บนบอร์ด (ข้อจำกัดของเบราว์เซอร์ ไม่ใช่บั๊ก) — ลองเอารูปแผนที่ออกก่อนแล้วดาวน์โหลดใหม่");
+    }
   }
 
   // เดิม: อ่านไฟล์เป็น base64 เก็บใน local state ตรงๆ — ไม่เคยเซฟลง
