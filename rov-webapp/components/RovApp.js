@@ -1758,10 +1758,27 @@ function summarizePlayers(games) {
   return result;
 }
 
-function summarizePeriod(matches, days) {
-  const now = Date.now();
-  const periodStart = now - days*24*60*60*1000;
-  const prevStart = now - days*2*24*60*60*1000;
+// ── date helpers for the week/month picker ──
+function startOfWeekMon(d) {
+  const date = new Date(d); date.setHours(0,0,0,0);
+  const day = date.getDay(); // 0=Sun..6=Sat
+  const diff = day === 0 ? -6 : 1 - day; // ให้จันทร์เป็นวันแรกของสัปดาห์
+  date.setDate(date.getDate() + diff);
+  return date;
+}
+function startOfMonth(d) { return new Date(d.getFullYear(), d.getMonth(), 1); }
+function addDays(d, n) { const r = new Date(d); r.setDate(r.getDate()+n); return r; }
+function addMonths(d, n) { const r = new Date(d.getFullYear(), d.getMonth()+n, 1); return r; }
+
+// รับช่วงเวลาแบบระบุตรงๆ (ไม่ใช่ "ย้อนหลัง N วันจากตอนนี้" แบบเดิม) — เพื่อ
+// ให้เลือกดูสัปดาห์/เดือนไหนก็ได้ ไม่ใช่แค่สัปดาห์/เดือนปัจจุบัน ช่วงก่อน
+// หน้าคำนวณจากความยาวช่วงเดียวกันที่อยู่ก่อนหน้า rangeStart ทันที
+function summarizePeriodByRange(matches, rangeStart, rangeEnd) {
+  const periodStart = rangeStart.getTime();
+  const periodEnd   = rangeEnd.getTime();
+  const spanMs       = periodEnd - periodStart;
+  const prevStart    = periodStart - spanMs;
+  const prevEnd      = periodStart;
 
   const flatten = (ms) => ms.flatMap(m =>
     Array.isArray(m.games) && m.games.length > 0
@@ -1772,8 +1789,8 @@ function summarizePeriod(matches, days) {
   const inRange = (g, start, end) => g._matchId >= start && g._matchId < end;
 
   const allGames = flatten(matches);
-  const current  = allGames.filter(g => inRange(g, periodStart, now));
-  const previous = allGames.filter(g => inRange(g, prevStart, periodStart));
+  const current  = allGames.filter(g => inRange(g, periodStart, periodEnd));
+  const previous = allGames.filter(g => inRange(g, prevStart, prevEnd));
 
   function stats(games) {
     const total = games.length;
@@ -1938,14 +1955,147 @@ function PlayerPeriodRow({ p }) {
   );
 }
 
-function PeriodSummaryCard({ title, dateRangeLabel, data }) {
+// ═══════════════════════════════════════════
+//  CALENDAR POPUPS — เลือกสัปดาห์/เดือนที่ต้องการดูสถิติ
+//  (ทำเป็น custom popup แทน <input type="week"/"month"> เพราะ input แบบ
+//  native พวกนี้ Safari/มือถือหลายรุ่นไม่รองรับ หรือรองรับไม่ตรงกัน)
+// ═══════════════════════════════════════════
+const THAI_MONTHS_SHORT = ["ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."];
+const THAI_DAYS_SHORT = ["จ","อ","พ","พฤ","ศ","ส","อา"];
+
+function WeekPickerPopup({ value, onSelect, onClose }) {
+  const [viewMonth, setViewMonth] = useState(() => startOfMonth(value));
+  const [hoverWeek, setHoverWeek] = useState(null);
+
+  const gridStart = startOfWeekMon(viewMonth);
+  const weeks = [];
+  for (let w=0; w<6; w++) {
+    const days = [];
+    for (let d=0; d<7; d++) days.push(addDays(gridStart, w*7+d));
+    weeks.push(days);
+    if (days[6] >= addMonths(viewMonth,1) && w>=4) break; // ไม่ต้องโชว์แถวเกินจำเป็น
+  }
+
+  const selectedWeekStart = startOfWeekMon(value).getTime();
+
+  return (
+    <div style={{position:"absolute",top:"100%",left:0,marginTop:6,zIndex:300,
+      background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:12,padding:14,
+      boxShadow:"0 8px 24px rgba(0,0,0,0.5)",width:280}}
+      onMouseLeave={()=>setHoverWeek(null)}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+        <button onClick={()=>setViewMonth(addMonths(viewMonth,-1))}
+          style={{background:"transparent",border:"none",color:C.textMuted,cursor:"pointer",fontSize:16,padding:4}}>‹</button>
+        <div style={{fontWeight:800,fontSize:13}}>{THAI_MONTHS_SHORT[viewMonth.getMonth()]} {viewMonth.getFullYear()+543}</div>
+        <button onClick={()=>setViewMonth(addMonths(viewMonth,1))}
+          style={{background:"transparent",border:"none",color:C.textMuted,cursor:"pointer",fontSize:16,padding:4}}>›</button>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2,marginBottom:4}}>
+        {THAI_DAYS_SHORT.map(d=>(
+          <div key={d} style={{textAlign:"center",fontSize:10,color:C.textMuted,padding:"2px 0"}}>{d}</div>
+        ))}
+      </div>
+      {weeks.map((days,wi) => {
+        const weekStartMs = days[0].getTime();
+        const isSelected = weekStartMs === selectedWeekStart;
+        const isHovered = hoverWeek === wi;
+        return (
+          <div key={wi}
+            onMouseEnter={()=>setHoverWeek(wi)}
+            onClick={()=>{ onSelect(days[0]); onClose(); }}
+            style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2,cursor:"pointer",
+              background: isSelected ? C.primary+"35" : isHovered ? C.primary+"18" : "transparent",
+              borderRadius:6,marginBottom:1}}>
+            {days.map((d,di)=>{
+              const inMonth = d.getMonth()===viewMonth.getMonth();
+              return (
+                <div key={di} style={{textAlign:"center",fontSize:11,padding:"5px 0",
+                  color: inMonth ? (isSelected?C.primaryLight:C.textMain) : C.textMuted+"80"}}>
+                  {d.getDate()}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function MonthPickerPopup({ value, onSelect, onClose }) {
+  const [viewYear, setViewYear] = useState(() => value.getFullYear());
+  const selectedKey = `${value.getFullYear()}-${value.getMonth()}`;
+
+  return (
+    <div style={{position:"absolute",top:"100%",left:0,marginTop:6,zIndex:300,
+      background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:12,padding:14,
+      boxShadow:"0 8px 24px rgba(0,0,0,0.5)",width:260}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+        <button onClick={()=>setViewYear(y=>y-1)}
+          style={{background:"transparent",border:"none",color:C.textMuted,cursor:"pointer",fontSize:16,padding:4}}>‹</button>
+        <div style={{fontWeight:800,fontSize:13}}>{viewYear+543}</div>
+        <button onClick={()=>setViewYear(y=>y+1)}
+          style={{background:"transparent",border:"none",color:C.textMuted,cursor:"pointer",fontSize:16,padding:4}}>›</button>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6}}>
+        {THAI_MONTHS_SHORT.map((m,mi)=>{
+          const key = `${viewYear}-${mi}`;
+          const isSelected = key === selectedKey;
+          return (
+            <button key={m} onClick={()=>{ onSelect(new Date(viewYear, mi, 1)); onClose(); }}
+              style={{padding:"8px 0",borderRadius:8,cursor:"pointer",fontSize:12,fontWeight:700,
+                border:`1px solid ${isSelected?C.primary:C.border}`,
+                background:isSelected?C.primary+"35":"transparent",
+                color:isSelected?C.primaryLight:C.textMain}}>
+              {m}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function DatePickerButton({ label, mode, value, onSelect }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onClickOutside(e) { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false); }
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, [open]);
+
+  return (
+    <div ref={wrapRef} style={{position:"relative"}}>
+      <button onClick={()=>setOpen(v=>!v)}
+        style={{background:"transparent",border:`1px solid ${C.border}`,color:C.textMuted,
+          borderRadius:7,padding:"3px 9px",cursor:"pointer",fontSize:11,fontWeight:700,
+          display:"flex",alignItems:"center",gap:4}}>
+        📅 {label}
+      </button>
+      {open && mode==="week" && (
+        <WeekPickerPopup value={value} onSelect={onSelect} onClose={()=>setOpen(false)}/>
+      )}
+      {open && mode==="month" && (
+        <MonthPickerPopup value={value} onSelect={onSelect} onClose={()=>setOpen(false)}/>
+      )}
+    </div>
+  );
+}
+
+function PeriodSummaryCard({ title, dateRangeLabel, data, mode, pickerValue, onPickDate }) {
   const [showPlayers, setShowPlayers] = useState(false);
   const wrColor = data.wr==null ? C.textMuted : data.wr>=50 ? C.win : C.lose;
   return (
     <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:14,padding:18,flex:1,minWidth:280}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:12}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
         <div style={{fontWeight:800,fontSize:14}}>{title}</div>
-        <div style={{fontSize:11,color:C.textMuted}}>{dateRangeLabel}</div>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <div style={{fontSize:11,color:C.textMuted}}>{dateRangeLabel}</div>
+          <DatePickerButton label="เลือกช่วง" mode={mode} value={pickerValue} onSelect={onPickDate}/>
+        </div>
       </div>
 
       {data.total===0 ? (
@@ -2081,20 +2231,29 @@ function RecentActivityWidget() {
 }
 
 function WeeklyMonthlySummary({ matches }) {
-  // memo บน `matches` เท่านั้น — RovAppInner (parent) re-render บ่อยมากจาก
-  // state อื่นๆ ที่ไม่เกี่ยวกับแมตช์เลย ถ้าไม่ memo ไว้ summarizePeriod
-  // (วน flatMap + aggregate ทุกเกม) จะรันซ้ำทุกครั้งโดยไม่จำเป็น
-  const weekly  = useMemo(() => summarizePeriod(matches||[], 7),  [matches]);
-  const monthly = useMemo(() => summarizePeriod(matches||[], 30), [matches]);
+  const [weekStart,  setWeekStart]  = useState(() => startOfWeekMon(new Date()));
+  const [monthStart, setMonthStart] = useState(() => startOfMonth(new Date()));
+
+  const weekEnd  = useMemo(() => addDays(weekStart, 7), [weekStart]);
+  const monthEnd = useMemo(() => addMonths(monthStart, 1), [monthStart]);
+
+  // memo บน `matches` + ช่วงที่เลือกเท่านั้น — RovAppInner (parent) re-render
+  // บ่อยมากจาก state อื่นๆ ที่ไม่เกี่ยวกับแมตช์เลย ถ้าไม่ memo ไว้
+  // summarizePeriodByRange (วน flatMap + aggregate ทุกเกม) จะรันซ้ำทุกครั้ง
+  // โดยไม่จำเป็น
+  const weekly  = useMemo(() => summarizePeriodByRange(matches||[], weekStart, weekEnd),   [matches, weekStart, weekEnd]);
+  const monthly = useMemo(() => summarizePeriodByRange(matches||[], monthStart, monthEnd), [matches, monthStart, monthEnd]);
+
   const fmt = (d) => d.toLocaleDateString("th-TH",{day:"numeric",month:"short"});
-  const now = new Date();
-  const weekAgo = new Date(now - 7*24*60*60*1000);
-  const monthAgo = new Date(now - 30*24*60*60*1000);
+  const weekLabel  = `${fmt(weekStart)} - ${fmt(addDays(weekEnd,-1))}`;
+  const monthLabel = `${THAI_MONTHS_SHORT[monthStart.getMonth()]} ${monthStart.getFullYear()+543}`;
 
   return (
     <div style={{display:"flex",gap:16,flexWrap:"wrap",marginBottom:20}}>
-      <PeriodSummaryCard title="📅 สัปดาห์นี้" dateRangeLabel={`${fmt(weekAgo)} - ${fmt(now)}`} data={weekly}/>
-      <PeriodSummaryCard title="🗓️ เดือนนี้" dateRangeLabel={`${fmt(monthAgo)} - ${fmt(now)}`} data={monthly}/>
+      <PeriodSummaryCard title="📅 รายสัปดาห์" dateRangeLabel={weekLabel} data={weekly}
+        mode="week" pickerValue={weekStart} onPickDate={setWeekStart}/>
+      <PeriodSummaryCard title="🗓️ รายเดือน" dateRangeLabel={monthLabel} data={monthly}
+        mode="month" pickerValue={monthStart} onPickDate={setMonthStart}/>
     </div>
   );
 }
