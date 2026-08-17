@@ -131,7 +131,10 @@ async function fetchFreshData() {
   return data;
 }
 
-export async function saveToStorage(appState) {
+// ── Internal: the actual save implementation (was previously the whole
+//    exported saveToStorage body) — now only ever called one-at-a-time
+//    via the queue below, never concurrently. ──
+async function _doSaveToStorage(appState) {
   // Pending-approval / no-team accounts can't save anything — server
   // blocks this with a 403 anyway (see app/api/data PUT), but skip the
   // network round-trip entirely rather than let it fail every 600ms via
@@ -242,4 +245,36 @@ export async function saveToStorage(appState) {
   // "✅ บันทึกแล้ว" even when the save had actually failed, silently
   // losing data on reload.
   return true;
+}
+
+// ── Serialized save queue ──
+// Root-cause fix for the "save succeeds, then a moment later says
+// conflict and the result disappears" bug: _doSaveToStorage does a
+// fetch-fresh + merge + retry dance on 409, and that whole dance reads
+// `lastKnownUpdatedAt` (a single shared variable) and does its own GET+PUT
+// round trip. If two saves (e.g. a regular autosave + another autosave
+// fired moments later because app state changed again before the first
+// one finished) run concurrently, their conflict-recovery attempts can
+// race each other: one recovery's "fresh" GET can happen before the
+// other recovery's PUT has landed, so it merges from stale data and then
+// writes that stale-but-now-"fresh" version back — silently discarding
+// whatever the other save had just added (e.g. a just-finished match).
+//
+// The fix is not to make the merge logic smarter — it's to guarantee
+// only one save (including its conflict-retry) is ever in flight at a
+// time, so `lastKnownUpdatedAt` and the fetch-fresh snapshot inside a
+// retry are never read/written by two calls simultaneously. Every call
+// now waits for the previous one to fully settle before it starts.
+let saveChain = Promise.resolve();
+
+export function saveToStorage(appState) {
+  const run = saveChain.then(
+    () => _doSaveToStorage(appState),
+    () => _doSaveToStorage(appState), // previous save failed — still run this one
+  );
+  // Swallow so a failed save doesn't permanently "poison" the chain for
+  // every future save (each call still gets its own real result/rejection
+  // via `run`, which is what's actually returned to the caller below).
+  saveChain = run.catch(() => {});
+  return run;
 }

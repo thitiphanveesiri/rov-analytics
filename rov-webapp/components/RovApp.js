@@ -7632,28 +7632,44 @@ function RovAppInner() {
   }, []);
 
   // ── save to Database (debounced) whenever app data changes ──
-  useEffect(() => {
-    if (!app._loaded) return; // don't save until initial load completes
+  // ── in-flight save guard ──
+  // Root-cause fix for "save says success, then a bit later says conflict
+  // and the result disappears": previously nothing stopped a SECOND real
+  // save from firing while a FIRST save (including its own conflict
+  // fetch-fresh+merge+retry) was still in flight — e.g. finishing a draft
+  // right after some other edit's autosave was still waiting on a slow
+  // network response. Two concurrent saves can each trigger their own
+  // conflict-recovery, and those recoveries can race each other (one's
+  // "fresh" snapshot can predate the other's just-written data), silently
+  // dropping whichever save lost the race — even though storage.js's
+  // saveToStorage() is now itself serialized (see the queue there), we
+  // still don't want to pile up several queued saves back-to-back here;
+  // if one is running, just remember that another save is needed and fire
+  // ONE more with the latest state once the current one settles.
+  const savingRef  = useRef(false);
+  const pendingRef = useRef(false);
+
+  const runAutosave = useCallback(async () => {
+    if (savingRef.current) { pendingRef.current = true; return; } // already saving — queue exactly one more round
+    savingRef.current = true;
     setSaveStatus("saving");
-    const timer = setTimeout(async () => {
-      try {
-        await saveToStorage(app);
+    try {
+      await saveToStorage(app);
+      setSaveStatus("saved");
+      setTimeout(()=>setSaveStatus("idle"), 2000);
+    } catch (err) {
+      if (err.wasMerged) {
+        // ── ชนกันแต่กู้คืนอัตโนมัติสำเร็จ ──
+        // saveToStorage() พยายามรวมข้อมูลที่เพิ่ม (แมตช์/วิดีโอ/ตารางซ้อม
+        // ฯลฯ) เข้ากับข้อมูลล่าสุดจาก server ให้แล้วและบันทึกสำเร็จ — ไม่ใช่
+        // error จริง แค่ต้องโหลด state ฝั่ง client ใหม่ให้ตรงกับที่ merge
+        // ไปแล้ว ไม่งั้นรอบ autosave ถัดไปจะส่งค่าเก่าทับซ้ำ (โดยเฉพาะ field
+        // ที่ merge ไม่ได้ เช่น roster/photos ที่อีกฝ่ายอาจแก้ไปพร้อมกัน)
         setSaveStatus("saved");
+        toast("มีการแก้ไขจากที่อื่นพร้อมกัน — รวมข้อมูลให้อัตโนมัติแล้ว ✅", "success", 5000);
+        loadFromStorage().then(loaded => dispatchApp({ type:"LOAD_FROM_STORAGE", payload: loaded }));
         setTimeout(()=>setSaveStatus("idle"), 2000);
-      } catch (err) {
-        if (err.wasMerged) {
-          // ── ชนกันแต่กู้คืนอัตโนมัติสำเร็จ ──
-          // saveToStorage() พยายามรวมข้อมูลที่เพิ่ม (แมตช์/วิดีโอ/ตารางซ้อม
-          // ฯลฯ) เข้ากับข้อมูลล่าสุดจาก server ให้แล้วและบันทึกสำเร็จ — ไม่ใช่
-          // error จริง แค่ต้องโหลด state ฝั่ง client ใหม่ให้ตรงกับที่ merge
-          // ไปแล้ว ไม่งั้นรอบ autosave ถัดไปจะส่งค่าเก่าทับซ้ำ (โดยเฉพาะ field
-          // ที่ merge ไม่ได้ เช่น roster/photos ที่อีกฝ่ายอาจแก้ไปพร้อมกัน)
-          setSaveStatus("saved");
-          toast("มีการแก้ไขจากที่อื่นพร้อมกัน — รวมข้อมูลให้อัตโนมัติแล้ว ✅", "success", 5000);
-          loadFromStorage().then(loaded => dispatchApp({ type:"LOAD_FROM_STORAGE", payload: loaded }));
-          setTimeout(()=>setSaveStatus("idle"), 2000);
-          return;
-        }
+      } else {
         console.error("Save failed:", err);
         setSaveStatus("error");
         if (err.isConflict) {
@@ -7665,9 +7681,20 @@ function RovAppInner() {
         }
         setTimeout(()=>setSaveStatus("idle"), 4000);
       }
-    }, 600); // debounce: wait 600ms after last change before saving
+    } finally {
+      savingRef.current = false;
+      if (pendingRef.current) {
+        pendingRef.current = false;
+        runAutosave(); // one more round was requested while we were busy — run it now with latest `app`
+      }
+    }
+  }, [app, toast]);
+
+  useEffect(() => {
+    if (!app._loaded) return; // don't save until initial load completes
+    const timer = setTimeout(runAutosave, 600); // debounce: wait 600ms after last change before saving
     return () => clearTimeout(timer);
-  }, [app]);
+  }, [app, runAutosave]);
 
   // ── sync HERO_DATA (module-level array) with custom heroes + role overrides ──
   // HERO_DATA is referenced directly (HERO_DATA.filter/.find) in many places
@@ -7716,7 +7743,14 @@ function RovAppInner() {
     dispatchApp({ type:"SAVE_MATCH", payload: draftResult });
     dispatchUI({ type:"SET_PAGE", payload:"matches" });
     dispatchDraft({ type:"RESET" });
-    toast("บันทึกแมตช์สำเร็จ! 🎉", "success");
+    // ── ไม่ toast "บันทึกสำเร็จ" ตรงนี้ ──
+    // จุดนี้แค่ dispatch เข้า local state (React) เท่านั้น ยังไม่ได้เขียนขึ้น
+    // server จริง — การ save จริงเกิดที่ autosave effect (runAutosave) แยก
+    // ต่างหาก 600ms ถัดจากนี้ ถ้า toast "สำเร็จ" ตรงนี้เลย จะดูขัดแย้งกันเอง
+    // ถ้า autosave รอบถัดไปเจอ conflict/error (เห็น toast ผลลัพธ์จริงสอง
+    // อันที่ขัดกัน) ให้ toast แค่ว่าบันทึกลงในแอปแล้ว กำลังซิงก์ขึ้นระบบ —
+    // ผลจริงจะโชว์ผ่าน saveStatus/toast ของ runAutosave เอง
+    toast("เพิ่มแมตช์แล้ว กำลังบันทึกขึ้นระบบ...", "info");
   }, [toast]);
 
   // ── Export Match Summary PDF (ใช้ browser print) ──

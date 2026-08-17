@@ -128,15 +128,38 @@ export default function TacticalWhiteboard({ initialElements, initialFormations,
   // พอออกจากหน้า/refresh เลยหายหมด — sync ทุกครั้งที่เปลี่ยนแทน (ข้าม
   // effect แรกตอน mount เพราะตอนนั้น elements ยังเป็นค่าที่โหลดมาเป๊ะๆ
   // ไม่มีอะไรเปลี่ยนจริง ไม่งั้นจะ trigger save เปล่าๆ ทุกครั้งที่แค่เปิดหน้านี้)
+  //
+  // มี debounce ด้วย (600ms) — สำคัญมาก: ตอนลากตัวละคร onMouseMove เรียก
+  // setElements ทุก event (หลายสิบครั้ง/วินาที) ถ้า sync ขึ้น global state
+  // ทันทีทุกครั้งแบบเดิม แต่ละครั้งจะไป trigger รอบ save แยกกัน ยิ่งมีคนอื่น
+  // ใช้งานพร้อมกันยิ่งชนกันบ่อย เห็น toast "มีการแก้ไขจากที่อื่น" รัวๆ
+  // ตามที่เจอ — debounce ให้รอจนกว่าจะหยุดนิ่งจริงๆ (ปล่อยเมาส์/วาดเสร็จ)
+  // ค่อย sync ครั้งเดียว ลดความถี่ลงมาก
   const mountedRef = useRef(false);
+  const syncTimerRef = useRef(null);
   useEffect(() => {
     if (!mountedRef.current) { mountedRef.current = true; return; }
-    onSetElements?.(elements);
+    if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
+    syncTimerRef.current = setTimeout(() => { onSetElements?.(elements); }, 600);
+    return () => clearTimeout(syncTimerRef.current);
   }, [elements]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // flush ทันทีตอน unmount (ออกจากหน้า Whiteboard) — กันเคสออกจากหน้าไป
+  // ระหว่างที่ debounce ข้างบนยังไม่ทันยิง จะได้ไม่เสียการเปลี่ยนแปลงล่าสุด
+  useEffect(() => {
+    return () => {
+      if (syncTimerRef.current) {
+        clearTimeout(syncTimerRef.current);
+        onSetElements?.(elements);
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // mapImg เดิมไม่เคยถูกบันทึกลง database เลย (เก็บ local state ล้วนๆ)
   // เลยหายทุกครั้งที่ออกจากหน้า/refresh — sync แยกจาก elements เพราะเป็น
-  // คนละ field กัน (mount-skip ของตัวเองด้วย เหตุผลเดียวกับด้านบน)
+  // คนละ field กัน (mount-skip ของตัวเองด้วย เหตุผลเดียวกับด้านบน) — ไม่
+  // ต้อง debounce เพราะเปลี่ยนแค่ตอนอัปโหลด/ลบแมพเท่านั้น ไม่ถี่แบบ elements
   const mapMountedRef = useRef(false);
   useEffect(() => {
     if (!mapMountedRef.current) { mapMountedRef.current = true; return; }
@@ -174,7 +197,6 @@ export default function TacticalWhiteboard({ initialElements, initialFormations,
 
     // map image
     if (mapImg) {
-      const img = new Image();
       // ไม่ตั้ง crossOrigin ตรงนี้ตั้งใจ — เคยลองตั้ง "anonymous" เพื่อให้
       // ปุ่มดาวน์โหลด PNG ใช้งานได้ (toDataURL ต้องการ CORS approval) แต่
       // Vercel Blob ไม่ได้ส่ง CORS header ที่แน่นอน/สม่ำเสมอพอสำหรับเคสนี้
@@ -183,11 +205,21 @@ export default function TacticalWhiteboard({ initialElements, initialFormations,
       // canvas จะ "tainted" (เรียก toDataURL()/ดาวน์โหลด PNG ไม่ได้เฉพาะตอน
       // มีรูปแมพอยู่บนบอร์ด — ดู downloadCanvas() ที่ห่อ try/catch ไว้ให้
       // fail แบบมีข้อความบอกเหตุผล ไม่ throw error ค้าง)
-      img.onload = () => {
-        ctx.drawImage(img, 0, 0, canvasW, canvasH);
+      //
+      // ใช้ getPreloadedImg (cache เดียวกับที่ใช้โหลดรูปฮีโร่) แทนการสร้าง
+      // new Image() แล้วโหลดใหม่ทุกครั้ง — redraw() รันถี่มากตอนลากตัวละคร
+      // (ทุก mousemove) เดิมโหลดแมพจาก network/decode ใหม่หมดทุกครั้งที่
+      // redraw รัน ทำให้กระพริบ/กระตุกหนักมาก ตอนนี้โหลดครั้งเดียวแล้ว cache
+      // ไว้ วาดจาก cache ทันทีแบบ sync ไม่มี async delay ให้กระพริบอีก
+      const preloadedMap = getPreloadedImg(mapImg, () => redraw());
+      if (preloadedMap) {
+        ctx.drawImage(preloadedMap, 0, 0, canvasW, canvasH);
         drawElements(ctx);
-      };
-      img.src = mapImg;
+      } else {
+        // ยังโหลดไม่เสร็จ (ครั้งแรกเท่านั้น) — วาด element ไปก่อน แล้ว
+        // getPreloadedImg จะเรียก redraw() เองอัตโนมัติตอนโหลดเสร็จ
+        drawElements(ctx);
+      }
     } else {
       // placeholder grid
       ctx.strokeStyle = "#1e1640";
