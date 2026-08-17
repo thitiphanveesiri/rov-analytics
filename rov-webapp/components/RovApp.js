@@ -12,18 +12,32 @@ import { C, iStyle } from "@/lib/theme";
 import { HeroCard, HeroChip } from "@/components/shared/HeroChip";
 import { PlayerAvatar, PhotoPicker, ImageCropModal } from "@/components/shared/PlayerMedia";
 import { ToastProvider, useToast } from "@/lib/toast";
-import { SchedulePage } from "@/components/shared/SchedulePage";
 import { LogoImg, LogoUploader } from "@/components/shared/TeamLogo";
-import { VideoLibrary } from "@/components/shared/VideoLibrary";
-import { PracticePage } from "@/components/shared/PracticePage";
-import { MyStatsPage } from "@/components/shared/MyStatsPage";
-// ── Code-split: these three are big and only visited on specific pages
-//    (Analytics, Whiteboard, Admin panel) — loading them lazily instead
-//    of bundling into every page load keeps the initial JS payload much
-//    smaller for the common case (someone just checking Overview/Roster).
-//    Each shows a small loading placeholder while its chunk downloads.
+import { NoTeamScreen } from "@/components/shared/NoTeamScreen";
+// ── Code-split: these are big and only visited on specific pages
+//    (Schedule, Video Library, Practice, My Stats, Analytics, Whiteboard,
+//    Admin panel) — loading them lazily instead of bundling into every
+//    page load keeps the initial JS payload much smaller for the common
+//    case (someone just checking Overview/Roster). Each shows a small
+//    loading placeholder while its chunk downloads.
 const LazyLoadingPlaceholder = () => (
   <div style={{padding:60,textAlign:"center",color:"#6b6b8a",fontSize:13}}>กำลังโหลด...</div>
+);
+const SchedulePage = dynamic(
+  () => import("@/components/shared/SchedulePage").then(m => m.SchedulePage),
+  { loading: LazyLoadingPlaceholder, ssr: false }
+);
+const VideoLibrary = dynamic(
+  () => import("@/components/shared/VideoLibrary").then(m => m.VideoLibrary),
+  { loading: LazyLoadingPlaceholder, ssr: false }
+);
+const PracticePage = dynamic(
+  () => import("@/components/shared/PracticePage").then(m => m.PracticePage),
+  { loading: LazyLoadingPlaceholder, ssr: false }
+);
+const MyStatsPage = dynamic(
+  () => import("@/components/shared/MyStatsPage").then(m => m.MyStatsPage),
+  { loading: LazyLoadingPlaceholder, ssr: false }
 );
 const AnalyticsPage = dynamic(
   () => import("@/components/shared/Analytics").then(m => m.AnalyticsPage),
@@ -6073,84 +6087,7 @@ function draftReducer(state, action) {
 
 // MyStatsPage moved to components/shared/MyStatsPage.js
 
-// ═══════════════════════════════════════════
-//  NO TEAM SCREEN — บัญชีถูกเอาออกจากทีม (หรือยังไม่เคยเข้าทีมสำเร็จ)
-//  บล็อกการเข้าแอปทั้งหมด จนกว่าจะกรอก invite code ใหม่สำเร็จ
-// ═══════════════════════════════════════════
-function NoTeamScreen() {
-  const [code, setCode] = useState("");
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  async function handleJoin(e) {
-    e.preventDefault();
-    if (!code.trim()) { setError("กรุณากรอก Invite Code"); return; }
-    setError("");
-    setLoading(true);
-    try {
-      const res = await fetch("/api/team/join", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ inviteCode: code.trim() }),
-      });
-      const data = await res.json();
-      if (!res.ok) { setError(data.error || "เกิดข้อผิดพลาด"); return; }
-      // สำเร็จแล้ว — reload เพื่อให้ loadFromStorage() โหลดสถานะใหม่
-      // (จะกลายเป็น "pending" รอ admin อนุมัติ ไม่ใช่ noTeam อีกต่อไป)
-      window.location.reload();
-    } catch {
-      setError("เชื่อมต่อไม่สำเร็จ ลองใหม่อีกครั้ง");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  return (
-    <div style={{minHeight:"100vh",background:C.bgBase,color:C.textMain,
-      display:"flex",alignItems:"center",justifyContent:"center",
-      fontFamily:"'Segoe UI',sans-serif",padding:20}}>
-      <div style={{background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:16,
-        padding:"32px 28px",width:380,maxWidth:"100%"}}>
-        <div style={{textAlign:"center",marginBottom:20}}>
-          <div style={{fontSize:36,marginBottom:8}}>🚪</div>
-          <div style={{fontWeight:900,fontSize:17,color:C.primaryLight}}>บัญชีนี้ไม่ได้อยู่ในทีมไหนแล้ว</div>
-          <div style={{fontSize:12,color:C.textMuted,marginTop:8,lineHeight:1.6}}>
-            อาจเป็นเพราะถูก Admin เอาออกจากทีม หรือยังไม่เคยเข้าร่วมทีมสำเร็จ —
-            กรอก Invite Code เพื่อเข้าร่วมทีม (จะต้องรอ Admin อนุมัติอีกครั้งก่อนเริ่มใช้งาน)
-          </div>
-        </div>
-
-        <form onSubmit={handleJoin}>
-          <input value={code} onChange={e=>{setCode(e.target.value);setError("");}}
-            placeholder="Invite Code"
-            style={{...iStyle,textAlign:"center",fontWeight:700,letterSpacing:1,marginBottom:12}}/>
-
-          {error && (
-            <div style={{background:C.lose+"15",border:`1px solid ${C.lose}40`,color:C.lose,
-              borderRadius:8,padding:"8px 12px",fontSize:12,marginBottom:14}}>
-              ⚠️ {error}
-            </div>
-          )}
-
-          <button type="submit" disabled={loading}
-            style={{width:"100%",background:loading?"#2a2550":`linear-gradient(135deg,${C.primary},${C.primaryLight})`,
-              color:"#fff",border:"none",borderRadius:9,padding:"11px 0",
-              cursor:loading?"not-allowed":"pointer",fontWeight:800,fontSize:14}}>
-            {loading ? "กำลังเข้าร่วม..." : "เข้าร่วมทีม"}
-          </button>
-        </form>
-
-        <div style={{textAlign:"center",marginTop:16}}>
-          <button onClick={()=>signOut({ callbackUrl: "/login" })}
-            style={{background:"transparent",border:"none",color:C.textMuted,
-              cursor:"pointer",fontSize:12,textDecoration:"underline"}}>
-            ออกจากระบบ
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
+// NoTeamScreen moved to components/shared/NoTeamScreen.js
 
 // ═══════════════════════════════════════════
 //  MAIN APP

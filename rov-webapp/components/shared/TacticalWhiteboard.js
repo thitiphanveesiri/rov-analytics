@@ -8,7 +8,6 @@
 
 import { useState, useEffect, useCallback, useRef, useContext } from "react";
 import { upload } from "@vercel/blob/client";
-import { deleteBlobUrls } from "@/lib/blobCleanup";
 import { compressImage } from "@/lib/imageCompress";
 import { C } from "@/lib/theme";
 import { HERO_DATA } from "@/lib/heroes";
@@ -39,9 +38,10 @@ const WB_IMG_ELEM_CACHE = {}; // { url: HTMLImageElement } — preloaded for can
 
 function getPreloadedImg(url, onReady) {
   if (!url) return null;
-  if (WB_IMG_ELEM_CACHE[url]) {
-    const img = WB_IMG_ELEM_CACHE[url];
-    return img.complete && img.naturalWidth > 0 ? img : null;
+  const cached = WB_IMG_ELEM_CACHE[url];
+  if (cached === "error") return "error"; // เคยลองโหลดแล้วพัง — ไม่ retry ซ้ำไปเรื่อยๆ
+  if (cached) {
+    return cached.complete && cached.naturalWidth > 0 ? cached : null;
   }
   // start loading — no crossOrigin (see the note in redraw()'s map-image
   // loading for why: Vercel Blob's CORS headers aren't reliable enough for
@@ -49,7 +49,13 @@ function getPreloadedImg(url, onReady) {
   // image entirely rather than degrade gracefully)
   const img = new Image();
   img.onload = () => { WB_IMG_ELEM_CACHE[url] = img; if (onReady) onReady(); };
-  img.onerror = () => { WB_IMG_ELEM_CACHE[url] = null; };
+  img.onerror = () => {
+    // เดิม set เป็น null ตรงนี้ ซึ่งเป็นค่า falsy — ทำให้ redraw() ครั้งถัดไป
+    // เข้าใจผิดว่า "ยังไม่เคยโหลด" แล้วพยายามโหลด URL เดิมที่พังซ้ำไปเรื่อยๆ
+    // ไม่รู้จบ (เห็นเป็นจอดำค้าง ไม่มีทาง fallback ไปโชว่ข้อความ error ได้)
+    WB_IMG_ELEM_CACHE[url] = "error";
+    if (onReady) onReady(); // สั่ง redraw อีกรอบ ให้เปลี่ยนจาก "กำลังโหลด" ไปโชว์สถานะ error แทน
+  };
   img.src = url;
   WB_IMG_ELEM_CACHE[url] = img; // store immediately (complete=false until loaded)
   return null;
@@ -212,7 +218,17 @@ export default function TacticalWhiteboard({ initialElements, initialFormations,
       // redraw รัน ทำให้กระพริบ/กระตุกหนักมาก ตอนนี้โหลดครั้งเดียวแล้ว cache
       // ไว้ วาดจาก cache ทันทีแบบ sync ไม่มี async delay ให้กระพริบอีก
       const preloadedMap = getPreloadedImg(mapImg, () => redraw());
-      if (preloadedMap) {
+      if (preloadedMap === "error") {
+        // โหลดรูปแมพไม่สำเร็จจริงๆ (ลิงก์เสีย/ไฟล์ถูกลบ) — โชว์ข้อความ
+        // ชัดเจนแทนจอดำเปล่าๆ แบบเดิม อย่างน้อยรู้ว่าเกิดอะไรขึ้น
+        ctx.fillStyle = "#2a2550";
+        ctx.font = "13px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText("⚠️ โหลดรูปแผนที่ไม่สำเร็จ (ลิงก์เสียหรือไฟล์ถูกลบ)", canvasW/2, canvasH/2 - 10);
+        ctx.font = "11px sans-serif";
+        ctx.fillText("ลองอัปโหลดรูปแผนที่ใหม่อีกครั้ง", canvasW/2, canvasH/2 + 12);
+        drawElements(ctx);
+      } else if (preloadedMap) {
         ctx.drawImage(preloadedMap, 0, 0, canvasW, canvasH);
         drawElements(ctx);
       } else {
@@ -608,9 +624,13 @@ export default function TacticalWhiteboard({ initialElements, initialFormations,
         access: "public",
         handleUploadUrl: "/api/upload",
       });
-      const previousMap = mapImg;
       setMapImg(uploaded.url);
-      if (previousMap && previousMap.startsWith("http")) deleteBlobUrls(previousMap); // เคลียร์รูปแผนที่เก่าทิ้ง
+      // เดิมมีการลบรูปแมพเก่าทิ้งตรงนี้ (deleteBlobUrls) — เอาออกแล้ว เพราะ
+      // Formation ที่เคยบันทึกไว้อาจจะยังอ้างอิง URL ของแมพเก่าอยู่ (แต่ละ
+      // Formation จำแมพของตัวเองแยกจากแมพ "ปัจจุบัน" บนบอร์ด) ถ้าลบไฟล์เดิม
+      // ทิ้งทุกครั้งที่อัปโหลดแมพใหม่ Formation เก่าที่เคยเซฟไว้จะโหลดแมพไม่
+      // ขึ้นอีกเลย (เจอเป็นจอดำ/ว่างเปล่าตามที่รายงานมา) — ยอมให้ไฟล์เก่า
+      // สะสมใน storage แทน ปลอดภัยกว่าการเผลอทำ Formation เก่าพังเงียบๆ
     } catch (err) {
       console.error("Map upload failed:", err);
       alert("อัปโหลดรูปแผนที่ไม่สำเร็จ ลองใหม่อีกครั้ง");
@@ -621,8 +641,10 @@ export default function TacticalWhiteboard({ initialElements, initialFormations,
 
   function removeMap() {
     if (!window.confirm("เอารูปแผนที่ออก?")) return;
-    if (mapImg && mapImg.startsWith("http")) deleteBlobUrls(mapImg);
     setMapImg(null);
+    // ไม่ลบไฟล์ทิ้ง (deleteBlobUrls) — เหตุผลเดียวกับใน handleMapUpload:
+    // Formation ที่เคยบันทึกไว้อาจจะยังอ้างอิงแมพรูปนี้อยู่ ต่อให้เอาออก
+    // จากบอร์ด "ปัจจุบัน" แล้วก็ตาม
   }
 
   const filteredHeroes = HERO_DATA.filter(h=>h.name.toLowerCase().includes(heroSearch.toLowerCase()));

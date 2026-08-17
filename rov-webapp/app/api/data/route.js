@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
@@ -189,6 +189,24 @@ export async function PUT(req) {
   // as-is, autosave would silently wipe every hidden scrim scout entry
   // out of the database — this isn't a permission nicety here, it's
   // preventing real data loss from an incomplete read being written back.
+  // ── Combined "current DB state" read ──
+  // Previously this was TWO separate findUnique calls: one (conditional,
+  // coach-gate only) for patchInfo/heroTiers/scoutMatches/schedules, and
+  // another (always) for matches/roster/schedules/scoutMatches/videos for
+  // the activity log. Every save already pays for at least the second
+  // query, so folding the first into it costs nothing extra on the common
+  // path and removes a full DB round trip (10-50ms+ depending on region/
+  // cold start) from every save that touches a gated field — noticeable
+  // on an endpoint that fires on every autosave.
+  const currentState = await prisma.teamData.findUnique({
+    where: { teamId },
+    select: {
+      matches: true, roster: true, schedules: true, scoutMatches: true, videos: true,
+      patchInfo: true, heroTiers: true,
+    },
+  });
+  const beforeState = currentState; // same read, used for the activity-log diff below
+
   const isCoachOrAdmin = user.role === "admin" || user.role === "coach";
   if (!isCoachOrAdmin && (
     writeData.patchInfo !== undefined ||
@@ -196,28 +214,13 @@ export async function PUT(req) {
     writeData.scoutMatches !== undefined ||
     writeData.schedules !== undefined
   )) {
-    const existing = await prisma.teamData.findUnique({
-      where: { teamId },
-      select: { patchInfo: true, heroTiers: true, scoutMatches: true, schedules: true },
-    });
-    if (existing) {
-      if (writeData.patchInfo !== undefined) writeData.patchInfo = existing.patchInfo;
-      if (writeData.heroTiers !== undefined) writeData.heroTiers = existing.heroTiers;
-      if (writeData.scoutMatches !== undefined) writeData.scoutMatches = existing.scoutMatches;
-      if (writeData.schedules !== undefined) writeData.schedules = existing.schedules;
+    if (currentState) {
+      if (writeData.patchInfo !== undefined) writeData.patchInfo = currentState.patchInfo;
+      if (writeData.heroTiers !== undefined) writeData.heroTiers = currentState.heroTiers;
+      if (writeData.scoutMatches !== undefined) writeData.scoutMatches = currentState.scoutMatches;
+      if (writeData.schedules !== undefined) writeData.schedules = currentState.schedules;
     }
   }
-
-  // ── Snapshot "before" state for the activity log ──
-  // Fetched regardless of role/gate — separate from the coach-only field
-  // gate above, which only fetches patchInfo/heroTiers/scoutMatches for a
-  // different reason (reverting a member's incomplete write). This is a
-  // small extra query on every save, but it's what lets the team see a
-  // real "who changed what, when" log instead of just "who saved last".
-  const beforeState = await prisma.teamData.findUnique({
-    where: { teamId },
-    select: { matches: true, roster: true, schedules: true, scoutMatches: true, videos: true },
-  });
 
   try {
     let updated;
@@ -251,42 +254,48 @@ export async function PUT(req) {
       });
     }
 
-    if (matches) {
-      try {
-        await syncMatchesToRelational(teamId, matches, customHeroes || [], roleOverrides || {});
-      } catch (err) {
-        console.error("matchSync error (non-fatal) for team", teamId, err);
+    // ── Deferred, best-effort post-save work ──
+    // matchSync / calendar sync / activity log were already designed to
+    // be non-fatal (failures here never fail the save) — but they were
+    // still `await`ed IN LINE before the response went out, so the user's
+    // save was only as fast as the SLOWEST of these three, every single
+    // time (autosave fires on every meaningful edit). Google Calendar
+    // sync in particular is a live network call to Google's API, which
+    // can easily take longer than the actual DB write itself.
+    //
+    // after() (Next.js) runs this code AFTER the response has already
+    // been sent to the client — the platform keeps the serverless
+    // function alive just long enough to finish it, but the person sees
+    // "saved" the moment the real write completes, not after Google's
+    // API answers too. Requires Next.js 14.1+ (stable as of Next 15).
+    after(async () => {
+      if (matches) {
+        try {
+          await syncMatchesToRelational(teamId, matches, customHeroes || [], roleOverrides || {});
+        } catch (err) {
+          console.error("matchSync error (non-fatal) for team", teamId, err);
+        }
       }
-    }
 
-    // Best-effort Google Calendar sync for every connected team member —
-    // same non-fatal pattern as matchSync above: a calendar sync failure
-    // (expired refresh token, Google API hiccup, whatever) must never make
-    // the user's actual save look like it failed. Only runs the network
-    // calls at all if `schedules` was part of this save; most saves touch
-    // other fields and shouldn't pay this cost.
-    if (schedules) {
-      try {
-        await syncScheduleForTeam(teamId, schedules);
-      } catch (err) {
-        console.error("Google Calendar sync error (non-fatal) for team", teamId, err);
+      if (schedules) {
+        try {
+          await syncScheduleForTeam(teamId, schedules);
+        } catch (err) {
+          console.error("Google Calendar sync error (non-fatal) for team", teamId, err);
+        }
       }
-    }
 
-    // Best-effort activity log for the team (visible to everyone, not
-    // just admins) — separate from matchSync/calendar sync above, but
-    // same non-fatal pattern: never let a logging failure make the
-    // user's actual save look like it failed.
-    try {
-      const summary = buildActivitySummary(beforeState, { matches, roster, schedules, scoutMatches, videos });
-      if (summary) {
-        await prisma.activityLog.create({
-          data: { teamId, userEmail: session.user.email, summary },
-        });
+      try {
+        const summary = buildActivitySummary(beforeState, { matches, roster, schedules, scoutMatches, videos });
+        if (summary) {
+          await prisma.activityLog.create({
+            data: { teamId, userEmail: session.user.email, summary },
+          });
+        }
+      } catch (err) {
+        console.error("Activity log write error (non-fatal) for team", teamId, err);
       }
-    } catch (err) {
-      console.error("Activity log write error (non-fatal) for team", teamId, err);
-    }
+    });
 
     return NextResponse.json({ ok: true, updatedAt: updated.updatedAt });
   } catch (err) {
