@@ -11,7 +11,7 @@
 // access, just props + callbacks, same pattern as SchedulePage.
 
 import { useState, useEffect, useRef } from "react";
-import { C } from "@/lib/theme";
+import { C, iStyle } from "@/lib/theme";
 
 // ═══════════════════════════════════════════
 //  VIDEO LIBRARY (merged module)
