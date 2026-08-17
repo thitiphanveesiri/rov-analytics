@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { validateTeamData } from "@/lib/validation";
 import { syncMatchesToRelational } from "@/lib/matchSync";
 import { syncScheduleForTeam } from "@/lib/googleCalendar";
+import { checkRateLimit } from "@/lib/rateLimit";
 
 // NOTE: no body-size-limit config for App Router Route Handlers.
 // Photos are stored as Vercel Blob URLs (not base64) so payload stays small.
@@ -118,6 +119,20 @@ export async function PUT(req) {
     );
   }
 
+  // ── Rate limit ──
+  // Unlike /login, this endpoint previously had no limit at all — normal
+  // autosave (600ms debounce, client-serialized) stays way under this, so
+  // it only kicks in for abusive/bugged traffic (e.g. a client stuck in a
+  // retry loop). Keyed per-team, not per-user, since a save conflict from
+  // ANY teammate can trigger the same team's data to be re-saved.
+  const rateOk = await checkRateLimit(`save-data:${teamId}`, 60, 60); // 60 ครั้ง / 60 วินาที ต่อทีม
+  if (!rateOk) {
+    return NextResponse.json(
+      { error: "บันทึกถี่เกินไป กรุณารอสักครู่แล้วลองใหม่" },
+      { status: 429 }
+    );
+  }
+
   let body;
   try {
     body = await req.json();
@@ -156,6 +171,17 @@ export async function PUT(req) {
   // calls — if a plain "member" tries to change either field, silently
   // keep the existing DB value instead of failing the whole save.
   //
+  // schedules is gated the same way — the Schedule page UI only lets a
+  // coach/admin add/edit schedule entries ("รอ Coach เพิ่มตารางแข่ง" is
+  // shown to plain members instead of the add form), so a member's client
+  // should never be sending a changed `schedules` array in the first
+  // place. Without this gate that intent was only enforced in the UI —
+  // anyone could still PUT straight to /api/data with a hand-edited
+  // schedules array (delete every match date, plant a fake one, etc.)
+  // and the server would accept it. Same non-fatal pattern as the other
+  // gated fields: revert to what's already in the DB rather than fail
+  // the whole save.
+  //
   // scoutMatches gets the same treatment for a different reason: members
   // never receive the scrim-category entries in the first place (see the
   // GET handler above), so their client-side scoutMatches array is
@@ -164,15 +190,21 @@ export async function PUT(req) {
   // out of the database — this isn't a permission nicety here, it's
   // preventing real data loss from an incomplete read being written back.
   const isCoachOrAdmin = user.role === "admin" || user.role === "coach";
-  if (!isCoachOrAdmin && (writeData.patchInfo !== undefined || writeData.heroTiers !== undefined || writeData.scoutMatches !== undefined)) {
+  if (!isCoachOrAdmin && (
+    writeData.patchInfo !== undefined ||
+    writeData.heroTiers !== undefined ||
+    writeData.scoutMatches !== undefined ||
+    writeData.schedules !== undefined
+  )) {
     const existing = await prisma.teamData.findUnique({
       where: { teamId },
-      select: { patchInfo: true, heroTiers: true, scoutMatches: true },
+      select: { patchInfo: true, heroTiers: true, scoutMatches: true, schedules: true },
     });
     if (existing) {
       if (writeData.patchInfo !== undefined) writeData.patchInfo = existing.patchInfo;
       if (writeData.heroTiers !== undefined) writeData.heroTiers = existing.heroTiers;
       if (writeData.scoutMatches !== undefined) writeData.scoutMatches = existing.scoutMatches;
+      if (writeData.schedules !== undefined) writeData.schedules = existing.schedules;
     }
   }
 

@@ -3,6 +3,21 @@ import bcrypt from "bcryptjs";
 import { prisma } from "./prisma";
 import { checkRateLimit } from "./rateLimit";
 
+// ── Timing side-channel fix ──
+// bcrypt.compare() is deliberately slow (~50-150ms depending on cost
+// factor). If we only run it when a matching user exists — `if (!user)
+// return null` before ever touching bcrypt — a request for an email that
+// doesn't exist returns almost instantly, while one for a real email
+// takes noticeably longer. That timing gap alone lets someone enumerate
+// which emails have accounts on this team without ever guessing a
+// password. Fix: always run a bcrypt.compare with the same cost factor,
+// even for a nonexistent user, against a fixed dummy hash — this hash's
+// plaintext is unknown/irrelevant, it exists purely so the "user not
+// found" path costs the same wall-clock time as "user found, wrong
+// password". Real user's own password is still compared against their
+// own real hash, so this changes nothing about actual auth correctness.
+const DUMMY_HASH = "$2b$10$bwTWPenqmDatdPyzFyweZuXKdPSNBRLw3ycmkhw/pvtrgR5e985ha"; // bcrypt hash of an arbitrary unused string — never a real password's hash
+
 // ดึง client IP จาก request ที่ NextAuth ส่งเข้า authorize() —
 // เขียนแบบ defensive เพราะรูปแบบของ req.headers ต่างกันได้ระหว่าง
 // runtime context (บางที เป็น plain object, บางที เป็น Headers instance
@@ -50,10 +65,11 @@ export const authOptions = {
           where: { email },
           include: { team: { select: { name: true, inviteCode: true } } }
         });
-        if (!user) return null;
 
-        const valid = await bcrypt.compare(credentials.password, user.password);
-        if (!valid) return null;
+        // ── always pay the bcrypt cost, whether or not `user` exists ──
+        // see DUMMY_HASH comment above for why this matters.
+        const valid = await bcrypt.compare(credentials.password, user?.password || DUMMY_HASH);
+        if (!user || !valid) return null;
 
         return {
           id:         user.id,
