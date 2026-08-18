@@ -14,6 +14,9 @@ import { PlayerAvatar, PhotoPicker, ImageCropModal } from "@/components/shared/P
 import { ToastProvider, useToast } from "@/lib/toast";
 import { LogoImg, LogoUploader } from "@/components/shared/TeamLogo";
 import { NoTeamScreen } from "@/components/shared/NoTeamScreen";
+import { PerformanceTrend, CoachNotesHub } from "@/components/shared/PerformanceTrend";
+import { HeroImageManager, HeroAvatar } from "@/components/shared/HeroImageManager";
+import { PatchSelector, RosterPlayerCard } from "@/components/shared/RosterPlayerCard";
 // ── Code-split: these are big and only visited on specific pages
 //    (Schedule, Video Library, Practice, My Stats, Analytics, Whiteboard,
 //    Admin panel) — loading them lazily instead of bundling into every
@@ -179,122 +182,7 @@ function filterMatchesByPatch(matches, patchVersions, selectedPatch) {
   return matches.filter(m => m.id >= from && m.id < to);
 }
 
-function PatchSelector({ versions, value, onChange }) {
-  if (!versions.length) return null; // ยังไม่มีใคร log patch ไว้เลย — ไม่ต้องโชว์ dropdown ให้งง
-  const sorted = [...versions].sort((a,b) => new Date(b.effectiveFrom) - new Date(a.effectiveFrom)); // ใหม่→เก่า
-  const current = sorted[0];
-  return (
-    <select value={value} onChange={e=>onChange(e.target.value)}
-      style={{background:C.bgPanel,border:`1px solid ${C.border}`,color:C.textMain,
-        borderRadius:8,padding:"6px 10px",fontSize:12,fontWeight:700,cursor:"pointer",flexShrink:0}}>
-      <option value="current">🕐 ปัจจุบัน (v{current.version})</option>
-      {sorted.slice(1).map(v=>(
-        <option key={v.id} value={v.version}>v{v.version}</option>
-      ))}
-      <option value="all">📚 ทั้งหมด (all-time)</option>
-    </select>
-  );
-}
-
-// ═══════════════════════════════════════════
-//  PLAYER PHOTO EDITING (RosterPlayerCard) — PlayerAvatar/PhotoPicker/
-//  ImageCropModal it depends on now live in components/shared/PlayerMedia
-// ═══════════════════════════════════════════
-
-// ── Roster player card — คลิกเพื่อดู Profile ปกติ, กด ✏️ เพื่อแก้ชื่อ/รูป ──
-function RosterPlayerCard({ player, photoUrl, pg, pw, pwr, top, onSelect, onRemove, onRename, onSetPhoto, team="our" }) {
-  const [editing, setEditing] = useState(false);
-  const [nameVal, setNameVal] = useState(player);
-  const [error,   setError]   = useState("");
-
-  const isEnemy      = team === "enemy";
-  const accentCol    = isEnemy ? C.lose : C.primaryLight;
-  const borderHover  = isEnemy ? C.lose : C.primary;
-  // pwr สำหรับ enemy นับเฉพาะตอน "ทีมเราแพ้" (ดู pw ที่ส่งเข้ามา) — pwr สูง
-  // แปลว่าคู่แข่งเก่ง เลยกลับสีให้ตรงอารมณ์ (สูง=แดง/อันตราย, ต่ำ=เขียว/ok)
-  const winStatCol   = isEnemy ? (pwr>=50?C.lose:C.win) : (pwr>=50?C.win:C.lose);
-
-  function startEdit(e) {
-    e.stopPropagation();
-    setNameVal(player);
-    setError("");
-    setEditing(true);
-  }
-
-  function save(e) {
-    e.stopPropagation();
-    const trimmed = nameVal.trim();
-    if (!trimmed) { setError("กรุณากรอกชื่อ"); return; }
-    if (trimmed !== player) onRename(trimmed); // เปลี่ยนแค่ตอนชื่อจริงๆ เปลี่ยน — เลี่ยง dispatch เปล่าๆ
-    setEditing(false);
-  }
-
-  if (editing) {
-    return (
-      <div onClick={e=>e.stopPropagation()}
-        style={{background:C.bgPanel,border:`1px solid ${borderHover}`,borderRadius:12,
-          padding:"14px 20px",display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
-        <PhotoPicker value={photoUrl} onChange={onSetPhoto} size={48} team={team}/>
-        <div style={{flex:1,minWidth:160}}>
-          <input autoFocus value={nameVal} onChange={e=>{setNameVal(e.target.value);setError("");}}
-            onKeyDown={e=>{ if(e.key==="Enter") save(e); if(e.key==="Escape") setEditing(false); }}
-            style={{...iStyle,width:"100%"}}/>
-          {error && <div style={{fontSize:11,color:C.lose,marginTop:4}}>{error}</div>}
-        </div>
-        <button onClick={save}
-          style={{background:C.win,color:"#fff",border:"none",borderRadius:8,
-            padding:"8px 16px",fontWeight:700,cursor:"pointer",fontSize:12}}>✓ บันทึก</button>
-        <button onClick={e=>{e.stopPropagation();setEditing(false);}}
-          style={{background:"transparent",border:`1px solid ${C.border}`,color:C.textMuted,
-            borderRadius:8,padding:"8px 14px",fontWeight:700,cursor:"pointer",fontSize:12}}>ยกเลิก</button>
-      </div>
-    );
-  }
-
-  return (
-    <div onClick={onSelect}
-      style={{background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:12,
-        padding:"14px 20px",display:"flex",alignItems:"center",
-        justifyContent:"space-between",cursor:"pointer"}}
-      onMouseEnter={e=>e.currentTarget.style.borderColor=borderHover}
-      onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
-      <div style={{display:"flex",alignItems:"center",gap:14}}>
-        <PlayerAvatar name={player} photoUrl={photoUrl} size={48} team={team}/>
-        <div>
-          <div style={{fontWeight:800,fontSize:16}}>{player}</div>
-          {top ? (
-            <div style={{display:"flex",alignItems:"center",gap:5,marginTop:4}}>
-              <span style={{fontSize:11,color:C.textMuted}}>Main:</span>
-              <HeroChip name={top[0]} size={18} fontSize={11} accentCol={isEnemy?C.lose:undefined}/>
-              <span style={{fontSize:10,color:C.textMuted}}>({top[1]} เกม)</span>
-            </div>
-          ) : (
-            <div style={{fontSize:12,color:C.textMuted,marginTop:3}}>ยังไม่มีข้อมูล</div>
-          )}
-        </div>
-      </div>
-      <div style={{display:"flex",gap:14,alignItems:"center"}}>
-        <div style={{textAlign:"center"}}>
-          <div style={{fontSize:18,fontWeight:800}}>{pg}</div>
-          <div style={{fontSize:10,color:C.textMuted}}>GAMES</div>
-        </div>
-        <div style={{textAlign:"center",minWidth:52}}>
-          <div style={{fontSize:18,fontWeight:800,color:winStatCol}}>
-            {pg?`${pwr}%`:"-"}</div>
-          <div style={{fontSize:10,color:C.textMuted}}>{pw}W-{pg-pw}L</div>
-        </div>
-        <span style={{fontSize:12,color:accentCol}}>ดู Profile →</span>
-        <button onClick={startEdit} title="แก้ไขชื่อ/รูป"
-          style={{background:accentCol+"20",color:accentCol,border:"none",
-            width:34,height:34,borderRadius:8,cursor:"pointer",fontSize:14}}>✏️</button>
-        <button
-          onClick={e=>{e.stopPropagation();onRemove();}}
-          style={{background:C.lose+"20",color:C.lose,border:"none",
-            width:34,height:34,borderRadius:8,cursor:"pointer",fontSize:14}}>🗑️</button>
-      </div>
-    </div>
-  );
-}
+// PatchSelector, RosterPlayerCard moved to components/shared/RosterPlayerCard.js
 
 // ═══════════════════════════════════════════
 //  UNIFIED STATS EDITOR — ทีมเรา + คู่แข่ง ในตารางเดียว
@@ -505,12 +393,12 @@ function ObjectiveEditor({ objectives, onChange }) {
 //  EDIT GAME MODAL — แก้ไข hero draft / สกอร์ / เวลา / ชื่อผู้เล่น / ผูกวิดีโอ
 //  ย้อนหลังจากหน้า Match Log (ต่างจาก UPDATE_STATS ที่แก้ได้แค่ K/D/A)
 // ═══════════════════════════════════════════
-function EditGameModal({ game, roster, videos=[], onSave, onClose }) {
+function EditGameModal({ game, roster, enemyRoster=[], videos=[], onSave, onClose }) {
   const [ourPicks, setOurPicks] = useState(() =>
     (game.ourPicks && game.ourPicks.length ? game.ourPicks : ROLES_PICK.map(r=>({role:r,hero:null,player:""})))
       .map(p=>({...p})));
   const [enemyPicks, setEnemyPicks] = useState(() =>
-    (game.enemyPicks && game.enemyPicks.length ? game.enemyPicks : ROLES_PICK.map(r=>({role:r,hero:null})))
+    (game.enemyPicks && game.enemyPicks.length ? game.enemyPicks : ROLES_PICK.map(r=>({role:r,hero:null,player:""})))
       .map(p=>({...p})));
   const [result,     setResult]     = useState(game.result || "WIN");
   const [ourScore,   setOurScore]   = useState(game.ourScore ?? "");
@@ -520,9 +408,10 @@ function EditGameModal({ game, roster, videos=[], onSave, onClose }) {
   const [pauseDuration, setPauseDuration] = useState(game.pauseDuration || "");
   const [videoId,    setVideoId]    = useState(game.videoId || "");
 
-  const setOurHero   = (i,name) => setOurPicks(prev => prev.map((p,idx)=> idx===i ? {...p, hero: name?{name}:null} : p));
-  const setOurPlayer = (i,name) => setOurPicks(prev => prev.map((p,idx)=> idx===i ? {...p, player:name} : p));
-  const setEnemyHero = (i,name) => setEnemyPicks(prev => prev.map((p,idx)=> idx===i ? {...p, hero: name?{name}:null} : p));
+  const setOurHero     = (i,name) => setOurPicks(prev => prev.map((p,idx)=> idx===i ? {...p, hero: name?{name}:null} : p));
+  const setOurPlayer   = (i,name) => setOurPicks(prev => prev.map((p,idx)=> idx===i ? {...p, player:name} : p));
+  const setEnemyHero   = (i,name) => setEnemyPicks(prev => prev.map((p,idx)=> idx===i ? {...p, hero: name?{name}:null} : p));
+  const setEnemyPlayer = (i,name) => setEnemyPicks(prev => prev.map((p,idx)=> idx===i ? {...p, player:name} : p));
 
   function save() {
     onSave({
@@ -566,7 +455,7 @@ function EditGameModal({ game, roster, videos=[], onSave, onClose }) {
             ))}
           </div>
           <div>
-            <div style={{fontWeight:700,fontSize:12,color:C.lose,marginBottom:8}}>⚔️ คู่แข่ง (Hero)</div>
+            <div style={{fontWeight:700,fontSize:12,color:C.lose,marginBottom:8}}>⚔️ คู่แข่ง (Hero + ผู้เล่น)</div>
             {enemyPicks.map((p,i)=>(
               <div key={i} style={{display:"flex",gap:6,marginBottom:6,alignItems:"center"}}>
                 <span style={{fontSize:10,color:C.textMuted,width:48,flexShrink:0}}>{p.role}</span>
@@ -574,6 +463,17 @@ function EditGameModal({ game, roster, videos=[], onSave, onClose }) {
                   <option value="">— hero —</option>
                   {HERO_DATA.map(h=><option key={h.name} value={h.name}>{h.name}</option>)}
                 </select>
+                {enemyRoster.length > 0 ? (
+                  <select value={p.player||""} onChange={e=>setEnemyPlayer(i,e.target.value)} style={{...selectStyle,width:96}}>
+                    <option value="">— ผู้เล่น —</option>
+                    {enemyRoster.map(r=><option key={r} value={r}>{r}</option>)}
+                  </select>
+                ) : (
+                  // ยังไม่เคยบันทึกชื่อผู้เล่นทีมนี้ไว้เลย (enemyRosters ว่าง) —
+                  // ใช้ช่องพิมพ์อิสระแทน dropdown เพื่อไม่ให้ block การกรอกครั้งแรก
+                  <input type="text" value={p.player||""} onChange={e=>setEnemyPlayer(i,e.target.value)}
+                    placeholder="ชื่อผู้เล่น" style={{...selectStyle,width:96}}/>
+                )}
               </div>
             ))}
           </div>
@@ -647,7 +547,7 @@ function EditGameModal({ game, roster, videos=[], onSave, onClose }) {
   );
 }
 
-function SingleGameDetail({ g, gameNo, onUpdateStats, onUpdateObjectives, onUpdateGameFull, onJumpToVideo, playerPhotos={}, rivalName, roster=[], videos=[] }) {
+function SingleGameDetail({ g, gameNo, onUpdateStats, onUpdateObjectives, onUpdateGameFull, onJumpToVideo, playerPhotos={}, rivalName, roster=[], enemyRoster=[], videos=[] }) {
   const [showStats, setShowStats] = useState(false);
   const [gameStats, setGameStats] = useState(g.gameStats || { our:{}, enemy:{} });
   const [saved, setSaved] = useState(false);
@@ -711,6 +611,7 @@ function SingleGameDetail({ g, gameNo, onUpdateStats, onUpdateObjectives, onUpda
         <EditGameModal
           game={g}
           roster={roster}
+          enemyRoster={enemyRoster}
           videos={videos}
           onSave={updates => onUpdateGameFull && onUpdateGameFull(gameNo - 1, updates)}
           onClose={()=>setEditingGame(false)}
@@ -1160,7 +1061,7 @@ function MatchDraftSummaryModal({ games, toBlueRed, teamAName, teamBName, onClos
   );
 }
 
-function MatchCardWithStats({ m, onUpdateStats, onUpdateObjectives, onUpdateGameFull, onJumpToVideo, playerPhotos={}, onDelete, onEditMeta, roster=[], videos=[], ourTeamName, ourTeamLogo, rivalLogo }) {
+function MatchCardWithStats({ m, onUpdateStats, onUpdateObjectives, onUpdateGameFull, onJumpToVideo, playerPhotos={}, onDelete, onEditMeta, roster=[], enemyRoster=[], videos=[], ourTeamName, ourTeamLogo, rivalLogo }) {
   const [open, setOpen] = useState(false);
   const isBO  = Array.isArray(m.games) && m.games.length > 0;
   const wins  = isBO ? m.games.filter(g=>g.result==="WIN").length : (m.result==="WIN"?1:0);
@@ -1373,7 +1274,7 @@ function MatchCardWithStats({ m, onUpdateStats, onUpdateObjectives, onUpdateGame
                   onUpdateGameFull={(gameIdx, updates) => onUpdateGameFull && onUpdateGameFull(m.id, gameIdx, updates)}
                   onJumpToVideo={onJumpToVideo}
                   playerPhotos={playerPhotos} rivalName={m.rivalName}
-                  roster={roster} videos={videos}
+                  roster={roster} enemyRoster={enemyRoster} videos={videos}
                 />
               ))}
             </div>
@@ -1479,6 +1380,7 @@ function MatchCardWithStats({ m, onUpdateStats, onUpdateObjectives, onUpdateGame
                 <EditGameModal
                   game={m}
                   roster={roster}
+                  enemyRoster={enemyRoster}
                   videos={videos}
                   onSave={updates => onUpdateGameFull && onUpdateGameFull(m.id, null, updates)}
                   onClose={()=>setEditingGame(false)}
@@ -4801,715 +4703,9 @@ function ScoutLogPage({ rivalName, scoutMatches, rivals, enemyRosters, isCoach, 
 
 // SchedulePage, LogoImg, LogoUploader moved to components/shared/SchedulePage.js and components/shared/TeamLogo.js
 
-// ═══════════════════════════════════════════
-//  PERFORMANCE TREND
-// ═══════════════════════════════════════════
-function PerformanceTrend({ allGames }) {
-  const [period, setPeriod] = useState("week"); // week | month
-
-  if (allGames.length === 0) return null;
-
-  // group games by period
-  function getPeriodKey(dateStr) {
-    // dateStr = Thai locale like "15 ม.ค. 2568"
-    // fallback: use index bucketing if parse fails
-    return dateStr || "unknown";
-  }
-
-  // sort games by id (proxy for date order)
-  const sorted = [...allGames].sort((a,b)=>(a._matchId||0)-(b._matchId||0));
-
-  // bucket into weeks or months (use sequential index since dates are Thai strings)
-  const buckets = [];
-  const size = period==="week" ? 5 : 10; // games per bucket
-  for (let i=0; i<sorted.length; i+=size) {
-    const chunk = sorted.slice(i, i+size);
-    const wins  = chunk.filter(g=>g.result==="WIN").length;
-    const wr    = Math.round(wins/chunk.length*100);
-    let totK=0,totD=0,totA=0,cnt=0;
-    chunk.forEach(g=>{
-      const picks=g.ourPicks||[];
-      picks.forEach((slot,idx)=>{
-        const gs=g.gameStats?.our?.[idx];
-        if(gs?.kills!==undefined){
-          totK+=Number(gs.kills||0);totD+=Number(gs.deaths||0);totA+=Number(gs.assists||0);cnt++;
-        }
-      });
-    });
-    const kda = cnt ? ((totK+totA)/Math.max(totD,1)).toFixed(2) : null;
-    buckets.push({ label:`G${i+1}–${Math.min(i+size,sorted.length)}`, wins, total:chunk.length, wr, kda });
-  }
-
-  const maxWR = 100;
-  const barH  = 120;
-
-  return (
-    <div style={{background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:14,padding:20,marginTop:20}}>
-      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,flexWrap:"wrap"}}>
-        <h3 style={{margin:0,fontSize:15,fontWeight:800,color:C.primaryLight}}>
-          📈 Performance Trend
-        </h3>
-        <div style={{display:"flex",gap:3,background:C.bgBase,borderRadius:8,padding:3,border:`1px solid ${C.border}`}}>
-          {[{id:"week",label:"ทุก 5 เกม"},{id:"month",label:"ทุก 10 เกม"}].map(p=>(
-            <button key={p.id} onClick={()=>setPeriod(p.id)} style={{
-              background:period===p.id?C.primary:"transparent",
-              border:"none",color:period===p.id?"#fff":C.textMuted,
-              borderRadius:6,padding:"4px 12px",cursor:"pointer",fontWeight:700,fontSize:11}}>
-              {p.label}
-            </button>
-          ))}
-        </div>
-        <span style={{fontSize:11,color:C.textMuted,marginLeft:"auto"}}>
-          {allGames.length} เกม รวม
-        </span>
-      </div>
-
-      {buckets.length < 2 ? (
-        <div style={{textAlign:"center",padding:"20px 0",color:C.textMuted,fontSize:12}}>
-          ต้องการข้อมูลอย่างน้อย {size*2} เกมเพื่อแสดง trend
-        </div>
-      ) : (
-        <div>
-          {/* WR bars */}
-          <div style={{fontSize:10,color:C.textMuted,fontWeight:700,marginBottom:8}}>Win Rate %</div>
-          <div style={{display:"flex",gap:4,alignItems:"flex-end",height:barH+30,marginBottom:20}}>
-            {buckets.map((b,i)=>{
-              const h = Math.round((b.wr/maxWR)*barH);
-              const col = b.wr>=60?C.win:b.wr>=40?"#fdcb6e":C.lose;
-              const prev = buckets[i-1];
-              const trend = prev ? (b.wr>prev.wr?"▲":b.wr<prev.wr?"▼":"—") : "";
-              const trendCol = prev ? (b.wr>prev.wr?C.win:b.wr<prev.wr?C.lose:C.textMuted) : C.textMuted;
-              return (
-                <div key={i} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
-                  <span style={{fontSize:9,color:trendCol,fontWeight:700}}>{trend}</span>
-                  <div style={{width:"100%",display:"flex",flexDirection:"column",justifyContent:"flex-end",height:barH}}>
-                    <div title={`${b.wr}% (${b.wins}W/${b.total}G)`}
-                      style={{width:"100%",height:Math.max(h,4),
-                        background:`linear-gradient(180deg,${col},${col}99)`,
-                        borderRadius:"4px 4px 0 0",position:"relative",cursor:"default"}}>
-                      <div style={{position:"absolute",top:-18,width:"100%",textAlign:"center",
-                        fontSize:9,color:col,fontWeight:800}}>{b.wr}%</div>
-                    </div>
-                  </div>
-                  <div style={{fontSize:8,color:C.textMuted,textAlign:"center",lineHeight:1.3}}>
-                    {b.label}
-                  </div>
-                  <div style={{fontSize:8,color:col,fontWeight:700}}>{b.wins}/{b.total}</div>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* KDA trend line (only if stats exist) */}
-          {buckets.some(b=>b.kda) && (
-            <>
-              <div style={{height:1,background:C.border,marginBottom:16}}/>
-              <div style={{fontSize:10,color:C.textMuted,fontWeight:700,marginBottom:8}}>KDA เฉลี่ย (จากเกมที่กรอก Stats)</div>
-              <div style={{display:"flex",gap:4,alignItems:"flex-end",height:60}}>
-                {buckets.map((b,i)=>{
-                  const maxKDA = Math.max(...buckets.filter(x=>x.kda).map(x=>Number(x.kda)),1);
-                  const h = b.kda ? Math.round((Number(b.kda)/maxKDA)*50)+4 : 4;
-                  return (
-                    <div key={i} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
-                      {b.kda && <div style={{fontSize:8,color:"#fdcb6e",fontWeight:700}}>{b.kda}</div>}
-                      <div style={{width:"100%",display:"flex",flexDirection:"column",justifyContent:"flex-end",height:54}}>
-                        <div style={{width:"100%",height:h,background:b.kda?"#fdcb6e33":"transparent",
-                          borderRadius:"3px 3px 0 0",border:b.kda?`1px solid #fdcb6e44`:"none"}}/>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </>
-          )}
-
-          {/* summary */}
-          {buckets.length >= 2 && (()=>{
-            const first = buckets[0].wr;
-            const last  = buckets[buckets.length-1].wr;
-            const diff  = last - first;
-            return (
-              <div style={{marginTop:14,padding:"8px 14px",borderRadius:8,
-                background:diff>0?C.win+"10":diff<0?C.lose+"10":C.bgCard,
-                border:`1px solid ${diff>0?C.win+"30":diff<0?C.lose+"30":C.border}`,
-                fontSize:12,color:diff>0?C.win:diff<0?C.lose:C.textMuted}}>
-                {diff>0?`🚀 WR เพิ่มขึ้น +${diff}% ตั้งแต่ช่วงแรก`
-                 :diff<0?`📉 WR ลดลง ${diff}% ตั้งแต่ช่วงแรก`
-                 :"➡️ WR ทรงตัว"}
-              </div>
-            );
-          })()}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════
-//  COACH NOTES HUB
-// ═══════════════════════════════════════════
-function CoachNotesHub({ allGames, rivals }) {
-  const [search,      setSearch]      = useState("");
-  const [filterRival, setFilterRival] = useState("all");
-
-  // รวม notes ทุกเกม
-  const notes = allGames
-    .filter(g=>g.note && g.note.trim())
-    .map(g=>({
-      note:      g.note,
-      date:      g.date||"",
-      rival:     g.rivalName||"",
-      result:    g.result||"",
-      ourSide:   g.ourSide||"",
-      heroNames: (g.ourPicks||[]).filter(s=>s.hero).map(s=>s.hero.name).join(", "),
-      _id:       g._matchId,
-    }))
-    .reverse(); // newest first
-
-  const filtered = notes.filter(n=>{
-    const matchRival  = filterRival==="all" || n.rival===filterRival;
-    const matchSearch = !search || n.note.toLowerCase().includes(search.toLowerCase())
-      || n.rival.toLowerCase().includes(search.toLowerCase());
-    return matchRival && matchSearch;
-  });
-
-  return (
-    <div>
-      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,flexWrap:"wrap"}}>
-        <h2 style={{margin:0,fontSize:24,fontWeight:800}}>📝 Coach Notes Hub</h2>
-        <span style={{fontSize:12,color:C.textMuted}}>{notes.length} notes รวม</span>
-      </div>
-
-      {/* filters */}
-      <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}>
-        <input value={search} onChange={e=>setSearch(e.target.value)}
-          placeholder="🔍 ค้นหา note..."
-          style={{...iStyle,flex:1,minWidth:200,padding:"8px 12px",fontSize:13}}/>
-        <select value={filterRival} onChange={e=>setFilterRival(e.target.value)}
-          style={{...iStyle,width:180,padding:"8px 12px",fontSize:13}}>
-          <option value="all">— ทุกทีม —</option>
-          {rivals.map(r=><option key={r.id} value={r.name}>{r.name}</option>)}
-        </select>
-      </div>
-
-      {notes.length===0 ? (
-        <div style={{textAlign:"center",padding:60,background:C.bgPanel,borderRadius:14,color:C.textMuted}}>
-          <div style={{fontSize:32,marginBottom:8}}>📝</div>
-          ยังไม่มี Coach Note — กรอกใน Match Log ตอนบันทึกเกม
-        </div>
-      ) : filtered.length===0 ? (
-        <div style={{textAlign:"center",padding:40,background:C.bgPanel,borderRadius:12,color:C.textMuted,fontSize:13}}>
-          ไม่พบ note ที่ตรงกับ filter
-        </div>
-      ) : (
-        <div style={{display:"flex",flexDirection:"column",gap:8}}>
-          {filtered.map((n,i)=>(
-            <div key={i} style={{background:C.bgPanel,border:`1px solid ${C.border}`,
-              borderRadius:12,padding:"14px 18px",
-              borderLeft:`4px solid ${n.result==="WIN"?C.win:n.result==="LOSE"?C.lose:C.primary}`}}>
-              {/* meta row */}
-              <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:10,flexWrap:"wrap"}}>
-                {n.result && (
-                  <span style={{padding:"2px 10px",borderRadius:99,fontSize:11,fontWeight:800,
-                    background:n.result==="WIN"?C.win+"20":C.lose+"20",
-                    color:n.result==="WIN"?C.win:C.lose}}>
-                    {n.result}
-                  </span>
-                )}
-                {n.rival && (
-                  <span style={{fontWeight:700,fontSize:13,color:C.primaryLight}}>vs {n.rival}</span>
-                )}
-                {n.ourSide && (
-                  <span style={{fontSize:11,padding:"1px 8px",borderRadius:99,fontWeight:700,
-                    background:n.ourSide==="blue"?C.blue+"20":C.red+"20",
-                    color:n.ourSide==="blue"?C.blue:C.red}}>
-                    {n.ourSide==="blue"?"🔵 Blue":"🔴 Red"}
-                  </span>
-                )}
-                <span style={{fontSize:11,color:C.textMuted,marginLeft:"auto"}}>{n.date}</span>
-              </div>
-              {/* note text */}
-              <div style={{fontSize:13,color:C.textMain,lineHeight:1.6,marginBottom:n.heroNames?8:0}}>
-                {n.note}
-              </div>
-              {/* heroes */}
-              {n.heroNames && (
-                <div style={{fontSize:10,color:C.textMuted,marginTop:4}}>
-                  🛡️ {n.heroNames}
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════
-//  HERO IMAGE MANAGER
-//  Bulk-upload images from the user's computer + auto-match by filename,
-//  with a per-hero editor for fixing any mismatches.
-// ═══════════════════════════════════════════
-function HeroImageManager({ heroPhotos, onSetPhoto, onSetPhotosBulk, onRemovePhoto, onAddHero, onSetRole, onRemoveHero }) {
-  const [search,     setSearch]     = useState("");
-  const [roleFilter, setRoleFilter] = useState("All");
-  const [dragOver,   setDragOver]   = useState(false);
-  const [matchLog,   setMatchLog]   = useState(null);
-  const [bulkUploading, setBulkUploading] = useState(false); // { matched:[], unmatched:[] }
-  const [showAddHero, setShowAddHero] = useState(false);
-  const bulkInputRef = useRef(null);
-
-  // normalize a string for fuzzy filename matching: lowercase, strip
-  // extension, strip non-alphanumeric chars (spaces, apostrophes, dashes…)
-  function normalize(s) {
-    return s.toLowerCase().replace(/\.[a-z0-9]+$/,"").replace(/[^a-z0-9]/g,"");
-  }
-
-  async function handleBulkFiles(fileList) {
-    const files = Array.from(fileList);
-    if (files.length === 0) return;
-    const heroByNorm = {};
-    HERO_DATA.forEach(h => { heroByNorm[normalize(h.name)] = h.name; });
-
-    const matched = [];
-    const unmatched = [];
-    const updates = {};
-
-    setBulkUploading(true);
-    await Promise.all(files.map(async file => {
-      const norm = normalize(file.name);
-      const heroName = heroByNorm[norm];
-      if (!heroName) { unmatched.push(file.name); return; }
-      try {
-        const compressed = await compressImage(file);
-        if (compressed.size > 1.5*1024*1024) { unmatched.push(`${file.name} (ใหญ่เกิน 1.5MB)`); return; }
-        const blob = await upload(file.name, compressed, { access: "public", handleUploadUrl: "/api/upload" });
-        updates[heroName] = blob.url;
-        matched.push({ file: file.name, hero: heroName });
-      } catch (err) {
-        console.error("Hero bulk upload failed:", file.name, err);
-        unmatched.push(`${file.name} (อัพโหลดไม่สำเร็จ)`);
-      }
-    }));
-
-    if (Object.keys(updates).length > 0) {
-      onSetPhotosBulk(updates);
-      // clean up old photos for any hero that just got a replacement
-      const oldUrls = Object.keys(updates)
-        .map(heroName => heroPhotos[heroName])
-        .filter(Boolean);
-      deleteBlobUrls(oldUrls);
-    }
-    setMatchLog({ matched, unmatched });
-    setBulkUploading(false);
-  }
-
-  function handleDrop(e) {
-    e.preventDefault();
-    setDragOver(false);
-    if (e.dataTransfer.files?.length) handleBulkFiles(e.dataTransfer.files);
-  }
-
-  const filtered = HERO_DATA.filter(h =>
-    (roleFilter==="All"||h.role===roleFilter) &&
-    h.name.toLowerCase().includes(search.toLowerCase())
-  );
-
-  const uploadedCount = HERO_DATA.filter(h => heroPhotos[h.name]).length;
-
-  return (
-    <div>
-      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6,flexWrap:"wrap"}}>
-        <h2 style={{margin:0,fontSize:24,fontWeight:800}}>🦸 Hero Images</h2>
-        <span style={{background:C.primary,color:"#fff",fontSize:10,padding:"2px 8px",
-          borderRadius:99,fontWeight:700}}>{uploadedCount}/{HERO_DATA.length} อัพโหลดแล้ว</span>
-        <button onClick={()=>setShowAddHero(true)}
-          style={{marginLeft:"auto",background:`linear-gradient(135deg,${C.primary},${C.primaryLight})`,
-            color:"#fff",border:"none",borderRadius:9,padding:"7px 16px",
-            cursor:"pointer",fontWeight:800,fontSize:12,whiteSpace:"nowrap"}}>
-          + เพิ่ม Hero ใหม่
-        </button>
-      </div>
-      <p style={{margin:"0 0 20px",color:C.textMuted,fontSize:13}}>
-        อัพโหลดรูป Hero จากเครื่องตัวเอง — รูปที่อัพโหลดจะใช้แทนรูปจากเว็บทันที · แก้ Role ได้ทุกตัวที่การ์ดด้านล่าง
-      </p>
-
-      {showAddHero && (
-        <AddHeroModal onAdd={onAddHero} onClose={()=>setShowAddHero(false)}/>
-      )}
-
-      {/* Bulk upload zone */}
-      <div
-        onDragOver={e=>{e.preventDefault();setDragOver(true);}}
-        onDragLeave={()=>setDragOver(false)}
-        onDrop={handleDrop}
-        style={{background:dragOver?C.primary+"15":C.bgPanel,
-          border:`2px dashed ${dragOver?C.primary:C.border}`,borderRadius:14,
-          padding:"28px 20px",textAlign:"center",marginBottom:16,transition:"all .15s"}}>
-        <div style={{fontSize:30,marginBottom:8}}>📂</div>
-        <div style={{fontSize:14,fontWeight:700,marginBottom:6}}>
-          ลากไฟล์รูปมาวางที่นี่ หรือเลือกหลายไฟล์พร้อมกัน
-        </div>
-        <div style={{fontSize:11,color:C.textMuted,marginBottom:14}}>
-          ระบบจะจับคู่ไฟล์กับ Hero อัตโนมัติจากชื่อไฟล์ เช่น "Toro.png" → Toro
-        </div>
-        <label style={{background:`linear-gradient(135deg,${C.primary},${C.primaryLight})`,
-          color:"#fff",border:"none",borderRadius:9,padding:"9px 22px",cursor:"pointer",
-          fontWeight:800,fontSize:13,display:"inline-block"}}>
-          เลือกไฟล์รูป (เลือกได้หลายไฟล์)
-          <input ref={bulkInputRef} type="file" accept="image/*" multiple style={{display:"none"}}
-            onChange={e=>{ if(e.target.files?.length) handleBulkFiles(e.target.files); e.target.value=""; }}/>
-        </label>
-      </div>
-
-      {/* Match result log */}
-      {matchLog && (
-        <div style={{background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:12,
-          padding:"14px 18px",marginBottom:16}}>
-          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
-            <span style={{fontWeight:800,fontSize:13,color:C.primaryLight}}>ผลการจับคู่ไฟล์</span>
-            <button onClick={()=>setMatchLog(null)}
-              style={{marginLeft:"auto",background:"none",border:"none",color:C.textMuted,
-                cursor:"pointer",fontSize:14}}>✕</button>
-          </div>
-          {matchLog.matched.length>0 && (
-            <div style={{fontSize:12,color:C.win,marginBottom:6}}>
-              ✅ จับคู่สำเร็จ {matchLog.matched.length} ไฟล์: {matchLog.matched.map(m=>m.hero).join(", ")}
-            </div>
-          )}
-          {matchLog.unmatched.length>0 && (
-            <div style={{fontSize:12,color:C.lose}}>
-              ❌ จับคู่ไม่ได้ {matchLog.unmatched.length} ไฟล์ (ชื่อไฟล์ไม่ตรงกับ Hero ใดเลย): {matchLog.unmatched.join(", ")}
-              <div style={{fontSize:11,color:C.textMuted,marginTop:4}}>
-                แก้ไขได้ด้วยมือทีละตัวที่การ์ดด้านล่าง
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* filters */}
-      <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
-        <input value={search} onChange={e=>setSearch(e.target.value)}
-          placeholder="🔍 ค้นหา Hero..."
-          style={{...iStyle,flex:1,minWidth:180,padding:"7px 12px",fontSize:12}}/>
-        <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
-          {["All",...ROLES_PICK].map(r=>(
-            <button key={r} onClick={()=>setRoleFilter(r)} style={{
-              background:roleFilter===r?(ROLE_COLOR[r]||C.primary)+"30":"transparent",
-              border:`1px solid ${roleFilter===r?(ROLE_COLOR[r]||C.primary):C.border}`,
-              color:roleFilter===r?(ROLE_COLOR[r]||C.primaryLight):C.textMuted,
-              borderRadius:99,padding:"4px 12px",cursor:"pointer",fontSize:11,fontWeight:700}}>
-              {r}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* per-hero grid editor */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(110px,1fr))",gap:10}}>
-        {filtered.map(hero => (
-          <HeroImageSlot key={hero.name} hero={hero}
-            photoUrl={heroPhotos[hero.name]}
-            onSet={(dataUrl)=>onSetPhoto(hero.name, dataUrl)}
-            onRemove={()=>onRemovePhoto(hero.name)}
-            onSetRole={(role)=>onSetRole(hero.name, role)}
-            onDelete={hero._custom ? () => {
-              if (window.confirm(`ลบ "${hero.name}" ออกจากรายชื่อ Hero? (ลบได้เฉพาะ Hero ที่เพิ่มเอง ข้อมูลแมตช์ที่เคยใช้ฮีโร่นี้จะยังอยู่เหมือนเดิม แค่ระบบจะไม่รู้จัก role ของมันแล้ว)`)) {
-                onRemoveHero(hero.name);
-              }
-            } : undefined}/>
-        ))}
-        {filtered.length===0 && (
-          <div style={{gridColumn:"1/-1",textAlign:"center",padding:30,color:C.textMuted}}>
-            ไม่พบ Hero ที่ตรงกับการค้นหา
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ── Add Hero modal: name + role + optional photo ──
-function AddHeroModal({ onAdd, onClose }) {
-  const [name,  setName]  = useState("");
-  const [role,  setRole]  = useState(ROLES_PICK[0]);
-  const [photo, setPhoto] = useState(null);
-  const [error, setError] = useState("");
-
-  function handleSubmit() {
-    const trimmed = name.trim();
-    if (!trimmed) { setError("กรุณากรอกชื่อ Hero"); return; }
-    const exists = HERO_DATA.some(h=>h.name.toLowerCase()===trimmed.toLowerCase());
-    if (exists) { setError(`มี Hero ชื่อ "${trimmed}" อยู่แล้ว`); return; }
-    onAdd({ name: trimmed, role, photo });
-    onClose();
-  }
-
-  return (
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",
-      display:"flex",alignItems:"center",justifyContent:"center",zIndex:999}}
-      onClick={onClose}>
-      <div onClick={e=>e.stopPropagation()}
-        style={{background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:16,
-          padding:24,width:380,maxWidth:"90vw"}}>
-        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:18}}>
-          <h3 style={{margin:0,fontSize:16,fontWeight:800,color:C.primaryLight}}>+ เพิ่ม Hero ใหม่</h3>
-          <button onClick={onClose}
-            style={{marginLeft:"auto",background:"none",border:"none",color:C.textMuted,
-              cursor:"pointer",fontSize:18}}>✕</button>
-        </div>
-
-        <div style={{display:"flex",justifyContent:"center",marginBottom:16}}>
-          <PhotoPicker value={photo} onChange={setPhoto} size={64} team="our"/>
-        </div>
-
-        <div style={{marginBottom:12}}>
-          <div style={{fontSize:11,color:C.textMuted,marginBottom:4}}>ชื่อ Hero *</div>
-          <input value={name} onChange={e=>{setName(e.target.value);setError("");}}
-            onKeyDown={e=>e.key==="Enter"&&handleSubmit()}
-            placeholder="เช่น Tulen, Liliana..." autoFocus
-            style={{...iStyle,padding:"8px 12px",fontSize:13}}/>
-        </div>
-
-        <div style={{marginBottom:18}}>
-          <div style={{fontSize:11,color:C.textMuted,marginBottom:4}}>Role *</div>
-          <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-            {ROLES_PICK.map(r=>(
-              <button key={r} onClick={()=>setRole(r)}
-                style={{background:role===r?(ROLE_COLOR[r]||C.primary)+"30":"transparent",
-                  border:`1.5px solid ${role===r?(ROLE_COLOR[r]||C.primary):C.border}`,
-                  color:role===r?(ROLE_COLOR[r]||C.primaryLight):C.textMuted,
-                  borderRadius:8,padding:"6px 14px",cursor:"pointer",fontSize:12,fontWeight:700}}>
-                {r}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {error && (
-          <div style={{background:C.lose+"15",border:`1px solid ${C.lose}40`,color:C.lose,
-            borderRadius:8,padding:"7px 12px",fontSize:12,marginBottom:14}}>
-            ⚠️ {error}
-          </div>
-        )}
-
-        <div style={{display:"flex",gap:8}}>
-          <button onClick={handleSubmit}
-            style={{flex:1,background:`linear-gradient(135deg,${C.primary},${C.primaryLight})`,
-              color:"#fff",border:"none",borderRadius:9,padding:"9px 0",
-              cursor:"pointer",fontWeight:800,fontSize:13}}>
-            ✅ เพิ่ม Hero
-          </button>
-          <button onClick={onClose}
-            style={{background:"transparent",border:`1px solid ${C.border}`,color:C.textMuted,
-              borderRadius:9,padding:"9px 18px",cursor:"pointer",fontSize:13}}>
-            ยกเลิก
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function HeroImageSlot({ hero, photoUrl, onSet, onRemove, onSetRole, onDelete }) {
-  const [err, setErr] = useState(false);
-  const [editingRole, setEditingRole] = useState(false);
-  const fileRef = useRef(null);
-  const webUrl = useHeroImage(photoUrl ? null : hero); // only fall back to web lookup if no upload
-  const displayUrl = photoUrl || webUrl;
-
-  const [uploading, setUploading] = useState(false);
-  const [cropFile, setCropFile] = useState(null);
-
-  function handleFile(e) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setCropFile(file);
-  }
-
-  async function handleCropConfirm(blob) {
-    setCropFile(null);
-    setUploading(true);
-    try {
-      if (blob.size > 1.5*1024*1024) {
-        alert("ไฟล์รูปใหญ่เกินไป (จำกัด 1.5MB)");
-        return;
-      }
-      const compressed = await compressImage(blob);
-      const uploaded = await upload("hero.jpg", compressed, { access: "public", handleUploadUrl: "/api/upload" });
-      onSet(uploaded.url);
-      if (photoUrl && photoUrl !== uploaded.url) deleteBlobUrls(photoUrl); // clean up the old photo
-    } catch (err) {
-      console.error("Hero photo upload failed:", err);
-      alert("อัพโหลดรูปไม่สำเร็จ ลองใหม่อีกครั้ง");
-    } finally {
-      setUploading(false);
-      if (fileRef.current) fileRef.current.value = "";
-    }
-  }
-
-  return (
-    <div style={{background:C.bgPanel,border:`1px solid ${photoUrl?C.primary+"60":C.border}`,
-      borderRadius:10,padding:8,textAlign:"center"}}>
-      {cropFile && (
-        <ImageCropModal file={cropFile} title={`ปรับรูป ${hero.name}`}
-          onConfirm={handleCropConfirm}
-          onCancel={()=>{setCropFile(null); if(fileRef.current) fileRef.current.value="";}}
-        />
-      )}
-      <div style={{position:"relative",width:"100%",aspectRatio:"1",borderRadius:8,
-        overflow:"hidden",background:(ROLE_COLOR[hero.role]||C.primary)+"22",marginBottom:6}}>
-        {displayUrl && !err ? (
-          <img src={displayUrl} onError={()=>setErr(true)} alt={hero.name}
-            style={{width:"100%",height:"100%",objectFit:"cover"}}/>
-        ) : (
-          <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center"}}>
-            <span style={{fontSize:24,fontWeight:900,color:ROLE_COLOR[hero.role]||C.primaryLight}}>
-              {hero.name.charAt(0)}
-            </span>
-          </div>
-        )}
-        {photoUrl && (
-          <div style={{position:"absolute",top:3,right:3,background:C.win,color:"#fff",
-            fontSize:8,fontWeight:800,padding:"1px 5px",borderRadius:99}}>✓</div>
-        )}
-        {hero._custom && (
-          <div style={{position:"absolute",top:3,left:3,background:C.primary,color:"#fff",
-            fontSize:8,fontWeight:800,padding:"1px 5px",borderRadius:99}}>NEW</div>
-        )}
-      </div>
-      <div style={{fontSize:11,fontWeight:700,marginBottom:4,overflow:"hidden",
-        textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{hero.name}</div>
-
-      {/* role — click to edit */}
-      {editingRole ? (
-        <select autoFocus value={hero.role}
-          onChange={e=>{ onSetRole(e.target.value); setEditingRole(false); }}
-          onBlur={()=>setEditingRole(false)}
-          style={{width:"100%",background:C.bgCard,border:`1px solid ${C.primary}`,
-            color:C.textMain,borderRadius:5,padding:"2px 4px",fontSize:10,
-            marginBottom:6,outline:"none"}}>
-          {ROLES_PICK.map(r=><option key={r} value={r}>{r}</option>)}
-        </select>
-      ) : (
-        <div onClick={()=>setEditingRole(true)} title="แก้ไข Role"
-          style={{fontSize:9,fontWeight:700,marginBottom:6,cursor:"pointer",
-            color:ROLE_COLOR[hero.role]||C.textMuted,
-            display:"flex",alignItems:"center",justifyContent:"center",gap:3}}>
-          {hero.role} <span style={{opacity:.6,fontSize:8}}>✏️</span>
-        </div>
-      )}
-
-      <div style={{display:"flex",gap:4}}>
-        <label style={{flex:1,background:C.primary+"20",border:`1px solid ${C.primary}50`,
-          color:C.primaryLight,borderRadius:6,padding:"3px 0",cursor:"pointer",
-          fontSize:10,fontWeight:700}}>
-          📂
-          <input ref={fileRef} type="file" accept="image/*" style={{display:"none"}} onChange={handleFile}/>
-        </label>
-        {photoUrl && (
-          <button onClick={()=>{deleteBlobUrls(photoUrl);onRemove();}}
-            style={{background:C.lose+"20",border:`1px solid ${C.lose}40`,color:C.lose,
-              borderRadius:6,padding:"3px 8px",cursor:"pointer",fontSize:10,fontWeight:700}}>
-            ✕
-          </button>
-        )}
-        {onDelete && (
-          <button onClick={onDelete} title="ลบ Hero นี้ (Hero ที่เพิ่มเองเท่านั้น)"
-            style={{background:C.lose+"20",border:`1px solid ${C.lose}40`,color:C.lose,
-              borderRadius:6,padding:"3px 8px",cursor:"pointer",fontSize:10,fontWeight:700}}>
-            🗑️
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-
-// ═══════════════════════════════════════════
-//  TACTICAL WHITEBOARD (merged module)
-// ═══════════════════════════════════════════
-// ═══════════════════════════════════════════
-//  CONSTANTS
-// ═══════════════════════════════════════════
-const HERO_LIST = [
-  "Airi","Aleister","Alice","Allain","Amily","Annette","Arum","Arthur","Astrid",
-  "Azzen'Ka","Baldum","Bijan","Butterfly","Capheny","Celica","Charlotte","Chaugnar",
-  "D'Arcy","Diao Chan","Dirak","Edras","Eland'orr","Elsu","Enzo","Fennik",
-  "Florentino","Gildur","Grakk","Hayate","Helen","Ignis","Ilumia","Ishar",
-  "Jinnar","Kahlii","Kaine","Keera","Kil'Groth","Kriknak","Krixi","Krizzix",
-  "Lauriel","Laville","Lindis","Lorion","Lu Bu","Lumburr","Maloch","Marja",
-  "Max","Mganga","Mina","Ming","Moren","Murad","Nakroth","Natalya","Omen",
-  "Ormarr","Paine","Preyta","Qi","Quillen","Raz","Riktor","Rouie","Rourke",
-  "Roxie","Ryoma","Sephera","Sinestrea","Skud","Slimz","Stuart","Taara","Tachi",
-  "Teeri","Tel'Annas","Thane","Thorne","Toro","Tulen","Valhein","Veera","Veres",
-  "Violet","Volkath","Wisp","Wukong","Xeniel","Y'bneth","Yan","Yena","Yorn",
-  "Yue","Zanis","Zata","Zephys","Zill","Zip","Zuka",
-].sort();
-
-const ROLE_COLORS = {
-  Slayer:"#e17055", Jungle:"#00b894", Mid:"#6C5CE7",
-  Abyssal:"#fdcb6e", Support:"#74b9ff",
-};
-const TEAM_COLORS = { our:"#00cec9", enemy:"#fd79a8" };
-
-
-const TOOLS = [
-  { id:"select",  icon:"↖",   label:"Select"   },
-  { id:"pen",     icon:"✏️",  label:"Pen"      },
-  { id:"arrow",   icon:"→",   label:"Arrow"    },
-  { id:"text",    icon:"T",   label:"Text"     },
-  { id:"hero",    icon:"🦸",  label:"Hero"     },
-  { id:"erase",   icon:"⌫",   label:"Erase"    },
-];
-
-const COLORS = ["#ffffff","#00cec9","#fd79a8","#fdcb6e","#e17055","#6C5CE7","#00b894","#ff4757","#2196f3"];
-const SIZES  = [2, 4, 8, 14];
-
-// ═══════════════════════════════════════════
-//  HERO ICON (letter avatar)
-// ═══════════════════════════════════════════
-function HeroAvatar({ name, team, size=40, style={} }) {
-  const col = TEAM_COLORS[team] || TEAM_COLORS.our;
-  const hero = HERO_DATA.find(h=>h.name===name);
-  const imgUrl = useHeroImage(hero);
-  const [imgErr, setImgErr] = useState(false);
-  return (
-    <div style={{
-      width:size, height:size, borderRadius:"50%",
-      background:col+"30", border:`2.5px solid ${col}`,
-      display:"flex", flexDirection:"column", overflow:"hidden",
-      alignItems:"center", justifyContent:"center",
-      fontSize:size*0.28, fontWeight:900, color:col,
-      userSelect:"none", flexShrink:0, position:"relative",
-      ...style,
-    }}>
-      {imgUrl && !imgErr ? (
-        <>
-          <img src={imgUrl} onError={()=>setImgErr(true)} alt={name}
-            style={{width:"100%",height:"100%",objectFit:"cover",position:"absolute",top:0,left:0}}/>
-          <div style={{position:"absolute",bottom:0,left:0,right:0,background:"rgba(0,0,0,0.55)",
-            fontSize:size*0.16,fontWeight:700,color:"#fff",textAlign:"center",
-            padding:"1px 2px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-            {name.length>6?name.slice(0,5)+"…":name}
-          </div>
-        </>
-      ) : (
-        <>
-          <div style={{lineHeight:1}}>{name.charAt(0)}</div>
-          <div style={{fontSize:size*0.18,fontWeight:700,color:col+"cc",lineHeight:1,
-            maxWidth:size-4,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",
-            textAlign:"center"}}>
-            {name.length>6?name.slice(0,5)+"…":name}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
+// PerformanceTrend, CoachNotesHub moved to components/shared/PerformanceTrend.js
+// HeroImageManager, AddHeroModal, HeroImageSlot, HeroAvatar moved to components/shared/HeroImageManager.js
+// (also removed dead-code leftovers HERO_LIST/ROLE_COLORS/TOOLS/COLORS/SIZES that used to sit here — see that file's header comment)
 
 // ═══════════════════════════════════════════
 //  MAIN APP
@@ -7088,7 +6284,7 @@ function RovAppInner() {
                             : `ยังไม่มีแมตช์ประเภท "${tabs.find(t=>t.id===matchCatFilter)?.label}"`}
                         </div>
                       :filtered.map(m=>(
-                          <MatchCardWithStats key={m.id} m={m} onUpdateStats={handleUpdateStats} onUpdateObjectives={handleUpdateObjectives} onUpdateGameFull={handleUpdateGameFull} onJumpToVideo={handleJumpToVideo} roster={roster} videos={app.videos||[]} playerPhotos={app.playerPhotos} ourTeamName={session?.user?.teamName||app.teamName||"ทีมเรา"} ourTeamLogo={app.teamLogo} rivalLogo={app.rivalLogos?.[m.rivalName]} onDelete={id=>dispatchApp({type:"DELETE_MATCH",payload:id})} onEditMeta={handleEditMatchMeta}/>
+                          <MatchCardWithStats key={m.id} m={m} onUpdateStats={handleUpdateStats} onUpdateObjectives={handleUpdateObjectives} onUpdateGameFull={handleUpdateGameFull} onJumpToVideo={handleJumpToVideo} roster={roster} enemyRoster={app.enemyRosters?.[m.rivalName]||[]} videos={app.videos||[]} playerPhotos={app.playerPhotos} ourTeamName={session?.user?.teamName||app.teamName||"ทีมเรา"} ourTeamLogo={app.teamLogo} rivalLogo={app.rivalLogos?.[m.rivalName]} onDelete={id=>dispatchApp({type:"DELETE_MATCH",payload:id})} onEditMeta={handleEditMatchMeta}/>
                         ))
                     }
                   </>
@@ -7356,7 +6552,7 @@ function RovAppInner() {
                         />
                       )}
                       {rivalView==="history" && rm.map(m=>(
-                        <MatchCardWithStats key={m.id} m={m} onUpdateStats={handleUpdateStats} onUpdateObjectives={handleUpdateObjectives} onUpdateGameFull={handleUpdateGameFull} onJumpToVideo={handleJumpToVideo} roster={roster} videos={app.videos||[]} playerPhotos={app.playerPhotos} ourTeamName={session?.user?.teamName||app.teamName||"ทีมเรา"} ourTeamLogo={app.teamLogo} rivalLogo={app.rivalLogos?.[m.rivalName]} onDelete={id=>dispatchApp({type:"DELETE_MATCH",payload:id})} onEditMeta={handleEditMatchMeta}/>
+                        <MatchCardWithStats key={m.id} m={m} onUpdateStats={handleUpdateStats} onUpdateObjectives={handleUpdateObjectives} onUpdateGameFull={handleUpdateGameFull} onJumpToVideo={handleJumpToVideo} roster={roster} enemyRoster={app.enemyRosters?.[m.rivalName]||[]} videos={app.videos||[]} playerPhotos={app.playerPhotos} ourTeamName={session?.user?.teamName||app.teamName||"ทีมเรา"} ourTeamLogo={app.teamLogo} rivalLogo={app.rivalLogos?.[m.rivalName]} onDelete={id=>dispatchApp({type:"DELETE_MATCH",payload:id})} onEditMeta={handleEditMatchMeta}/>
                       ))}
                       {rivalView==="overview" && (
                         <div>
