@@ -133,6 +133,20 @@ function VideoDrawOverlay({ active }) {
   const [color, setColor] = useState(DRAW_COLORS[0]);
   const colorRef = useRef(color);
   useEffect(() => { colorRef.current = color; }, [color]);
+  // ── eraser tool ──
+  // "pen" = draws with the selected color (as before). "erase" = rubs out
+  // whatever was drawn using canvas compositing (globalCompositeOperation
+  // "destination-out"), which erases pixels back to transparent instead of
+  // painting over them — this canvas has a transparent background sitting
+  // on top of the video, so "erasing" really does mean making that area
+  // transparent again, not drawing a background-colored patch over it.
+  // Kept separate from the existing "🧹 ลบทั้งหมด" button below, which
+  // wipes the whole canvas at once — this lets someone fix just one small
+  // mistake without losing every annotation they've drawn so far.
+  const [tool, setTool] = useState("pen"); // "pen" | "erase"
+  const toolRef = useRef(tool);
+  useEffect(() => { toolRef.current = tool; }, [tool]);
+  const ERASER_WIDTH = 22;
 
   // ปรับขนาด canvas ให้เท่ากับกล่องวิดีโอเป๊ะเสมอ (รวมตอน resize จอ)
   useEffect(() => {
@@ -168,8 +182,14 @@ function VideoDrawOverlay({ active }) {
     const ctx = canvasRef.current.getContext("2d");
     const p = getPoint(e);
     const last = lastPointRef.current;
-    ctx.strokeStyle = colorRef.current;
-    ctx.lineWidth = 4;
+    if (toolRef.current === "erase") {
+      ctx.globalCompositeOperation = "destination-out";
+      ctx.lineWidth = ERASER_WIDTH;
+    } else {
+      ctx.globalCompositeOperation = "source-over";
+      ctx.strokeStyle = colorRef.current;
+      ctx.lineWidth = 4;
+    }
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     ctx.beginPath();
@@ -191,15 +211,25 @@ function VideoDrawOverlay({ active }) {
         onMouseDown={start} onMouseMove={move} onMouseUp={end} onMouseLeave={end}
         onTouchStart={start} onTouchMove={move} onTouchEnd={end}
         style={{position:"absolute", inset:0, width:"100%", height:"100%",
-          cursor: active ? "crosshair" : "default", touchAction:"none"}}/>
+          cursor: active ? (tool==="erase" ? "cell" : "crosshair") : "default", touchAction:"none"}}/>
       {active && (
         <div style={{position:"absolute", bottom:8, left:8, display:"flex", gap:6,
           background:"rgba(10,10,22,0.85)", borderRadius:10, padding:"6px 8px", alignItems:"center"}}>
           {DRAW_COLORS.map(c => (
-            <button key={c} onClick={()=>setColor(c)}
+            <button key={c} onClick={()=>{setColor(c); setTool("pen");}}
               style={{width:20, height:20, borderRadius:"50%", background:c, cursor:"pointer",
-                border: color===c ? "2px solid #fff" : "2px solid transparent", padding:0}}/>
+                border: (tool==="pen" && color===c) ? "2px solid #fff" : "2px solid transparent",
+                opacity: tool==="erase" ? 0.5 : 1, padding:0}}/>
           ))}
+          <button onClick={()=>setTool(t => t==="erase" ? "pen" : "erase")}
+            title="ยางลบ — ลากทับเส้นที่วาดไว้เพื่อลบเฉพาะจุด"
+            style={{width:22, height:22, borderRadius:6, cursor:"pointer", fontSize:12,
+              display:"flex", alignItems:"center", justifyContent:"center",
+              background: tool==="erase" ? "#fff" : "transparent",
+              color: tool==="erase" ? "#0a0a16" : "#fff",
+              border: `1.5px solid ${tool==="erase" ? "#fff" : C.border}`, marginLeft:2}}>
+            ⌫
+          </button>
           <button onClick={clearCanvas}
             style={{background:"transparent", border:`1px solid ${C.border}`, color:"#fff",
               borderRadius:6, padding:"3px 8px", cursor:"pointer", fontSize:11, fontWeight:700, marginLeft:4}}>
