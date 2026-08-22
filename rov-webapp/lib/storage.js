@@ -61,7 +61,19 @@ export async function loadFromStorage() {
     return state;
   } catch (err) {
     console.error("loadFromStorage failed:", err);
-    return { ...FALLBACK };
+    // ── NEVER pretend this was a successful (if empty) load ──
+    // Returning `{...FALLBACK}` here used to set `_loaded: true` on a
+    // state that is NOT the team's real data — just empty placeholders.
+    // Any caller that dispatches this into `app` would make the app
+    // THINK the team has no matches/roster/schedules/etc, and because
+    // `_loaded` gates the autosave effect, that same emptiness would then
+    // get auto-saved back to the server 600ms later — a transient
+    // network hiccup or cold-start 500 could silently erase a team's
+    // real data. `_loaded: false` here means callers can — and must —
+    // check this before dispatching, and the autosave effect (which only
+    // arms once `app._loaded` is true) stays off if a caller dispatches
+    // this by mistake.
+    return { _loaded: false, loadError: true, loadErrorMessage: err.message || String(err) };
   }
 }
 
