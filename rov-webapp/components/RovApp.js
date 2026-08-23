@@ -5343,11 +5343,38 @@ function RovAppInner() {
   // ── load from Database on mount ──
   useEffect(() => {
     let cancelled = false;
-    loadFromStorage().then(loaded => {
-      if (!cancelled) dispatchApp({ type:"LOAD_FROM_STORAGE", payload: loaded });
-    });
-    return () => { cancelled = true; };
-  }, []);
+    let retryTimer = null;
+
+    function attemptLoad(retriesLeft) {
+      loadFromStorage().then(loaded => {
+        if (cancelled) return;
+        if (loaded.loadError) {
+          // ── never dispatch a failed load as if it were real data ──
+          // Previously this branch didn't exist: a failed load returned
+          // FALLBACK (empty matches/roster/etc, but _loaded:true), got
+          // dispatched anyway, and 600ms later autosave would write that
+          // emptiness back to the server — turning one bad network
+          // request into real, permanent data loss. Now: don't touch
+          // `app` at all on failure (it stays in its pre-load default
+          // state, which has no `_loaded` flag, so autosave stays off),
+          // retry a couple of times with backoff for transient blips
+          // (cold start, brief network drop), and only bother the user
+          // with an error if every retry fails.
+          console.error("Initial load failed:", loaded.loadErrorMessage);
+          if (retriesLeft > 0) {
+            retryTimer = setTimeout(() => attemptLoad(retriesLeft - 1), 2000);
+          } else {
+            toast("โหลดข้อมูลทีมไม่สำเร็จ กรุณารีเฟรชหน้าเว็บ", "error", 10000);
+          }
+          return;
+        }
+        dispatchApp({ type:"LOAD_FROM_STORAGE", payload: loaded });
+      });
+    }
+
+    attemptLoad(3); // initial try + up to 3 retries (2s apart) before giving up
+    return () => { cancelled = true; if (retryTimer) clearTimeout(retryTimer); };
+  }, [toast]);
 
   // ── save to Database (debounced) whenever app data changes ──
   // ── in-flight save guard ──
@@ -5385,7 +5412,26 @@ function RovAppInner() {
         // ที่ merge ไม่ได้ เช่น roster/photos ที่อีกฝ่ายอาจแก้ไปพร้อมกัน)
         setSaveStatus("saved");
         toast("มีการแก้ไขจากที่อื่นพร้อมกัน — รวมข้อมูลให้อัตโนมัติแล้ว ✅", "success", 5000);
-        loadFromStorage().then(loaded => dispatchApp({ type:"LOAD_FROM_STORAGE", payload: loaded }));
+        loadFromStorage().then(loaded => {
+          if (loaded.loadError) {
+            // ── DON'T wipe good local state over a failed refresh ──
+            // The merged write already succeeded server-side (that's why
+            // we're in this branch at all) — this GET is just to pull the
+            // merged result back down so the client's view of non-
+            // mergeable fields (roster/photos/etc, if someone else edited
+            // those in the same window) stays in sync. If THIS request
+            // fails, the old code dispatched FALLBACK anyway, replacing
+            // perfectly good local data with empty placeholders — and
+            // autosave would then save that emptiness right back to the
+            // server. Now: leave `app` untouched and just tell the person
+            // their view might be slightly stale for fields they can't
+            // self-merge, rather than silently destroying their data.
+            console.error("Post-merge refresh failed:", loaded.loadErrorMessage);
+            toast("รวมข้อมูลสำเร็จ แต่โหลดข้อมูลล่าสุดไม่สำเร็จ — ลองรีเฟรชหน้าถ้าเห็นข้อมูลไม่ตรง", "error", 8000);
+            return;
+          }
+          dispatchApp({ type:"LOAD_FROM_STORAGE", payload: loaded });
+        });
         setTimeout(()=>setSaveStatus("idle"), 2000);
       } else {
         console.error("Save failed:", err);
@@ -5450,6 +5496,14 @@ function RovAppInner() {
     () => filterMatchesByPatch(app.matches, patchVersions, selectedPatch),
     [app.matches, patchVersions, selectedPatch]
   );
+  // ── same idea, for Scout log entries ──
+  // Scout match objects use `id: Date.now()` too (see SAVE_SCOUT reducer
+  // case), so the exact same time-range filter that works for `matches`
+  // works here unchanged — no separate filtering logic needed.
+  const patchFilteredScoutMatches = useMemo(
+    () => filterMatchesByPatch(app.scoutMatches, patchVersions, selectedPatch),
+    [app.scoutMatches, patchVersions, selectedPatch]
+  );
   const allGames = useMemo(() => patchFilteredMatches.flatMap(m =>
     Array.isArray(m.games) && m.games.length > 0
       ? m.games.map((g, gi) => ({ ...g, rivalName:m.rivalName, date:m.date, _matchId:m.id, _gameIdx:gi }))
@@ -5473,8 +5527,11 @@ function RovAppInner() {
 
   // ── Export Match Summary PDF (ใช้ browser print) ──
   const handleExportMatchPDF = useCallback((filterCat="all") => {
-    const filtered = filterCat==="all" ? app.matches
-      : app.matches.filter(m=>(filterCat==="tournament"?m.category==="tournament":(!m.category||m.category==="scrim")));
+    // ── follows the currently-selected patch, same as everything else on
+    //    this page — exporting should match what the person is looking at
+    //    on screen, not silently include matches from other patches ──
+    const filtered = filterCat==="all" ? patchFilteredMatches
+      : patchFilteredMatches.filter(m=>(filterCat==="tournament"?m.category==="tournament":(!m.category||m.category==="scrim")));
 
     const totalG = filtered.reduce((s,m)=>s+(Array.isArray(m.games)?m.games.length:1),0);
     const totalW = filtered.reduce((s,m)=>{
@@ -5531,7 +5588,7 @@ function RovAppInner() {
     w.document.write(html);
     w.document.close();
     setTimeout(()=>w.print(), 500);
-  }, [app.matches, app.teamName]);
+  }, [patchFilteredMatches, app.teamName]);
 
   const handleEditMatchMeta = useCallback(({ id, rivalName, category, note }) => {
     dispatchApp({ type:"UPDATE_MATCH_META", payload:{ id, rivalName, category, note } });
@@ -5703,7 +5760,7 @@ function RovAppInner() {
   // ── short aliases for readability ──
   const { page, selRival, rivalView, rosterTab, selPlayer, selPlayerEnemy,
           selEnemyTeam, newName, newEnemyName } = ui;
-  const { matches, rivals, roster, enemyRosters, scoutMatches } = app;
+  const { rivals, roster, enemyRosters } = app;
 
   // ── loading screen until Database hydration completes ──
   if (!app._loaded) {
@@ -5880,7 +5937,7 @@ function RovAppInner() {
           enemyRosters={enemyRosters}
           onFinishSession={finishSession}
           allGames={allGames}
-          scoutMatches={scoutMatches}
+          scoutMatches={app.scoutMatches}
           heroTiers={app.heroTiers}
         />
       )}
@@ -5926,7 +5983,7 @@ function RovAppInner() {
                 onSetTier={(hero,tier)=>dispatchApp({type:"SET_HERO_TIER",payload:{hero,tier}})}
                 isCoach={isCoach}
               />
-              <WeeklyMonthlySummary matches={app.matches}/>
+              <WeeklyMonthlySummary matches={patchFilteredMatches}/>
               <RecentActivityWidget/>
               {/* ── Upcoming match reminder ── */}
               {(()=>{
@@ -5977,7 +6034,7 @@ function RovAppInner() {
                     <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(90px,1fr))",gap:14,marginBottom:16}}>
                       {[
                         {label:"🏆 Win Rate",   val:`${wr}%`,     col:wr>=50?C.win:C.lose, sub:`${tW}W — ${tG-tW}L`},
-                        {label:"🎮 เกมทั้งหมด", val:tG,           col:C.primaryLight,       sub:`${matches.length} sessions`},
+                        {label:"🎮 เกมทั้งหมด", val:tG,           col:C.primaryLight,       sub:`${patchFilteredMatches.length} sessions`},
                         {label:"🦸 Heroes Used",val:uniq.size,    col:"#feca57",            sub:"ตัวละครไม่ซ้ำ"},
                         {label:"⏱️ เวลาเฉลี่ย/เกม",val:avgGameDuration?avgGameDuration.replace(".",":"):"-", col:"#1dd1a1", sub:avgGameDuration?`จาก ${gamesWithDuration.length} เกมที่จดเวลาไว้`:"ยังไม่มีข้อมูลเวลา"},
                         {label:"🔵 Blue Side",  val:`${blueWR}%`, col:C.blue,              sub:`${blueG.length} เกม (${blueW}W)`},
@@ -6062,7 +6119,7 @@ function RovAppInner() {
                   }
                 </div>
               </div>
-              <HeroSynergyCounter allGames={allGames} scoutMatches={scoutMatches}/>
+              <HeroSynergyCounter allGames={allGames} scoutMatches={patchFilteredScoutMatches}/>
               <PerformanceTrend allGames={allGames}/>
 
               {/* ── Objective Control Summary ── */}
@@ -6224,8 +6281,8 @@ function RovAppInner() {
                       cursor:"pointer",fontWeight:700,fontSize:12,whiteSpace:"nowrap"}}>
                     💾 Backup JSON
                   </button>
-                  {matches.length>0&&(
-                    <button onClick={()=>exportCSV(matches, allGames)}
+                  {patchFilteredMatches.length>0&&(
+                    <button onClick={()=>exportCSV(patchFilteredMatches, allGames)}
                       style={{display:"flex",alignItems:"center",gap:6,
                         background:C.win+"20",border:`1px solid ${C.win}50`,
                         color:C.win,borderRadius:9,padding:"7px 16px",
@@ -6242,16 +6299,18 @@ function RovAppInner() {
               {(() => {
                 const matchCatFilter = ui.matchCatFilter||"all";
                 const matchPatchFilter = ui.matchPatchFilter||"all";
-                // รวม patch ทั้งหมด
-                const patches = [...new Set(matches.filter(m=>m.patch).map(m=>m.patch))].sort().reverse();
+                // รวม patch ทั้งหมด — เฉพาะภายในแมตช์ที่อยู่ในช่วง patch
+                // (ตัว dropdown บนสุด) ที่เลือกไว้แล้วเท่านั้น ไม่ใช่ทุก patch
+                // ที่เคยมีมาทั้งหมด
+                const patches = [...new Set(patchFilteredMatches.filter(m=>m.patch).map(m=>m.patch))].sort().reverse();
                 const tabs = [
-                  {id:"all",        label:"ทั้งหมด",  count: matches.length},
-                  {id:"scrim",      label:"🏋️ ซ้อม",  count: matches.filter(m=>!m.category||m.category==="scrim").length},
-                  {id:"tournament", label:"🏆 แข่ง",   count: matches.filter(m=>m.category==="tournament").length},
+                  {id:"all",        label:"ทั้งหมด",  count: patchFilteredMatches.length},
+                  {id:"scrim",      label:"🏋️ ซ้อม",  count: patchFilteredMatches.filter(m=>!m.category||m.category==="scrim").length},
+                  {id:"tournament", label:"🏆 แข่ง",   count: patchFilteredMatches.filter(m=>m.category==="tournament").length},
                 ];
-                let filtered = matchCatFilter==="all" ? matches
-                  : matchCatFilter==="tournament" ? matches.filter(m=>m.category==="tournament")
-                  : matches.filter(m=>!m.category||m.category==="scrim");
+                let filtered = matchCatFilter==="all" ? patchFilteredMatches
+                  : matchCatFilter==="tournament" ? patchFilteredMatches.filter(m=>m.category==="tournament")
+                  : patchFilteredMatches.filter(m=>!m.category||m.category==="scrim");
                 if (matchPatchFilter!=="all") filtered = filtered.filter(m=>m.patch===matchPatchFilter);
                 return (
                   <>
@@ -6279,7 +6338,7 @@ function RovAppInner() {
                     </div>
                     {filtered.length===0
                       ?<div style={{textAlign:"center",padding:60,background:C.bgPanel,borderRadius:14,color:C.textMuted}}>
-                          {matches.length===0
+                          {patchFilteredMatches.length===0
                             ? "ยังไม่มีประวัติ — บันทึกแมตช์จาก Live Draft ก่อน"
                             : `ยังไม่มีแมตช์ประเภท "${tabs.find(t=>t.id===matchCatFilter)?.label}"`}
                         </div>
@@ -6366,7 +6425,7 @@ function RovAppInner() {
                       </div>
                     :<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:14}}>
                         {rivals.map(rv=>{
-                          const rm=matches.filter(m=>m.rivalName===rv.name);
+                          const rm=patchFilteredMatches.filter(m=>m.rivalName===rv.name);
                           const rGames=rm.flatMap(m=>Array.isArray(m.games)&&m.games.length?m.games:[m]);
                           const rw=rGames.filter(g=>g.result==="WIN").length;
                           const rwrate=rGames.length?Math.round(rw/rGames.length*100):0;
@@ -6463,7 +6522,7 @@ function RovAppInner() {
                   }
                 </>
               ) : (()=>{
-                  const rm     = matches.filter(m=>m.rivalName===selRival);
+                  const rm     = patchFilteredMatches.filter(m=>m.rivalName===selRival);
                   const rGames = rm.flatMap(m=>Array.isArray(m.games)&&m.games.length?m.games:[m]);
                   const rw     = rGames.filter(g=>g.result==="WIN").length;
                   const rwrate = rGames.length?Math.round(rw/rGames.length*100):0;
@@ -6541,7 +6600,7 @@ function RovAppInner() {
                       {rivalView==="scout" && (
                         <ScoutLogPage
                           rivalName={selRival}
-                          scoutMatches={scoutMatches}
+                          scoutMatches={patchFilteredScoutMatches}
                           rivals={rivals}
                           enemyRosters={enemyRosters}
                           isCoach={isCoach}
