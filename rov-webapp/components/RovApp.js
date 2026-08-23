@@ -5394,12 +5394,17 @@ function RovAppInner() {
   const savingRef  = useRef(false);
   const pendingRef = useRef(false);
 
+  const conflictRetryRef = useRef(0);
+  const conflictRetryTimerRef = useRef(null);
+  const MAX_CONFLICT_RETRIES = 4;
+
   const runAutosave = useCallback(async () => {
     if (savingRef.current) { pendingRef.current = true; return; } // already saving — queue exactly one more round
     savingRef.current = true;
     setSaveStatus("saving");
     try {
       await saveToStorage(app);
+      conflictRetryRef.current = 0; // a clean save means we're caught up — reset the retry counter
       setSaveStatus("saved");
       setTimeout(()=>setSaveStatus("idle"), 2000);
     } catch (err) {
@@ -5410,6 +5415,7 @@ function RovAppInner() {
         // error จริง แค่ต้องโหลด state ฝั่ง client ใหม่ให้ตรงกับที่ merge
         // ไปแล้ว ไม่งั้นรอบ autosave ถัดไปจะส่งค่าเก่าทับซ้ำ (โดยเฉพาะ field
         // ที่ merge ไม่ได้ เช่น roster/photos ที่อีกฝ่ายอาจแก้ไปพร้อมกัน)
+        conflictRetryRef.current = 0;
         setSaveStatus("saved");
         toast("มีการแก้ไขจากที่อื่นพร้อมกัน — รวมข้อมูลให้อัตโนมัติแล้ว ✅", "success", 5000);
         loadFromStorage().then(loaded => {
@@ -5437,9 +5443,27 @@ function RovAppInner() {
         console.error("Save failed:", err);
         setSaveStatus("error");
         if (err.isConflict) {
-          // ชนกันซ้ำสอง (พยายาม merge อัตโนมัติไปแล้วครั้งนึงใน saveToStorage
-          // แต่ก็ยังชนอยู่ดี) — เคสนี้เกิดยากมาก ต้องให้ user จัดการเอง
-          toast(err.message, "error", 8000);
+          // ── ชนกันซ้ำสอง (double-conflict) — auto-retry แทนที่จะปล่อยค้าง ──
+          // เคสนี้คือ merge อัตโนมัติใน saveToStorage() พยายามไปแล้วรอบนึง
+          // แต่ก็ยังชนอยู่ดี (มีคนอื่นบันทึกซ้อนจังหวะเดียวกันสองชั้น) —
+          // ก่อนหน้านี้โค้ดจะแค่โชว์ error แล้วหยุดเฉยๆ ไม่ลองใหม่เอง เพราะ
+          // `app` ไม่เปลี่ยน useEffect ก็ไม่ยิงซ้ำจนกว่าจะมีการแก้ไขจุดอื่น
+          // อีกครั้ง — แปลว่าแมตช์ที่เพิ่งจบจาก Live Draft อาจค้างอยู่แค่ใน
+          // browser เฉยๆ โดยไม่มีใครลองบันทึกซ้ำให้เลย ถ้าปิดแท็บ/รีเฟรช
+          // ไปตอนนั้นพอดี ข้อมูลจะหายจริง (ไม่เคยขึ้น server เลย) ทั้งที่
+          // ปกติแค่รอสักครู่แล้วลองใหม่ก็น่าจะผ่าน (ชนกันแค่ชั่วขณะ ไม่ใช่
+          // ปัญหาถาวร) — เลย retry อัตโนมัติให้เองสูงสุด 4 ครั้ง ห่างกันไป
+          // เรื่อยๆ (3s/6s/12s/24s) ก่อนจะยอมแพ้แล้วบอกให้ user รีเฟรชเอง
+          if (conflictRetryRef.current < MAX_CONFLICT_RETRIES) {
+            conflictRetryRef.current += 1;
+            const delay = 3000 * Math.pow(2, conflictRetryRef.current - 1); // 3s,6s,12s,24s
+            toast(`มีการแก้ไขจากที่อื่นพร้อมกัน — กำลังลองบันทึกใหม่อีกครั้ง (${conflictRetryRef.current}/${MAX_CONFLICT_RETRIES})...`, "error", delay);
+            if (conflictRetryTimerRef.current) clearTimeout(conflictRetryTimerRef.current);
+            conflictRetryTimerRef.current = setTimeout(() => runAutosave(), delay);
+          } else {
+            toast("บันทึกไม่สำเร็จหลายครั้งติดกัน — กรุณารีเฟรชหน้าเว็บแล้วลองบันทึกใหม่ด้วยตัวเอง เพื่อไม่ให้ข้อมูลล่าสุดหายไป", "error", 15000);
+            conflictRetryRef.current = 0;
+          }
         } else {
           toast("บันทึกไม่สำเร็จ กรุณาลองใหม่", "error", 5000);
         }
@@ -5459,6 +5483,14 @@ function RovAppInner() {
     const timer = setTimeout(runAutosave, 600); // debounce: wait 600ms after last change before saving
     return () => clearTimeout(timer);
   }, [app, runAutosave]);
+
+  // ── cleanup the conflict-retry timer on unmount ──
+  // runAutosave schedules its own setTimeout (see MAX_CONFLICT_RETRIES
+  // above) independent of the debounce effect's timer — needs its own
+  // cleanup so a scheduled retry never fires after this component is gone.
+  useEffect(() => {
+    return () => { if (conflictRetryTimerRef.current) clearTimeout(conflictRetryTimerRef.current); };
+  }, []);
 
   // ── sync HERO_DATA (module-level array) with custom heroes + role overrides ──
   // HERO_DATA is referenced directly (HERO_DATA.filter/.find) in many places
