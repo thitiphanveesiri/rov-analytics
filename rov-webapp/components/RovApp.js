@@ -166,18 +166,43 @@ function usePatchVersions() {
   return versions;
 }
 
+// ── parse a patch's effectiveFrom date safely, avoiding a timezone bug ──
+// effectiveFrom is entered as a bare date like "2026-08-24" (whatever an
+// <input type="date"> gives you). `new Date("2026-08-24")` parses that as
+// UTC MIDNIGHT — not midnight in the team's own timezone. For a team in
+// Thailand (UTC+7), that's a 7-hour gap: a match saved anywhere between
+// 00:00–07:00 Thai time on the patch's actual start date has a UTC
+// timestamp that's still on the PREVIOUS calendar day, so it silently
+// gets sorted into the previous patch's bucket instead of the new one —
+// even though by the team's own clock, it's clearly a "new patch" match.
+// Building the Date from (year, month, day) components instead always
+// uses the LOCAL timezone of whoever's browser runs this, matching what
+// a coach actually means by "this patch went live on this calendar day."
+// Only applies this special-case to bare YYYY-MM-DD strings — anything
+// that already carries time/timezone info (e.g. a full ISO timestamp) is
+// left alone and parsed normally, since it's already unambiguous.
+function parsePatchEffectiveFrom(dateStr) {
+  if (typeof dateStr !== "string") return new Date(dateStr);
+  const m = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) {
+    const [, y, mo, d] = m;
+    return new Date(Number(y), Number(mo) - 1, Number(d));
+  }
+  return new Date(dateStr);
+}
+
 function filterMatchesByPatch(matches, patchVersions, selectedPatch) {
   if (selectedPatch === "all" || !patchVersions.length) return matches;
-  const sorted = [...patchVersions].sort((a,b) => new Date(a.effectiveFrom) - new Date(b.effectiveFrom));
+  const sorted = [...patchVersions].sort((a,b) => parsePatchEffectiveFrom(a.effectiveFrom) - parsePatchEffectiveFrom(b.effectiveFrom));
 
   let from, to = Infinity;
   if (selectedPatch === "current") {
-    from = new Date(sorted[sorted.length-1].effectiveFrom).getTime();
+    from = parsePatchEffectiveFrom(sorted[sorted.length-1].effectiveFrom).getTime();
   } else {
     const idx = sorted.findIndex(v => v.version === selectedPatch);
     if (idx === -1) return matches; // เผื่อ patch ที่เลือกไว้โดนลบไปแล้ว
-    from = new Date(sorted[idx].effectiveFrom).getTime();
-    if (idx+1 < sorted.length) to = new Date(sorted[idx+1].effectiveFrom).getTime();
+    from = parsePatchEffectiveFrom(sorted[idx].effectiveFrom).getTime();
+    if (idx+1 < sorted.length) to = parsePatchEffectiveFrom(sorted[idx+1].effectiveFrom).getTime();
   }
   return matches.filter(m => m.id >= from && m.id < to);
 }

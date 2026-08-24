@@ -12,9 +12,24 @@ import { C, iStyle } from "@/lib/theme";
 import { HeroChip } from "@/components/shared/HeroChip";
 import { PlayerAvatar, PhotoPicker } from "@/components/shared/PlayerMedia";
 
+// ── same timezone-safe parser as filterMatchesByPatch in RovApp.js ──
+// effectiveFrom is a bare "YYYY-MM-DD" string; new Date() on that parses
+// as UTC midnight, not the team's local midnight — keeping this in sync
+// so the dropdown's idea of "current" patch never disagrees with what
+// the actual match filter treats as current.
+function parsePatchEffectiveFrom(dateStr) {
+  if (typeof dateStr !== "string") return new Date(dateStr);
+  const m = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) {
+    const [, y, mo, d] = m;
+    return new Date(Number(y), Number(mo) - 1, Number(d));
+  }
+  return new Date(dateStr);
+}
+
 export function PatchSelector({ versions, value, onChange }) {
   if (!versions.length) return null; // ยังไม่มีใคร log patch ไว้เลย — ไม่ต้องโชว์ dropdown ให้งง
-  const sorted = [...versions].sort((a,b) => new Date(b.effectiveFrom) - new Date(a.effectiveFrom)); // ใหม่→เก่า
+  const sorted = [...versions].sort((a,b) => parsePatchEffectiveFrom(b.effectiveFrom) - parsePatchEffectiveFrom(a.effectiveFrom)); // ใหม่→เก่า
   const current = sorted[0];
   return (
     <select value={value} onChange={e=>onChange(e.target.value)}
