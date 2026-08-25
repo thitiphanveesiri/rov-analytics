@@ -13,6 +13,7 @@
 // file, and the parent page owns the crop modal / upload / dispatch,
 // exactly like the original Rival page did with `cropRivalLogo` state.
 
+import { useState } from "react";
 import { C } from "@/lib/theme";
 
 export function TeamCard({
@@ -29,13 +30,23 @@ export function TeamCard({
   deleteLabel = "🗑️ ลบทีมนี้",
   deleteConfirmMessage,
 }) {
+  // ── hover state managed by React, not direct DOM mutation ──
+  // Same fix as RosterPlayerCard: setting `.style.transform` imperatively
+  // in onMouseEnter/onMouseLeave bypasses React's style reconciliation, so
+  // a stale `transform` can survive into a differently-shaped re-render
+  // and accidentally turn this card into a CSS containing block for any
+  // `position:fixed` descendant. Driving it from state means React always
+  // renders the correct value, every time, no matter what else changes.
+  const [hovered, setHovered] = useState(false);
   return (
     <div
       style={{borderRadius:16,overflow:"hidden",
         border:`1px solid ${C.border}`,
+        transform:hovered?"translateY(-3px)":"none",
+        boxShadow:hovered?`0 8px 28px ${accentColor}30`:"none",
         transition:"transform 0.15s, box-shadow 0.15s"}}
-      onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.boxShadow=`0 8px 28px ${accentColor}30`;}}
-      onMouseLeave={e=>{e.currentTarget.style.transform="none";e.currentTarget.style.boxShadow="none";}}>
+      onMouseEnter={()=>setHovered(true)}
+      onMouseLeave={()=>setHovered(false)}>
 
       {/* ── COVER ZONE — คลิกเข้าหน้า detail ── */}
       <div onClick={onClick}

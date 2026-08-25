@@ -43,6 +43,10 @@ const MyStatsPage = dynamic(
   () => import("@/components/shared/MyStatsPage").then(m => m.MyStatsPage),
   { loading: LazyLoadingPlaceholder, ssr: false }
 );
+const HelpPage = dynamic(
+  () => import("@/components/shared/HelpPage").then(m => m.HelpPage),
+  { loading: LazyLoadingPlaceholder, ssr: false }
+);
 const AnalyticsPage = dynamic(
   () => import("@/components/shared/Analytics").then(m => m.AnalyticsPage),
   { loading: LazyLoadingPlaceholder, ssr: false }
@@ -5813,6 +5817,7 @@ function RovAppInner() {
     {id:"video",   icon:"🎬",label:"Video"},
     {id:"board",   icon:"🗺️",label:"Whiteboard"},
     {id:"heroimg", icon:"🦸",label:"Hero Images"},
+    {id:"help",    icon:"❓",label:"Help"},
     {id:"admin",   icon:"⚙️",label:"Admin",    adminOnly:true},
   ];
 
@@ -6067,6 +6072,11 @@ function RovAppInner() {
         onDelete={id=>dispatchApp({type:"DELETE_SCHEDULE",payload:id})}
       />}
       {page==="admin" && isAdmin && <AdminPanel session={session}/>}
+      {page==="help" && (
+        <div style={{padding:"16px 28px",maxWidth:900,margin:"0 auto"}}>
+          <HelpPage/>
+        </div>
+      )}
 
       {page!=="draft" && page!=="board" && (
         <div style={{padding:28,maxWidth:1300,margin:"0 auto"}}>

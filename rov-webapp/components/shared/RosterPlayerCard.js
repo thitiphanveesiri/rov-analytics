@@ -54,6 +54,23 @@ export function RosterPlayerCard({ player, photoUrl, pg, pw, pwr, top, onSelect,
   const [editing, setEditing] = useState(false);
   const [nameVal, setNameVal] = useState(player);
   const [error,   setError]   = useState("");
+  // ── hover state, managed by React (not direct DOM mutation) ──
+  // Previously the hover effect set `.style.transform` imperatively via
+  // onMouseEnter/onMouseLeave, bypassing React's own style reconciliation.
+  // That leftover `transform` would silently survive a re-render into
+  // "editing" mode (a totally different JSX branch that never mentions
+  // transform at all) because React only clears style properties it
+  // itself is tracking — it has no way to know about a value some other
+  // code poked directly onto the DOM node. A stuck `transform` on this
+  // card turns it into a CSS "containing block" for any `position:fixed`
+  // descendant — including the crop modal opened by <PhotoPicker> right
+  // below in the editing view — which is exactly what broke it (the
+  // modal rendered squished/mispositioned instead of full-screen).
+  // Driving the transform from state instead means React always knows
+  // the correct value for every render, including "editing" mode (which
+  // simply omits `transform` from its own style object, letting React
+  // correctly clear it).
+  const [hovered, setHovered] = useState(false);
 
   const isEnemy      = team === "enemy";
   const accentCol    = isEnemy ? C.lose : C.primaryLight;
@@ -103,11 +120,13 @@ export function RosterPlayerCard({ player, photoUrl, pg, pw, pwr, top, onSelect,
 
   return (
     <div onClick={onSelect}
-      style={{background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:16,
+      style={{background:C.bgPanel,border:`1px solid ${hovered?borderHover:C.border}`,borderRadius:16,
         overflow:"hidden",cursor:"pointer",display:"flex",flexDirection:"column",
-        transition:"transform 0.15s, box-shadow 0.15s"}}
-      onMouseEnter={e=>{e.currentTarget.style.borderColor=borderHover;e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.boxShadow=`0 8px 24px ${borderHover}25`;}}
-      onMouseLeave={e=>{e.currentTarget.style.borderColor=C.border;e.currentTarget.style.transform="none";e.currentTarget.style.boxShadow="none";}}>
+        transform:hovered?"translateY(-3px)":"none",
+        boxShadow:hovered?`0 8px 24px ${borderHover}25`:"none",
+        transition:"transform 0.15s, box-shadow 0.15s, border-color 0.15s"}}
+      onMouseEnter={()=>setHovered(true)}
+      onMouseLeave={()=>setHovered(false)}>
 
       {/* ── Cover zone — full-bleed player photo, same treatment as
            TeamCard's logo cover (object-fit:cover, gradient placeholder
