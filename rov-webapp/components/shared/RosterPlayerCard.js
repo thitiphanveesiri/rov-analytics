@@ -10,7 +10,7 @@
 import { useState } from "react";
 import { C, iStyle } from "@/lib/theme";
 import { HeroChip } from "@/components/shared/HeroChip";
-import { PlayerAvatar, PhotoPicker } from "@/components/shared/PlayerMedia";
+import { PhotoPicker } from "@/components/shared/PlayerMedia";
 
 // ── same timezone-safe parser as filterMatchesByPatch in RovApp.js ──
 // effectiveFrom is a bare "YYYY-MM-DD" string; new Date() on that parses
@@ -109,26 +109,49 @@ export function RosterPlayerCard({ player, photoUrl, pg, pw, pwr, top, onSelect,
       onMouseEnter={e=>{e.currentTarget.style.borderColor=borderHover;e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.boxShadow=`0 8px 24px ${borderHover}25`;}}
       onMouseLeave={e=>{e.currentTarget.style.borderColor=C.border;e.currentTarget.style.transform="none";e.currentTarget.style.boxShadow="none";}}>
 
-      {/* ── Photo zone ── */}
-      <div style={{position:"relative",padding:"20px 0 12px",display:"flex",
-        flexDirection:"column",alignItems:"center",
-        background:`linear-gradient(135deg,${accentCol}18,transparent)`}}>
-        <PlayerAvatar name={player} photoUrl={photoUrl} size={72} team={team}/>
-        <div style={{fontWeight:800,fontSize:16,marginTop:10,textAlign:"center",padding:"0 10px"}}>{player}</div>
-        {top ? (
-          <div style={{display:"flex",alignItems:"center",gap:5,marginTop:6}}>
-            <HeroChip name={top[0]} size={18} fontSize={11} accentCol={isEnemy?C.lose:undefined}/>
-            <span style={{fontSize:10,color:C.textMuted}}>({top[1]} เกม)</span>
+      {/* ── Cover zone — full-bleed player photo, same treatment as
+           TeamCard's logo cover (object-fit:cover, gradient placeholder
+           with initials when no photo, name/info overlaid at the bottom
+           via a dark gradient) instead of a small floating circular
+           avatar. ── */}
+      <div style={{position:"relative",height:150,overflow:"hidden",userSelect:"none"}}>
+        {photoUrl
+          ? <img src={photoUrl} alt={player}
+              style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
+          : <div style={{width:"100%",height:"100%",
+              background:`linear-gradient(135deg,${accentCol}60,${C.primaryLight}30)`,
+              display:"flex",alignItems:"center",justifyContent:"center"}}>
+              <span style={{fontSize:48,fontWeight:900,color:"rgba(255,255,255,0.25)",
+                letterSpacing:-2}}>
+                {(player||"?").slice(0,2).toUpperCase()}
+              </span>
+            </div>
+        }
+
+        {/* Gradient overlay ด้านล่าง เพื่อให้ชื่อ/ฮีโร่อ่านออก */}
+        <div style={{position:"absolute",bottom:0,left:0,right:0,
+          background:"linear-gradient(to top,rgba(0,0,0,0.85) 0%,rgba(0,0,0,0.3) 60%,transparent 100%)",
+          padding:"10px 12px 10px"}}>
+          <div style={{fontWeight:900,fontSize:15,color:"#fff",
+            lineHeight:1.2,textShadow:"0 1px 6px rgba(0,0,0,0.8)"}}>
+            {player}
           </div>
-        ) : (
-          <div style={{fontSize:11,color:C.textMuted,marginTop:6}}>ยังไม่มีข้อมูล</div>
-        )}
+          {top ? (
+            <div style={{display:"flex",alignItems:"center",gap:5,marginTop:4}}>
+              <HeroChip name={top[0]} size={16} fontSize={10} textCol="rgba(255,255,255,0.85)" accentCol={isEnemy?C.lose:undefined}/>
+              <span style={{fontSize:9,color:"rgba(255,255,255,0.6)"}}>({top[1]} เกม)</span>
+            </div>
+          ) : (
+            <div style={{fontSize:10,color:"rgba(255,255,255,0.5)",marginTop:4}}>ยังไม่มีข้อมูล</div>
+          )}
+        </div>
 
         {/* Win rate badge มุมขวาบน — ตำแหน่ง/สไตล์เดียวกับ TeamCard */}
         <div style={{position:"absolute",top:10,right:10,
-          background:pg===0?C.bgCard:winStatCol,
-          color:pg===0?C.textMuted:"#fff",borderRadius:99,
-          padding:"3px 10px",fontSize:11,fontWeight:900}}>
+          background:pg===0?"rgba(0,0,0,0.5)":winStatCol,
+          color:"#fff",borderRadius:99,
+          padding:"3px 10px",fontSize:11,fontWeight:900,
+          backdropFilter:"blur(4px)"}}>
           {pg?`${pwr}%`:"—"}
         </div>
       </div>
