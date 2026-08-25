@@ -80,65 +80,88 @@ export function RosterPlayerCard({ player, photoUrl, pg, pw, pwr, top, onSelect,
   if (editing) {
     return (
       <div onClick={e=>e.stopPropagation()}
-        style={{background:C.bgPanel,border:`1px solid ${borderHover}`,borderRadius:12,
-          padding:"14px 20px",display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
-        <PhotoPicker value={photoUrl} onChange={onSetPhoto} size={48} team={team}/>
-        <div style={{flex:1,minWidth:160}}>
+        style={{background:C.bgPanel,border:`1px solid ${borderHover}`,borderRadius:16,
+          padding:16,display:"flex",flexDirection:"column",alignItems:"center",gap:10}}>
+        <PhotoPicker value={photoUrl} onChange={onSetPhoto} size={56} team={team}/>
+        <div style={{width:"100%"}}>
           <input autoFocus value={nameVal} onChange={e=>{setNameVal(e.target.value);setError("");}}
             onKeyDown={e=>{ if(e.key==="Enter") save(e); if(e.key==="Escape") setEditing(false); }}
-            style={{...iStyle,width:"100%"}}/>
-          {error && <div style={{fontSize:11,color:C.lose,marginTop:4}}>{error}</div>}
+            style={{...iStyle,width:"100%",textAlign:"center"}}/>
+          {error && <div style={{fontSize:11,color:C.lose,marginTop:4,textAlign:"center"}}>{error}</div>}
         </div>
-        <button onClick={save}
-          style={{background:C.win,color:"#fff",border:"none",borderRadius:8,
-            padding:"8px 16px",fontWeight:700,cursor:"pointer",fontSize:12}}>✓ บันทึก</button>
-        <button onClick={e=>{e.stopPropagation();setEditing(false);}}
-          style={{background:"transparent",border:`1px solid ${C.border}`,color:C.textMuted,
-            borderRadius:8,padding:"8px 14px",fontWeight:700,cursor:"pointer",fontSize:12}}>ยกเลิก</button>
+        <div style={{display:"flex",gap:8,width:"100%"}}>
+          <button onClick={save}
+            style={{flex:1,background:C.win,color:"#fff",border:"none",borderRadius:8,
+              padding:"8px 0",fontWeight:700,cursor:"pointer",fontSize:12}}>✓ บันทึก</button>
+          <button onClick={e=>{e.stopPropagation();setEditing(false);}}
+            style={{flex:1,background:"transparent",border:`1px solid ${C.border}`,color:C.textMuted,
+              borderRadius:8,padding:"8px 0",fontWeight:700,cursor:"pointer",fontSize:12}}>ยกเลิก</button>
+        </div>
       </div>
     );
   }
 
   return (
     <div onClick={onSelect}
-      style={{background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:12,
-        padding:"14px 20px",display:"flex",alignItems:"center",
-        justifyContent:"space-between",cursor:"pointer"}}
-      onMouseEnter={e=>e.currentTarget.style.borderColor=borderHover}
-      onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
-      <div style={{display:"flex",alignItems:"center",gap:14}}>
-        <PlayerAvatar name={player} photoUrl={photoUrl} size={48} team={team}/>
-        <div>
-          <div style={{fontWeight:800,fontSize:16}}>{player}</div>
-          {top ? (
-            <div style={{display:"flex",alignItems:"center",gap:5,marginTop:4}}>
-              <span style={{fontSize:11,color:C.textMuted}}>Main:</span>
-              <HeroChip name={top[0]} size={18} fontSize={11} accentCol={isEnemy?C.lose:undefined}/>
-              <span style={{fontSize:10,color:C.textMuted}}>({top[1]} เกม)</span>
-            </div>
-          ) : (
-            <div style={{fontSize:12,color:C.textMuted,marginTop:3}}>ยังไม่มีข้อมูล</div>
-          )}
+      style={{background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:16,
+        overflow:"hidden",cursor:"pointer",display:"flex",flexDirection:"column",
+        transition:"transform 0.15s, box-shadow 0.15s"}}
+      onMouseEnter={e=>{e.currentTarget.style.borderColor=borderHover;e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.boxShadow=`0 8px 24px ${borderHover}25`;}}
+      onMouseLeave={e=>{e.currentTarget.style.borderColor=C.border;e.currentTarget.style.transform="none";e.currentTarget.style.boxShadow="none";}}>
+
+      {/* ── Photo zone ── */}
+      <div style={{position:"relative",padding:"20px 0 12px",display:"flex",
+        flexDirection:"column",alignItems:"center",
+        background:`linear-gradient(135deg,${accentCol}18,transparent)`}}>
+        <PlayerAvatar name={player} photoUrl={photoUrl} size={72} team={team}/>
+        <div style={{fontWeight:800,fontSize:16,marginTop:10,textAlign:"center",padding:"0 10px"}}>{player}</div>
+        {top ? (
+          <div style={{display:"flex",alignItems:"center",gap:5,marginTop:6}}>
+            <HeroChip name={top[0]} size={18} fontSize={11} accentCol={isEnemy?C.lose:undefined}/>
+            <span style={{fontSize:10,color:C.textMuted}}>({top[1]} เกม)</span>
+          </div>
+        ) : (
+          <div style={{fontSize:11,color:C.textMuted,marginTop:6}}>ยังไม่มีข้อมูล</div>
+        )}
+
+        {/* Win rate badge มุมขวาบน — ตำแหน่ง/สไตล์เดียวกับ TeamCard */}
+        <div style={{position:"absolute",top:10,right:10,
+          background:pg===0?C.bgCard:winStatCol,
+          color:pg===0?C.textMuted:"#fff",borderRadius:99,
+          padding:"3px 10px",fontSize:11,fontWeight:900}}>
+          {pg?`${pwr}%`:"—"}
         </div>
       </div>
-      <div style={{display:"flex",gap:14,alignItems:"center"}}>
+
+      {/* ── Stats row ── */}
+      <div style={{display:"flex",justifyContent:"center",gap:24,padding:"10px 10px 14px",
+        borderTop:`1px solid ${C.border}`,borderBottom:`1px solid ${C.border}`}}>
         <div style={{textAlign:"center"}}>
-          <div style={{fontSize:18,fontWeight:800}}>{pg}</div>
-          <div style={{fontSize:10,color:C.textMuted}}>GAMES</div>
+          <div style={{fontSize:16,fontWeight:800}}>{pg}</div>
+          <div style={{fontSize:9,color:C.textMuted}}>GAMES</div>
         </div>
-        <div style={{textAlign:"center",minWidth:52}}>
-          <div style={{fontSize:18,fontWeight:800,color:winStatCol}}>
-            {pg?`${pwr}%`:"-"}</div>
-          <div style={{fontSize:10,color:C.textMuted}}>{pw}W-{pg-pw}L</div>
+        <div style={{textAlign:"center"}}>
+          <div style={{fontSize:16,fontWeight:800,color:winStatCol}}>{pw}-{pg-pw}</div>
+          <div style={{fontSize:9,color:C.textMuted}}>W-L</div>
         </div>
-        <span style={{fontSize:12,color:accentCol}}>ดู Profile →</span>
+      </div>
+
+      {/* ── Actions ── */}
+      <div style={{display:"flex",gap:6,padding:"8px 10px"}}>
         <button onClick={startEdit} title="แก้ไขชื่อ/รูป"
-          style={{background:accentCol+"20",color:accentCol,border:"none",
-            width:34,height:34,borderRadius:8,cursor:"pointer",fontSize:14}}>✏️</button>
+          style={{flex:1,background:"transparent",color:accentCol,
+            border:`1px solid ${accentCol}30`,borderRadius:7,
+            padding:"6px 0",cursor:"pointer",fontSize:11,fontWeight:700}}>
+          ✏️ แก้ไข
+        </button>
         <button
           onClick={e=>{e.stopPropagation();onRemove();}}
-          style={{background:C.lose+"20",color:C.lose,border:"none",
-            width:34,height:34,borderRadius:8,cursor:"pointer",fontSize:14}}>🗑️</button>
+          title="ลบผู้เล่นนี้"
+          style={{flex:1,background:"transparent",color:C.lose,
+            border:`1px solid ${C.lose}30`,borderRadius:7,
+            padding:"6px 0",cursor:"pointer",fontSize:11,fontWeight:700}}>
+          🗑️ ลบ
+        </button>
       </div>
     </div>
   );

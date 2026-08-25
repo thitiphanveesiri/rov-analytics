@@ -12,7 +12,8 @@ import { C, iStyle } from "@/lib/theme";
 import { HeroCard, HeroChip } from "@/components/shared/HeroChip";
 import { PlayerAvatar, PhotoPicker, ImageCropModal } from "@/components/shared/PlayerMedia";
 import { ToastProvider, useToast } from "@/lib/toast";
-import { LogoImg, LogoUploader } from "@/components/shared/TeamLogo";
+import { LogoImg } from "@/components/shared/TeamLogo";
+import { TeamCard } from "@/components/shared/TeamCard";
 import { NoTeamScreen } from "@/components/shared/NoTeamScreen";
 import { PerformanceTrend, CoachNotesHub } from "@/components/shared/PerformanceTrend";
 import { HeroImageManager, HeroAvatar } from "@/components/shared/HeroImageManager";
@@ -5700,6 +5701,7 @@ function RovAppInner() {
   const [showAddRival,        setShowAddRival]         = useState(false);
   const [newRivalName,        setNewRivalName]         = useState("");
   const [cropRivalLogo,       setCropRivalLogo]        = useState(null); // { name, file } — modal state for rival logo cropping
+  const [cropOurLogo,         setCropOurLogo]           = useState(null); // { file } — same idea, for "ทีมเรา" logo on the Roster page
 
   const handleAddPlayer = useCallback(() => {
     const name = ui.newName.trim();
@@ -5850,6 +5852,47 @@ function RovAppInner() {
   return (
     <HeroPhotosContext.Provider value={app.heroPhotos || {}}>
     <div style={{minHeight:"100vh",background:C.bgBase,color:C.textMain,fontFamily:"'Segoe UI',sans-serif"}}>
+
+      {/* ── Rival logo crop modal — hoisted here (not page-specific) since both
+           the Rival page AND the Roster page's rival cards can trigger a logo
+           change; cropRivalLogo state is shared regardless of which page is
+           currently active. ── */}
+      {cropRivalLogo && (
+        <ImageCropModal file={cropRivalLogo.file} title={`ปรับโลโก้ ${cropRivalLogo.name}`}
+          onConfirm={async (blob) => {
+            const { name, file } = cropRivalLogo;
+            setCropRivalLogo(null);
+            try {
+              if (blob.size > 1.5*1024*1024) { toast("ไฟล์ใหญ่เกิน 1.5MB", "error"); return; }
+              const compressed = await compressImage(blob);
+              const uploaded = await upload("logo.jpg", compressed, { access:"public", handleUploadUrl:"/api/upload" });
+              dispatchApp({ type:"SET_RIVAL_LOGO", payload:{ name, url: uploaded.url } });
+              const oldUrl = app.rivalLogos?.[name];
+              if (oldUrl && oldUrl !== uploaded.url) deleteBlobUrls(oldUrl);
+            } catch { toast("อัพโหลดไม่สำเร็จ", "error"); }
+          }}
+          onCancel={()=>setCropRivalLogo(null)}
+        />
+      )}
+
+      {/* ── Our team's logo crop modal — same pattern as the rival one above,
+           used by the "ทีมเรา" TeamCard on the Roster page. ── */}
+      {cropOurLogo && (
+        <ImageCropModal file={cropOurLogo.file} title="ปรับโลโก้ทีมเรา"
+          onConfirm={async (blob) => {
+            setCropOurLogo(null);
+            try {
+              if (blob.size > 1.5*1024*1024) { toast("ไฟล์ใหญ่เกิน 1.5MB", "error"); return; }
+              const compressed = await compressImage(blob);
+              const uploaded = await upload("logo.jpg", compressed, { access:"public", handleUploadUrl:"/api/upload" });
+              const oldUrl = app.teamLogo;
+              dispatchApp({ type:"SET_TEAM_LOGO", payload: uploaded.url });
+              if (oldUrl && oldUrl !== uploaded.url) deleteBlobUrls(oldUrl);
+            } catch { toast("อัพโหลดไม่สำเร็จ", "error"); }
+          }}
+          onCancel={()=>setCropOurLogo(null)}
+        />
+      )}
 
       {/* NAV */}
       <div style={{background:"linear-gradient(90deg,#12072a,#0a0a16)",borderBottom:`1px solid ${C.border}`,
@@ -6412,23 +6455,6 @@ function RovAppInner() {
           {/* ═══ RIVALS ═══ */}
           {page==="rivals" && (
             <div>
-              {cropRivalLogo && (
-                <ImageCropModal file={cropRivalLogo.file} title={`ปรับโลโก้ ${cropRivalLogo.name}`}
-                  onConfirm={async (blob) => {
-                    const { name, file } = cropRivalLogo;
-                    setCropRivalLogo(null);
-                    try {
-                      if (blob.size > 1.5*1024*1024) { toast("ไฟล์ใหญ่เกิน 1.5MB", "error"); return; }
-                      const compressed = await compressImage(blob);
-                      const uploaded = await upload("logo.jpg", compressed, { access:"public", handleUploadUrl:"/api/upload" });
-                      dispatchApp({ type:"SET_RIVAL_LOGO", payload:{ name, url: uploaded.url } });
-                      const oldUrl = app.rivalLogos?.[name];
-                      if (oldUrl && oldUrl !== uploaded.url) deleteBlobUrls(oldUrl);
-                    } catch { toast("อัพโหลดไม่สำเร็จ", "error"); }
-                  }}
-                  onCancel={()=>setCropRivalLogo(null)}
-                />
-              )}
               {!selRival ? (
                 <>
                   <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6,flexWrap:"wrap"}}>
@@ -6487,92 +6513,19 @@ function RovAppInner() {
                           const rw=rGames.filter(g=>g.result==="WIN").length;
                           const rwrate=rGames.length?Math.round(rw/rGames.length*100):0;
                           return (
-                            <div key={rv.id}
-                              style={{borderRadius:16,overflow:"hidden",
-                                border:`1px solid ${C.border}`,
-                                transition:"transform 0.15s, box-shadow 0.15s"}}
-                              onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.boxShadow=`0 8px 28px ${C.primary}30`;}}
-                              onMouseLeave={e=>{e.currentTarget.style.transform="none";e.currentTarget.style.boxShadow="none";}}>
-
-                              {/* ── COVER ZONE — คลิกเข้าหน้า detail ── */}
-                              <div onClick={()=>dispatchUI({type:"SET_SEL_RIVAL",payload:rv.name})}
-                                style={{cursor:"pointer",position:"relative",
-                                  height:180,overflow:"hidden",userSelect:"none"}}>
-
-                                {/* Background: logo เต็มกรอบ */}
-                                {app.rivalLogos?.[rv.name]
-                                  ? <img src={app.rivalLogos[rv.name]} alt={rv.name}
-                                      style={{width:"100%",height:"100%",objectFit:"cover",
-                                        display:"block",filter:"brightness(0.75)"}}/>
-                                  : <div style={{width:"100%",height:"100%",
-                                      background:`linear-gradient(135deg,${C.primary}60,${C.primaryLight}30)`,
-                                      display:"flex",alignItems:"center",justifyContent:"center"}}>
-                                      <span style={{fontSize:56,fontWeight:900,color:"rgba(255,255,255,0.25)",
-                                        letterSpacing:-2}}>
-                                        {rv.name.slice(0,2).toUpperCase()}
-                                      </span>
-                                    </div>
-                                }
-
-                                {/* Gradient overlay ด้านล่าง เพื่อให้ชื่ออ่านออก */}
-                                <div style={{position:"absolute",bottom:0,left:0,right:0,
-                                  background:"linear-gradient(to top,rgba(0,0,0,0.85) 0%,rgba(0,0,0,0.3) 60%,transparent 100%)",
-                                  padding:"12px 12px 12px"
-                                }}>
-                                  <div style={{fontWeight:900,fontSize:15,color:"#fff",
-                                    lineHeight:1.2,textShadow:"0 1px 6px rgba(0,0,0,0.8)"}}>
-                                    {rv.name}
-                                  </div>
-                                  <div style={{fontSize:10,color:"rgba(255,255,255,0.65)",marginTop:2}}>
-                                    {rm.length} session · {rGames.length} เกม
-                                  </div>
-                                </div>
-
-                                {/* Win rate badge มุมขวาบน */}
-                                <div style={{position:"absolute",top:10,right:10,
-                                  background:rGames.length===0?"rgba(0,0,0,0.5)":rwrate>=50?"rgba(0,184,148,0.85)":"rgba(253,121,168,0.85)",
-                                  color:"#fff",borderRadius:99,
-                                  padding:"3px 10px",fontSize:11,fontWeight:900,
-                                  backdropFilter:"blur(4px)"}}>
-                                  {rGames.length===0?"—":`${rwrate}%`}
-                                </div>
-                              </div>
-
-                              {/* ── BOTTOM: actions ── */}
-                              <div style={{background:C.bgPanel,padding:"8px 10px",
-                                display:"flex",flexDirection:"column",gap:5}}>
-                                {isCoach&&(
-                                  <div onClick={e=>e.stopPropagation()}>
-                                    <label style={{display:"flex",alignItems:"center",gap:6,
-                                      cursor:"pointer",background:C.primary+"15",
-                                      border:`1px solid ${C.primary}30`,borderRadius:7,
-                                      padding:"5px 10px",fontSize:10,fontWeight:700,color:C.primaryLight}}>
-                                      📸 {app.rivalLogos?.[rv.name]?"เปลี่ยนโลโก้":"อัพโหลดโลโก้"}
-                                      <input type="file" accept="image/*"
-                                        style={{display:"none"}}
-                                        onChange={e=>{
-                                          const file=e.target.files?.[0];
-                                          if(!file) return;
-                                          setCropRivalLogo({ name: rv.name, file });
-                                          e.target.value="";
-                                        }}/>
-                                    </label>
-                                  </div>
-                                )}
-                                <button
-                                  onClick={e=>{
-                                    e.stopPropagation();
-                                    if(window.confirm(`ลบทีม "${rv.name}" ออกจาก Rivals?`))
-                                      dispatchApp({type:"DELETE_RIVAL",payload:rv.name});
-                                  }}
-                                  style={{width:"100%",background:"transparent",
-                                    border:`1px solid ${C.lose}25`,color:C.lose,
-                                    borderRadius:7,padding:"4px 0",cursor:"pointer",
-                                    fontSize:10,fontWeight:700,opacity:0.55}}>
-                                  🗑️ ลบทีมนี้
-                                </button>
-                              </div>
-                            </div>
+                            <TeamCard key={rv.id}
+                              name={rv.name}
+                              logoUrl={app.rivalLogos?.[rv.name]}
+                              sessionCount={rm.length}
+                              gameCount={rGames.length}
+                              winRatePct={rwrate}
+                              onClick={()=>dispatchUI({type:"SET_SEL_RIVAL",payload:rv.name})}
+                              onPickLogoFile={file=>setCropRivalLogo({ name: rv.name, file })}
+                              onDelete={()=>dispatchApp({type:"DELETE_RIVAL",payload:rv.name})}
+                              deleteConfirmMessage={`ลบทีม "${rv.name}" ออกจาก Rivals?`}
+                              isCoach={isCoach}
+                              accentColor={C.lose}
+                            />
                           );
                         })}
                       </div>
@@ -6797,22 +6750,9 @@ function RovAppInner() {
                 />
               ) : (
                 <>
-                  <div style={{display:"flex",alignItems:"center",gap:16,marginBottom:16}}>
-                    <LogoImg url={app.teamLogo} name={app.teamName||"ทีมเรา"} size={72}
-                      style={{border:`3px solid ${C.primary}40`}}/>
-                    <div>
-                      <h2 style={{margin:"0 0 4px",fontSize:24,fontWeight:800}}>👥 Roster</h2>
-                      <p style={{margin:"0 0 8px",color:C.textMuted,fontSize:13}}>คลิกที่ผู้เล่นเพื่อดู Player Profile</p>
-                      {isCoach&&(
-                        <LogoUploader
-                          label="โลโก้ทีมเรา"
-                          currentUrl={app.teamLogo}
-                          onUpload={url=>dispatchApp({type:"SET_TEAM_LOGO",payload:url})}
-                          onRemove={()=>dispatchApp({type:"SET_TEAM_LOGO",payload:null})}
-                          size={36}
-                        />
-                      )}
-                    </div>
+                  <div style={{marginBottom:16}}>
+                    <h2 style={{margin:"0 0 4px",fontSize:24,fontWeight:800}}>👥 Roster</h2>
+                    <p style={{margin:0,color:C.textMuted,fontSize:13}}>คลิกที่ผู้เล่นเพื่อดู Player Profile</p>
                   </div>
                   <div style={{display:"flex",gap:4,background:C.bgBase,borderRadius:10,padding:4,
                     marginBottom:20,width:"fit-content",border:`1px solid ${C.border}`}}>
@@ -6829,6 +6769,18 @@ function RovAppInner() {
 
                   {rosterTab==="our" && (
                     <>
+                      <div style={{maxWidth:280,marginBottom:20}}>
+                        <TeamCard
+                          name={app.teamName||"ทีมเรา"}
+                          logoUrl={app.teamLogo}
+                          sessionCount={patchFilteredMatches.length}
+                          gameCount={allGames.length}
+                          winRatePct={allGames.length ? Math.round(allGames.filter(g=>g.result==="WIN").length/allGames.length*100) : 0}
+                          onPickLogoFile={file=>setCropOurLogo({ file })}
+                          isCoach={isCoach}
+                          accentColor={C.primary}
+                        />
+                      </div>
                       <div style={{display:"flex",gap:14,alignItems:"center",marginBottom:16,background:C.bgPanel,
                         padding:16,borderRadius:14,border:`1px solid ${C.border}`}}>
                         <PhotoPicker value={newPlayerPhoto} onChange={(v)=>setNewPlayerPhoto(v)} size={56} team="our"/>
@@ -6840,7 +6792,7 @@ function RovAppInner() {
                           style={{background:C.primary,color:"#fff",border:"none",borderRadius:8,
                             padding:"0 22px",fontWeight:700,cursor:"pointer",alignSelf:"stretch"}}>+ เพิ่ม</button>
                       </div>
-                      <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:14}}>
                         {roster.map(player=>{
                           let pg=0,pw=0; const ph={};
                           allGames.forEach(g=>{
@@ -6883,30 +6835,26 @@ function RovAppInner() {
                               ยังไม่มีทีมคู่แข่ง — บันทึกแมตช์ก่อนนะครับ
                             </div>
                           )}
-                          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:12}}>
+                          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:14}}>
                             {rivals.map(rv=>{
-                              const ep=enemyRosters[rv.name]||[];
-                              const rGames=allGames.filter(g=>g.rivalName===rv.name);
+                              const rm=patchFilteredMatches.filter(m=>m.rivalName===rv.name);
+                              const rGames=rm.flatMap(m=>Array.isArray(m.games)&&m.games.length?m.games:[m]);
                               const rw=rGames.filter(g=>g.result==="WIN").length;
                               const rwr=rGames.length?Math.round(rw/rGames.length*100):0;
                               return (
-                                <div key={rv.id}
+                                <TeamCard key={rv.id}
+                                  name={rv.name}
+                                  logoUrl={app.rivalLogos?.[rv.name]}
+                                  sessionCount={rm.length}
+                                  gameCount={rGames.length}
+                                  winRatePct={rwr}
                                   onClick={()=>dispatchUI({type:"SET_SEL_ENEMY_TEAM",payload:rv.name})}
-                                  style={{background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:12,padding:"16px 18px",cursor:"pointer"}}
-                                  onMouseEnter={e=>e.currentTarget.style.borderColor=C.lose}
-                                  onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
-                                  <div style={{fontWeight:800,fontSize:16,color:C.primaryLight,marginBottom:4}}>{rv.name}</div>
-                                  <div style={{fontSize:11,color:C.textMuted,marginBottom:8}}>
-                                    {ep.length} ผู้เล่น · {rGames.length} เกม · WR {rGames.length?`${rwr}%`:"-"}
-                                  </div>
-                                  <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
-                                    {ep.slice(0,5).map(p=>(
-                                      <span key={p} style={{background:C.lose+"20",color:C.lose,fontSize:10,padding:"2px 8px",borderRadius:99,fontWeight:700}}>{p}</span>
-                                    ))}
-                                    {ep.length>5&&<span style={{fontSize:10,color:C.textMuted}}>+{ep.length-5}</span>}
-                                    {ep.length===0&&<span style={{fontSize:10,color:"#3a3a5c"}}>ยังไม่มีผู้เล่น</span>}
-                                  </div>
-                                </div>
+                                  onPickLogoFile={file=>setCropRivalLogo({ name: rv.name, file })}
+                                  onDelete={()=>dispatchApp({type:"DELETE_RIVAL",payload:rv.name})}
+                                  deleteConfirmMessage={`ลบทีม "${rv.name}" ออกจาก Rivals?`}
+                                  isCoach={isCoach}
+                                  accentColor={C.lose}
+                                />
                               );
                             })}
                           </div>
@@ -6933,7 +6881,7 @@ function RovAppInner() {
                               + เพิ่ม
                             </button>
                           </div>
-                          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:14}}>
                             {(enemyRosters[selEnemyTeam]||[]).map(player=>{
                               let pg=0,pw=0; const ph={};
                               allGames.filter(g=>g.rivalName===selEnemyTeam).forEach(g=>{
