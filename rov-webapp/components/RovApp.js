@@ -1744,7 +1744,7 @@ function summarizePeriodByRange(matches, rangeStart, rangeEnd) {
   // this file (see the isBlueOur pattern in matchGameToBlueRed) so this
   // stays consistent with how blue/red is derived everywhere else.
   const heroDraftStats = {};
-  const bannedHeroNames = new Set();
+  const heroBanStats = {};
 
   function bumpHeroPick(name, side, won) {
     if (!name) return;
@@ -1755,20 +1755,36 @@ function summarizePeriodByRange(matches, rangeStart, rangeEnd) {
     else heroDraftStats[name].red++;
   }
 
+  // Bans don't have a win/loss of their own (a ban prevents the OTHER
+  // team from playing that hero — it isn't "won" or "lost" the way a
+  // pick is), so this only tracks how many times we banned each hero and
+  // which side we were on when we did it — same shape as picks, minus
+  // the win-rate column.
+  function bumpHeroBan(name, side) {
+    if (!name) return;
+    if (!heroBanStats[name]) heroBanStats[name] = { bans:0, blue:0, red:0 };
+    heroBanStats[name].bans++;
+    if (side === "blue") heroBanStats[name].blue++;
+    else heroBanStats[name].red++;
+  }
+
   current.forEach(g => {
     const ourSideLabel = g.ourSide === "red" ? "red" : "blue"; // default blue if not recorded
 
     (g.ourPicks||[]).forEach(p => bumpHeroPick(p.hero?.name, ourSideLabel, g.result==="WIN"));
-
-    (g.ourBans||[]).forEach(b => { const n = b?.name || b; if (n) bannedHeroNames.add(n); });
+    (g.ourBans||[]).forEach(b => bumpHeroBan(b?.name || b, ourSideLabel));
   });
 
   const heroDraftList = Object.entries(heroDraftStats)
     .map(([name,v]) => ({ name, picks:v.picks, wr: v.picks ? Math.round(v.wins/v.picks*100) : 0, blue:v.blue, red:v.red }))
     .sort((a,b) => b.picks - a.picks);
 
+  const heroBanList = Object.entries(heroBanStats)
+    .map(([name,v]) => ({ name, bans:v.bans, blue:v.blue, red:v.red }))
+    .sort((a,b) => b.bans - a.bans);
+
   const totalHeroesPicked = heroDraftList.length;
-  const totalHeroesBanned = bannedHeroNames.size;
+  const totalHeroesBanned = heroBanList.length;
 
   function teamCombatStats(games) {
     // รวมค่า damage/damageTaken/gold ของผู้เล่นทั้ง 5 คนต่อเกม แล้วเฉลี่ยเป็น
@@ -1832,7 +1848,7 @@ function summarizePeriodByRange(matches, rangeStart, rangeEnd) {
     wrDelta: cur.wr!=null && prev.wr!=null ? cur.wr-prev.wr : null,
     avgDurationDelta: cur.avgDuration!=null && prev.avgDuration!=null ? cur.avgDuration-prev.avgDuration : null,
     topHeroes, teamCombat, streak, streakType, players,
-    heroDraftList, totalHeroesPicked, totalHeroesBanned,
+    heroDraftList, heroBanList, totalHeroesPicked, totalHeroesBanned,
   };
 }
 
@@ -2039,6 +2055,7 @@ function DatePickerButton({ label, mode, value, onSelect }) {
 function PeriodSummaryCard({ title, dateRangeLabel, data, mode, pickerValue, onPickDate }) {
   const [showPlayers, setShowPlayers] = useState(false);
   const [showHeroDraft, setShowHeroDraft] = useState(false);
+  const [pickBanView, setPickBanView] = useState("pick"); // "pick" | "ban"
   const wrColor = data.wr==null ? C.textMuted : data.wr>=50 ? C.win : C.lose;
   return (
     <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:14,padding:18,flex:1,minWidth:280}}>
@@ -2123,30 +2140,74 @@ function PeriodSummaryCard({ title, dateRangeLabel, data, mode, pickerValue, onP
                   : `▼ ดู Pick/Ban ฮีโร่ทีมเรา (${data.totalHeroesPicked} ถูกเลือก · ${data.totalHeroesBanned} ถูกแบน)`}
               </button>
               {showHeroDraft && (
-                <div style={{marginTop:10,overflowX:"auto"}}>
-                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
-                    <thead>
-                      <tr style={{color:C.textMuted,textAlign:"left"}}>
-                        <th style={{padding:"4px 6px",fontWeight:700}}>ฮีโร่ (ทีมเรา)</th>
-                        <th style={{padding:"4px 6px",fontWeight:700,textAlign:"center"}}>Pick</th>
-                        <th style={{padding:"4px 6px",fontWeight:700,textAlign:"center"}}>Win Rate</th>
-                        <th style={{padding:"4px 6px",fontWeight:700,textAlign:"center"}}>🔵 Blue</th>
-                        <th style={{padding:"4px 6px",fontWeight:700,textAlign:"center"}}>🔴 Red</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {data.heroDraftList.map(h=>(
-                        <tr key={h.name} style={{borderTop:`1px solid ${C.border}`}}>
-                          <td style={{padding:"5px 6px"}}><HeroChip name={h.name} size={18} fontSize={11}/></td>
-                          <td style={{padding:"5px 6px",textAlign:"center",fontWeight:700}}>{h.picks}</td>
-                          <td style={{padding:"5px 6px",textAlign:"center",fontWeight:700,
-                            color:h.wr>=50?C.win:C.lose}}>{h.wr}%</td>
-                          <td style={{padding:"5px 6px",textAlign:"center",color:C.blue}}>{h.blue}</td>
-                          <td style={{padding:"5px 6px",textAlign:"center",color:C.red}}>{h.red}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                <div style={{marginTop:10}}>
+                  {/* ── Pick / Ban switcher ── */}
+                  <div style={{display:"flex",gap:4,background:C.bgBase,borderRadius:8,padding:3,
+                    marginBottom:10,border:`1px solid ${C.border}`}}>
+                    {[{id:"pick",label:`🎯 Pick (${data.totalHeroesPicked})`},{id:"ban",label:`🚫 Ban (${data.totalHeroesBanned})`}].map(t=>(
+                      <button key={t.id} onClick={()=>setPickBanView(t.id)}
+                        style={{flex:1,background:pickBanView===t.id?C.primary:"transparent",
+                          border:"none",color:pickBanView===t.id?"#fff":C.textMuted,
+                          borderRadius:6,padding:"6px 0",cursor:"pointer",fontWeight:700,fontSize:11}}>
+                        {t.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div style={{overflowX:"auto"}}>
+                    {pickBanView==="pick" ? (
+                      <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+                        <thead>
+                          <tr style={{color:C.textMuted,textAlign:"left"}}>
+                            <th style={{padding:"4px 6px",fontWeight:700}}>ฮีโร่ (ทีมเรา)</th>
+                            <th style={{padding:"4px 6px",fontWeight:700,textAlign:"center"}}>Pick</th>
+                            <th style={{padding:"4px 6px",fontWeight:700,textAlign:"center"}}>Win Rate</th>
+                            <th style={{padding:"4px 6px",fontWeight:700,textAlign:"center"}}>🔵 Blue</th>
+                            <th style={{padding:"4px 6px",fontWeight:700,textAlign:"center"}}>🔴 Red</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {data.heroDraftList.map(h=>(
+                            <tr key={h.name} style={{borderTop:`1px solid ${C.border}`}}>
+                              <td style={{padding:"5px 6px"}}><HeroChip name={h.name} size={18} fontSize={11}/></td>
+                              <td style={{padding:"5px 6px",textAlign:"center",fontWeight:700}}>{h.picks}</td>
+                              <td style={{padding:"5px 6px",textAlign:"center",fontWeight:700,
+                                color:h.wr>=50?C.win:C.lose}}>{h.wr}%</td>
+                              <td style={{padding:"5px 6px",textAlign:"center",color:C.blue}}>{h.blue}</td>
+                              <td style={{padding:"5px 6px",textAlign:"center",color:C.red}}>{h.red}</td>
+                            </tr>
+                          ))}
+                          {data.heroDraftList.length===0 && (
+                            <tr><td colSpan={5} style={{padding:"12px 6px",textAlign:"center",color:"#3a3a5c"}}>ยังไม่มีข้อมูลการ Pick ในช่วงนี้</td></tr>
+                          )}
+                        </tbody>
+                      </table>
+                    ) : (
+                      <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+                        <thead>
+                          <tr style={{color:C.textMuted,textAlign:"left"}}>
+                            <th style={{padding:"4px 6px",fontWeight:700}}>ฮีโร่ (ทีมเรา)</th>
+                            <th style={{padding:"4px 6px",fontWeight:700,textAlign:"center"}}>Ban</th>
+                            <th style={{padding:"4px 6px",fontWeight:700,textAlign:"center"}}>🔵 Blue</th>
+                            <th style={{padding:"4px 6px",fontWeight:700,textAlign:"center"}}>🔴 Red</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {data.heroBanList.map(h=>(
+                            <tr key={h.name} style={{borderTop:`1px solid ${C.border}`}}>
+                              <td style={{padding:"5px 6px"}}><HeroChip name={h.name} size={18} fontSize={11}/></td>
+                              <td style={{padding:"5px 6px",textAlign:"center",fontWeight:700}}>{h.bans}</td>
+                              <td style={{padding:"5px 6px",textAlign:"center",color:C.blue}}>{h.blue}</td>
+                              <td style={{padding:"5px 6px",textAlign:"center",color:C.red}}>{h.red}</td>
+                            </tr>
+                          ))}
+                          {data.heroBanList.length===0 && (
+                            <tr><td colSpan={4} style={{padding:"12px 6px",textAlign:"center",color:"#3a3a5c"}}>ยังไม่มีข้อมูลการ Ban ในช่วงนี้</td></tr>
+                          )}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
