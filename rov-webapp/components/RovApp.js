@@ -1627,9 +1627,22 @@ function summarizePlayers(games) {
       }
 
       if (heroName) {
-        if (!rec.heroTally[heroName]) rec.heroTally[heroName] = { games:0, wins:0 };
-        rec.heroTally[heroName].games++;
-        if (g.result==="WIN") rec.heroTally[heroName].wins++;
+        if (!rec.heroTally[heroName]) rec.heroTally[heroName] = {
+          games:0, wins:0, kills:0, deaths:0, assists:0,
+          damage:0, gold:0, damageTaken:0, minutesWithStats:0,
+        };
+        const ht = rec.heroTally[heroName];
+        ht.games++;
+        if (g.result==="WIN") ht.wins++;
+        if (stat) {
+          ht.kills += stat.kills||0;
+          ht.deaths += stat.deaths||0;
+          ht.assists += stat.assists||0;
+          ht.damage += stat.damage||0;
+          ht.gold += stat.gold||0;
+          ht.damageTaken += stat.damageTaken||0;
+          if (durMin) ht.minutesWithStats += durMin;
+        }
       }
     });
   });
@@ -1649,7 +1662,18 @@ function summarizePlayers(games) {
     const topHeroes = Object.entries(rec.heroTally)
       .sort((a,b)=>b[1].games-a[1].games)
       .slice(0,3)
-      .map(([name,v])=>({ name, games:v.games, wr: Math.round(v.wins/v.games*100) }));
+      .map(([name,v])=>({
+        name, games:v.games, wins:v.wins,
+        wr: Math.round(v.wins/v.games*100),
+        kda: fmtKDA(
+          +(v.kills/v.games).toFixed(1),
+          +(v.deaths/v.games).toFixed(1),
+          +(v.assists/v.games).toFixed(1)
+        ),
+        dpm: v.minutesWithStats ? Math.round(v.damage/v.minutesWithStats) : null,
+        goldPerMin: v.minutesWithStats ? Math.round(v.gold/v.minutesWithStats) : null,
+        avgDamageTaken: v.games ? Math.round(v.damageTaken/v.games) : null,
+      }));
 
     // ฮีโร่ win rate สูงสุด — ต้องเล่นอย่างน้อยครึ่งหนึ่งของเกมทั้งหมดของ
     // ผู้เล่นคนนั้นในช่วงนี้ ถึงจะเข้าเกณฑ์ (กันฮีโร่ที่เล่นแค่เกมเดียวแล้ว
@@ -1902,10 +1926,38 @@ function PlayerPeriodRow({ p }) {
 
       {p.topHeroes.length>0 && (
         <div style={{marginTop:8}}>
-          <div style={{fontSize:9,color:C.textMuted,marginBottom:4}}>ฮีโร่ที่เล่นบ่อยสุด</div>
-          <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+          <div style={{fontSize:9,color:C.textMuted,marginBottom:6}}>ฮีโร่ที่เล่นบ่อยสุด</div>
+          <div style={{display:"flex",flexDirection:"column",gap:6}}>
             {p.topHeroes.map(h=>(
-              <HeroChip key={h.name} name={h.name} size={18} fontSize={10} textCol={h.wr>=50?C.win:C.lose}/>
+              <div key={h.name} style={{background:C.bgPanel,borderRadius:8,padding:"8px 10px"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <HeroChip name={h.name} size={18} fontSize={11} textCol={h.wr>=50?C.win:C.lose}/>
+                  <div style={{fontSize:10,color:C.textMuted}}>
+                    {h.games} เกม · <span style={{color:h.wr>=50?C.win:C.lose,fontWeight:700}}>{h.wins}W-{h.games-h.wins}L ({h.wr}%)</span>
+                  </div>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6,marginTop:6}}>
+                  <div>
+                    <div style={{fontSize:8,color:C.textMuted}}>KDA</div>
+                    <div style={{fontSize:11,fontWeight:700}}>
+                      {h.kda.k}/{h.kda.d}/{h.kda.a}
+                      <span style={{fontSize:9,color:C.textMuted,marginLeft:3}}>({h.kda.label})</span>
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{fontSize:8,color:C.textMuted}}>DPM</div>
+                    <div style={{fontSize:11,fontWeight:700}}>{h.dpm ?? "-"}</div>
+                  </div>
+                  <div>
+                    <div style={{fontSize:8,color:C.textMuted}}>Gold/min</div>
+                    <div style={{fontSize:11,fontWeight:700}}>{h.goldPerMin ?? "-"}</div>
+                  </div>
+                  <div>
+                    <div style={{fontSize:8,color:C.textMuted}}>DMG Taken</div>
+                    <div style={{fontSize:11,fontWeight:700}}>{h.avgDamageTaken ?? "-"}</div>
+                  </div>
+                </div>
+              </div>
             ))}
           </div>
         </div>
