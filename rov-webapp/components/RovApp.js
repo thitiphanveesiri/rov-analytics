@@ -3399,7 +3399,7 @@ function ScoutGameForm({ gameNo, teamA, teamB, rivals, enemyRosters, onSave, onC
   ]);
 
   const filtered = HERO_DATA.filter(h=>
-    (roleFilter==="All"||h.role===roleFilter) &&
+    (roleFilter==="All"||(h.roles||[h.role]).includes(roleFilter)) &&
     h.name.toLowerCase().includes(search.toLowerCase())
   );
 
@@ -5313,7 +5313,9 @@ function appReducer(state, action) {
     }
 
     case "SET_ROLE_OVERRIDE": {
-      // payload: { heroName, role }
+      // payload: { heroName, role } — role can now be an array of roles
+      // (multi-role support, e.g. ["เมจ","ซัพ"]) or a single string
+      // (kept working for anything still sending the old shape)
       return { ...state, roleOverrides: { ...state.roleOverrides, [action.payload.heroName]: action.payload.role } };
     }
 
@@ -5733,10 +5735,22 @@ function RovAppInner() {
     }
     app.customHeroes.forEach(h => HERO_DATA.push({ ...h, _custom: true }));
     // apply role overrides to every hero (built-in or custom), keeping the
-    // original role stashed so an override can be reverted cleanly later
+    // original role stashed so an override can be reverted cleanly later.
+    // roleOverrides[heroName] can be an array (multi-role — e.g. Rouie as
+    // both "เมจ" and "ซัพ", so hero-picker searches for either role find
+    // it in Live Draft / Rival scouting) or a plain string (older data
+    // saved before multi-role support existed) — normalize both shapes
+    // into `h.roles` (always an array) here, once, so every place that
+    // filters/searches by role can just check `.includes()` without
+    // needing to know which shape is stored. `h.role` is kept too, set to
+    // the first entry, for any code that only ever wanted a single
+    // "primary" role (e.g. color lookups) and doesn't need the full list.
     HERO_DATA.forEach(h => {
       if (h._origRole === undefined) h._origRole = h.role;
-      h.role = app.roleOverrides[h.name] || h._origRole;
+      const override = app.roleOverrides[h.name];
+      const overrideRoles = Array.isArray(override) ? override : (override ? [override] : null);
+      h.roles = (overrideRoles && overrideRoles.length) ? overrideRoles : [h._origRole];
+      h.role = h.roles[0];
     });
     setHeroDataVersion(v => v + 1); // force re-render so HeroCard/HeroChip pick up new role/list
   }, [app.customHeroes, app.roleOverrides, app._loaded]);
@@ -7683,7 +7697,7 @@ function DraftPageR({ draft, dispatch, roster, rivals, enemyRosters, onFinishSes
   }
 
   const filtered = HERO_DATA.filter(h =>
-    (roleFilter==="All" || h.role===roleFilter) &&
+    (roleFilter==="All" || (h.roles||[h.role]).includes(roleFilter)) &&
     h.name.toLowerCase().includes(search.toLowerCase())
   );
 

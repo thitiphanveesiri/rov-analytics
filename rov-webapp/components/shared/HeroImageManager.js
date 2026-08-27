@@ -359,22 +359,45 @@ function HeroImageSlot({ hero, photoUrl, onSet, onRemove, onSetRole, onDelete })
       <div style={{fontSize:11,fontWeight:700,marginBottom:4,overflow:"hidden",
         textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{hero.name}</div>
 
-      {/* role — click to edit */}
+      {/* role — click to edit (multi-select: a hero can now hold more
+          than one role at once, e.g. Rouie as both เมจ and ซัพ — helps
+          finding it under either role filter in Live Draft / Rival
+          scouting instead of being locked to a single classification) */}
       {editingRole ? (
-        <select autoFocus value={hero.role}
-          onChange={e=>{ onSetRole(e.target.value); setEditingRole(false); }}
-          onBlur={()=>setEditingRole(false)}
-          style={{width:"100%",background:C.bgCard,border:`1px solid ${C.primary}`,
-            color:C.textMain,borderRadius:5,padding:"2px 4px",fontSize:10,
-            marginBottom:6,outline:"none"}}>
-          {ROLES_PICK.map(r=><option key={r} value={r}>{r}</option>)}
-        </select>
+        <div onBlur={e=>{ if(!e.currentTarget.contains(e.relatedTarget)) setEditingRole(false); }}
+          tabIndex={-1}
+          style={{background:C.bgCard,border:`1px solid ${C.primary}`,borderRadius:6,
+            padding:"6px 4px",marginBottom:6,textAlign:"left"}}>
+          {ROLES_PICK.map(r=>{
+            const roles = hero.roles || [hero.role];
+            const checked = roles.includes(r);
+            return (
+              <label key={r} style={{display:"flex",alignItems:"center",gap:5,
+                padding:"2px 4px",cursor:"pointer",fontSize:10}}>
+                <input type="checkbox" checked={checked}
+                  onChange={()=>{
+                    const current = hero.roles || [hero.role];
+                    const next = checked ? current.filter(x=>x!==r) : [...current, r];
+                    // เหลืออย่างน้อย 1 role เสมอ — ห้าม uncheck จนไม่มี role เหลือเลย
+                    if (next.length === 0) return;
+                    onSetRole(next);
+                  }}/>
+                <span style={{color:ROLE_COLOR[r]||C.textMuted}}>{r}</span>
+              </label>
+            );
+          })}
+          <button onClick={()=>setEditingRole(false)}
+            style={{width:"100%",marginTop:4,background:C.primary,color:"#fff",border:"none",
+              borderRadius:4,padding:"3px 0",fontSize:10,fontWeight:700,cursor:"pointer"}}>
+            ✓ เสร็จแล้ว
+          </button>
+        </div>
       ) : (
-        <div onClick={()=>setEditingRole(true)} title="แก้ไข Role"
+        <div onClick={()=>setEditingRole(true)} title="แก้ไข Role (เลือกได้หลายตำแหน่ง)"
           style={{fontSize:9,fontWeight:700,marginBottom:6,cursor:"pointer",
             color:ROLE_COLOR[hero.role]||C.textMuted,
-            display:"flex",alignItems:"center",justifyContent:"center",gap:3}}>
-          {hero.role} <span style={{opacity:.6,fontSize:8}}>✏️</span>
+            display:"flex",alignItems:"center",justifyContent:"center",gap:3,flexWrap:"wrap"}}>
+          {(hero.roles||[hero.role]).join(" / ")} <span style={{opacity:.6,fontSize:8}}>✏️</span>
         </div>
       )}
 
