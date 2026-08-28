@@ -135,7 +135,19 @@ export const teamDataSchema = z.object({
     role: z.string().max(MAX_SHORT_TEXT).optional(),
     img: z.string().max(MAX_SHORT_TEXT).optional(),
   }).passthrough()).max(200).optional(),
-  roleOverrides: z.record(z.string(), z.string().max(MAX_SHORT_TEXT)).optional(),
+  // roleOverrides[heroName] used to be a single role string only.
+  // RovApp.js now supports assigning a hero multiple roles at once (e.g.
+  // Rouie as both "เมจ" and "ซัพ", so it shows up under either filter in
+  // Live Draft / Rival scouting), sending an array instead. Accept both
+  // shapes here so old single-string overrides already saved for a team
+  // keep validating fine, while new multi-role saves aren't rejected.
+  roleOverrides: z.record(
+    z.string(),
+    z.union([
+      z.string().max(MAX_SHORT_TEXT),
+      z.array(z.string().max(MAX_SHORT_TEXT)).max(10),
+    ])
+  ).optional(),
   videos: z.array(videoSchema).max(5000).optional(),
   teamLogo: z.string().max(2000).nullable().optional(),
   rivalLogos: z.record(z.string(), z.string().max(2000)).optional(),
