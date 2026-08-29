@@ -363,7 +363,7 @@ const OBJ_DEFAULT = {
   ourTurrets:0, enemyTurrets:0,
 };
 
-function ObjectiveEditor({ objectives, onChange }) {
+function ObjectiveEditor({ objectives, onChange, teamALabel="🛡️ เรา", teamBLabel="⚔️ คู่แข่ง" }) {
   const obj = { ...OBJ_DEFAULT, ...(objectives||{}) };
   function set(k,v){ onChange({ ...obj, [k]:v }); }
 
@@ -371,7 +371,7 @@ function ObjectiveEditor({ objectives, onChange }) {
     <div>
       <div style={{fontSize:10,color:C.textMuted,marginBottom:4}}>{icon} {label}</div>
       <div style={{display:"flex",gap:5}}>
-        {[{v:"our",l:"🛡️ เรา",c:C.win},{v:"enemy",l:"⚔️ คู่แข่ง",c:C.lose},{v:null,l:"—",c:C.textMuted}].map(o=>(
+        {[{v:"our",l:teamALabel,c:C.win},{v:"enemy",l:teamBLabel,c:C.lose},{v:null,l:"—",c:C.textMuted}].map(o=>(
           <button key={String(o.v)} onClick={()=>set(field,o.v)}
             style={{background:obj[field]===o.v?o.c+"30":"transparent",
               border:`1px solid ${obj[field]===o.v?o.c:C.border}`,color:obj[field]===o.v?o.c:C.textMuted,
@@ -403,14 +403,14 @@ function ObjectiveEditor({ objectives, onChange }) {
         <FirstPicker field="firstTower" label="First Tower"  icon="🏯"/>
       </div>
       <div style={{display:"flex",gap:20,flexWrap:"wrap"}}>
-        <CountField field="ourAbyssal"    label="🐉 Abyssal (เรา)"     col={C.win}/>
-        <CountField field="enemyAbyssal"  label="🐉 Abyssal (คู่แข่ง)" col={C.lose}/>
-        <CountField field="ourDark"       label="⚫ Dark (เรา)"        col={C.win}/>
-        <CountField field="enemyDark"     label="⚫ Dark (คู่แข่ง)"    col={C.lose}/>
-        <CountField field="ourGodslayer"   label="👑 Godslayer (เรา)"     col={C.win}/>
-        <CountField field="enemyGodslayer" label="👑 Godslayer (คู่แข่ง)" col={C.lose}/>
-        <CountField field="ourTurrets"   label="🏯 Turret พัง (เรา)"     col={C.win}/>
-        <CountField field="enemyTurrets" label="🏯 Turret พัง (คู่แข่ง)" col={C.lose}/>
+        <CountField field="ourAbyssal"    label={`🐉 Abyssal (${teamALabel})`}     col={C.win}/>
+        <CountField field="enemyAbyssal"  label={`🐉 Abyssal (${teamBLabel})`} col={C.lose}/>
+        <CountField field="ourDark"       label={`⚫ Dark (${teamALabel})`}        col={C.win}/>
+        <CountField field="enemyDark"     label={`⚫ Dark (${teamBLabel})`}    col={C.lose}/>
+        <CountField field="ourGodslayer"   label={`👑 Godslayer (${teamALabel})`}     col={C.win}/>
+        <CountField field="enemyGodslayer" label={`👑 Godslayer (${teamBLabel})`} col={C.lose}/>
+        <CountField field="ourTurrets"   label={`🏯 Turret พัง (${teamALabel})`}     col={C.win}/>
+        <CountField field="enemyTurrets" label={`🏯 Turret พัง (${teamBLabel})`} col={C.lose}/>
       </div>
     </div>
   );
@@ -3392,6 +3392,8 @@ function ScoutGameForm({ gameNo, teamA, teamB, rivals, enemyRosters, onSave, onC
   const [roleFilter,setRoleFilter]= useState("All");
   const [activeSlot,setActiveSlot]= useState({team:"A",idx:0});
   const [showStats, setShowStats] = useState(false);
+  const [showObj,   setShowObj]   = useState(false);
+  const [objectives,setObjectives]= useState(null);
 
   const usedHeroes = new Set([
     ...picksA.filter(p=>p.hero).map(p=>p.hero.name),
@@ -3460,7 +3462,7 @@ function ScoutGameForm({ gameNo, teamA, teamB, rivals, enemyRosters, onSave, onC
     onSave({ gameNo, teamAResult:result==="A"?"WIN":"LOSE",
       sideA, sideB: sideA==="blue"?"red":"blue",
       picksA, picksB, bansA, bansB, statsA, statsB,
-      killsA, killsB, duration, note, tags });
+      killsA, killsB, duration, note, tags, objectives });
   }
 
   const rosterA = enemyRosters[teamA]||[];
@@ -3738,6 +3740,21 @@ function ScoutGameForm({ gameNo, teamA, teamB, rivals, enemyRosters, onSave, onC
         </div>
       </div>
 
+      {/* Objective Control accordion */}
+      <div style={{marginBottom:12}}>
+        <button onClick={()=>setShowObj(v=>!v)} style={{
+          background:showObj?C.primary+"20":"transparent",
+          border:`1px solid ${showObj?C.primary:C.border}`,
+          color:showObj?C.primaryLight:C.textMuted,
+          borderRadius:7,padding:"4px 12px",cursor:"pointer",fontSize:11,fontWeight:700}}>
+          {showObj?"▲ ซ่อน Objective":"🐉 Objective Control (First Blood/Tower, Abyssal, Dark, Godslayer, Turret)"}
+        </button>
+        {showObj && (
+          <ObjectiveEditor objectives={objectives} onChange={setObjectives}
+            teamALabel={teamA||"ทีม A"} teamBLabel={teamB||"ทีม B"}/>
+        )}
+      </div>
+
       {/* Stats accordion */}
       <div style={{marginBottom:12}}>
         <button onClick={()=>setShowStats(v=>!v)} style={{
@@ -3962,6 +3979,7 @@ function EditScoutGameModal({ game, teamA, teamB, onSave, onClose }) {
   const [killsB, setKillsB] = useState(game.killsB ?? "");
   const [duration, setDuration] = useState(game.duration || "");
   const [sideA, setSideA] = useState(game.sideA || "blue");
+  const [objectives, setObjectives] = useState(game.objectives || null);
 
   const setPickHero   = (side,i,name) => (side==="A"?setPicksA:setPicksB)(prev=>prev.map((p,idx)=>idx===i?{...p,hero:name?{name}:null}:p));
   const setPickPlayer = (side,i,val)  => (side==="A"?setPicksA:setPicksB)(prev=>prev.map((p,idx)=>idx===i?{...p,player:val}:p));
@@ -3975,6 +3993,7 @@ function EditScoutGameModal({ game, teamA, teamB, onSave, onClose }) {
       killsB: Math.max(0, Number(killsB)||0),
       duration: normalizeDuration(duration),
       sideA, sideB: sideA==="blue"?"red":"blue",
+      objectives,
     });
   }
 
@@ -4059,6 +4078,14 @@ function EditScoutGameModal({ game, teamA, teamB, onSave, onClose }) {
               onBlur={e=>setDuration(normalizeDuration(e.target.value))}
               placeholder="09.45" style={{...selectStyle,width:90,padding:"7px 10px",fontSize:12}}/>
           </div>
+        </div>
+
+        <div style={{marginBottom:20}}>
+          <div style={{fontWeight:700,fontSize:12,color:C.primaryLight,marginBottom:8}}>
+            🐉 Objective Control
+          </div>
+          <ObjectiveEditor objectives={objectives} onChange={setObjectives}
+            teamALabel={teamA||"ทีม A"} teamBLabel={teamB||"ทีม B"}/>
         </div>
 
         <div style={{marginBottom:20}}>
