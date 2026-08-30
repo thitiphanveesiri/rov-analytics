@@ -363,6 +363,120 @@ const OBJ_DEFAULT = {
   ourTurrets:0, enemyTurrets:0,
 };
 
+// ── Objective control aggregate — reusable across Overview, Rival Overview,
+//    and Scout ── takes an array of games (each with an optional
+//    `.objectives` field in the {firstBlood, firstTower, ourAbyssal,
+//    enemyAbyssal, ...} shape produced by ObjectiveEditor) and returns the
+//    same aggregate shape every caller renders via ObjectiveSummaryDisplay.
+function computeObjectiveSummary(games) {
+  const gamesWithObj = games.filter(g=>g.objectives);
+  let fbOur=0, fbEnemy=0, ftOur=0, ftEnemy=0, turOur=0, turEnemy=0;
+  let abyOur=0, abyEnemy=0, darkOur=0, darkEnemy=0, gsOur=0, gsEnemy=0;
+  let winsWithFT=0, gamesWithFT=0;
+  let winsWithGSEdge=0, gamesWithGSEdge=0;
+  gamesWithObj.forEach(g=>{
+    const o=g.objectives;
+    if(o.firstBlood==="our") fbOur++; else if(o.firstBlood==="enemy") fbEnemy++;
+    if(o.firstTower==="our") { ftOur++; gamesWithFT++; if(g.result==="WIN") winsWithFT++; }
+    else if(o.firstTower==="enemy") { ftEnemy++; gamesWithFT++; }
+    abyOur   += Number(o.ourAbyssal||0);   abyEnemy   += Number(o.enemyAbyssal||0);
+    darkOur  += Number(o.ourDark||0);      darkEnemy  += Number(o.enemyDark||0);
+    gsOur    += Number(o.ourGodslayer||0); gsEnemy    += Number(o.enemyGodslayer||0);
+    turOur   += Number(o.ourTurrets||0);   turEnemy   += Number(o.enemyTurrets||0);
+    // Godslayer มักเป็นตัวชี้ผลเกมช่วงท้าย เลยใช้เป็น "objective edge" หลักแทน dragon รวมแบบเดิม
+    if(Number(o.ourGodslayer||0) > Number(o.enemyGodslayer||0)) {
+      gamesWithGSEdge++; if(g.result==="WIN") winsWithGSEdge++;
+    }
+  });
+  return {
+    total: gamesWithObj.length,
+    fbOur, fbEnemy,
+    ftOur, ftEnemy,
+    ftWinRate: gamesWithFT ? Math.round(winsWithFT/gamesWithFT*100) : null,
+    abyOur, abyEnemy, darkOur, darkEnemy, gsOur, gsEnemy,
+    turOur, turEnemy,
+    gsEdgeWinRate: gamesWithGSEdge ? Math.round(winsWithGSEdge/gamesWithGSEdge*100) : null,
+  };
+}
+
+// For scouted games specifically: each scout match record has its own
+// "teamA"/"teamB" (objectives.our means teamA, .enemy means teamB — same
+// convention calcMatchupStats already uses for win/loss), which does NOT
+// always line up with which side `teamFocus` (the rival currently being
+// viewed) was on in any given record. This normalizes every game's
+// objectives + result onto teamFocus's own perspective, flipping our/
+// enemy when teamFocus was actually teamB in that particular record —
+// same idea as the `isA` check in calcMatchupStats, just applied to the
+// objectives sub-object instead of picks/bans/stats.
+function flattenScoutObjectivesForFocus(records, teamFocus) {
+  const out = [];
+  records.forEach(sm=>{
+    const isA = sm.teamA===teamFocus;
+    (sm.games||[]).forEach(g=>{
+      if (!g.objectives) return;
+      const o = g.objectives;
+      const objectives = isA ? o : {
+        firstBlood: o.firstBlood==="our" ? "enemy" : o.firstBlood==="enemy" ? "our" : null,
+        firstTower: o.firstTower==="our" ? "enemy" : o.firstTower==="enemy" ? "our" : null,
+        ourAbyssal: o.enemyAbyssal||0,     enemyAbyssal: o.ourAbyssal||0,
+        ourDark: o.enemyDark||0,           enemyDark: o.ourDark||0,
+        ourGodslayer: o.enemyGodslayer||0, enemyGodslayer: o.ourGodslayer||0,
+        ourTurrets: o.enemyTurrets||0,     enemyTurrets: o.ourTurrets||0,
+      };
+      const result = isA ? g.teamAResult : (g.teamAResult==="WIN"?"LOSE":"WIN");
+      out.push({ objectives, result });
+    });
+  });
+  return out;
+}
+
+function ObjectiveSummaryDisplay({ objSummary, ourLabel="เรา", enemyLabel="คู่แข่ง", title="🐉 Objective Control" }) {
+  if (objSummary.total === 0) return null;
+  return (
+    <div style={{background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:14,padding:18,marginBottom:16}}>
+      <div style={{fontWeight:800,fontSize:14,color:C.primaryLight,marginBottom:4}}>
+        {title}
+      </div>
+      <div style={{fontSize:11,color:C.textMuted,marginBottom:14}}>
+        จาก {objSummary.total} เกมที่กรอกข้อมูล Objective ไว้ ({ourLabel} : {enemyLabel})
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(100px,1fr))",gap:12}}>
+        {[
+          {icon:"🩸",label:"First Blood",our:objSummary.fbOur,enemy:objSummary.fbEnemy},
+          {icon:"🏯",label:"First Tower",our:objSummary.ftOur,enemy:objSummary.ftEnemy},
+          {icon:"🐉",label:"Abyssal",our:objSummary.abyOur,enemy:objSummary.abyEnemy},
+          {icon:"⚫",label:"Dark",our:objSummary.darkOur,enemy:objSummary.darkEnemy},
+          {icon:"👑",label:"Godslayer",our:objSummary.gsOur,enemy:objSummary.gsEnemy},
+          {icon:"🏰",label:"Turret พัง",our:objSummary.turOur,enemy:objSummary.turEnemy},
+        ].map(c=>(
+          <div key={c.label} style={{background:C.bgCard,borderRadius:10,padding:"12px 10px",textAlign:"center"}}>
+            <div style={{fontSize:10,color:C.textMuted,marginBottom:6}}>{c.icon} {c.label}</div>
+            <div style={{fontSize:18,fontWeight:800}}>
+              <span style={{color:C.win}}>{c.our}</span>
+              <span style={{color:C.textMuted,fontSize:13}}> : </span>
+              <span style={{color:C.lose}}>{c.enemy}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{display:"flex",gap:12,marginTop:14,flexWrap:"wrap"}}>
+        {objSummary.ftWinRate!==null && (
+          <div style={{background:C.primary+"12",borderRadius:8,padding:"8px 14px",fontSize:12,
+            color:C.primaryLight,borderLeft:`3px solid ${C.primary}`}}>
+            💡 เกมที่ {ourLabel} ได้ First Tower ก่อน → ชนะ <b>{objSummary.ftWinRate}%</b>
+          </div>
+        )}
+        {objSummary.gsEdgeWinRate!==null && (
+          <div style={{background:C.primary+"12",borderRadius:8,padding:"8px 14px",fontSize:12,
+            color:C.primaryLight,borderLeft:`3px solid ${C.primary}`}}>
+            💡 เกมที่ {ourLabel} คุม Godslayer ได้มากกว่า → ชนะ <b>{objSummary.gsEdgeWinRate}%</b>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ObjectiveEditor({ objectives, onChange, teamALabel="🛡️ เรา", teamBLabel="⚔️ คู่แข่ง" }) {
   const obj = { ...OBJ_DEFAULT, ...(objectives||{}) };
   function set(k,v){ onChange({ ...obj, [k]:v }); }
@@ -4833,6 +4947,14 @@ function ScoutLogPage({ rivalName, scoutMatches, rivals, enemyRosters, isCoach, 
         </div>
       )}
 
+      {related.length>0 && (
+        <ObjectiveSummaryDisplay
+          objSummary={computeObjectiveSummary(flattenScoutObjectivesForFocus(related, rivalName))}
+          ourLabel={rivalName} enemyLabel="คู่แข่งที่เจอ"
+          title={`🐉 Objective Control — จากที่ scout มา (${rivalName})`}
+        />
+      )}
+
       {related.length===0 ? (
         <div style={{textAlign:"center",padding:"40px 20px",background:C.bgPanel,
           borderRadius:14,color:C.textMuted}}>
@@ -6008,37 +6130,8 @@ function RovAppInner() {
     .map(([h,s])=>({hero:h,picks:s.picks,wr:Math.round(s.wins/s.picks*100)}))
     .sort((a,b)=>b.picks-a.picks);
 
-  // ── Objective control aggregate ──
-  const gamesWithObj = allGames.filter(g=>g.objectives);
-  const objSummary = (() => {
-    let fbOur=0, fbEnemy=0, ftOur=0, ftEnemy=0, turOur=0, turEnemy=0;
-    let abyOur=0, abyEnemy=0, darkOur=0, darkEnemy=0, gsOur=0, gsEnemy=0;
-    let winsWithFT=0, gamesWithFT=0;
-    let winsWithGSEdge=0, gamesWithGSEdge=0;
-    gamesWithObj.forEach(g=>{
-      const o=g.objectives;
-      if(o.firstBlood==="our") fbOur++; else if(o.firstBlood==="enemy") fbEnemy++;
-      if(o.firstTower==="our") { ftOur++; gamesWithFT++; if(g.result==="WIN") winsWithFT++; }
-      else if(o.firstTower==="enemy") { ftEnemy++; gamesWithFT++; }
-      abyOur   += Number(o.ourAbyssal||0);   abyEnemy   += Number(o.enemyAbyssal||0);
-      darkOur  += Number(o.ourDark||0);      darkEnemy  += Number(o.enemyDark||0);
-      gsOur    += Number(o.ourGodslayer||0); gsEnemy    += Number(o.enemyGodslayer||0);
-      turOur   += Number(o.ourTurrets||0);   turEnemy   += Number(o.enemyTurrets||0);
-      // Godslayer มักเป็นตัวชี้ผลเกมช่วงท้าย เลยใช้เป็น "objective edge" หลักแทน dragon รวมแบบเดิม
-      if(Number(o.ourGodslayer||0) > Number(o.enemyGodslayer||0)) {
-        gamesWithGSEdge++; if(g.result==="WIN") winsWithGSEdge++;
-      }
-    });
-    return {
-      total: gamesWithObj.length,
-      fbOur, fbEnemy,
-      ftOur, ftEnemy,
-      ftWinRate: gamesWithFT ? Math.round(winsWithFT/gamesWithFT*100) : null,
-      abyOur, abyEnemy, darkOur, darkEnemy, gsOur, gsEnemy,
-      turOur, turEnemy,
-      gsEdgeWinRate: gamesWithGSEdge ? Math.round(winsWithGSEdge/gamesWithGSEdge*100) : null,
-    };
-  })();
+  // ── Objective control aggregate (shared function — see computeObjectiveSummary) ──
+  const objSummary = computeObjectiveSummary(allGames);
 
   const NAV = [
     {id:"overview",icon:"📊",label:"Overview"},
@@ -6470,49 +6563,7 @@ function RovAppInner() {
               <PerformanceTrend allGames={allGames}/>
 
               {/* ── Objective Control Summary ── */}
-              {objSummary.total > 0 && (
-                <div style={{background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:14,padding:18,marginBottom:16}}>
-                  <div style={{fontWeight:800,fontSize:14,color:C.primaryLight,marginBottom:4}}>
-                    🐉 Objective Control
-                  </div>
-                  <div style={{fontSize:11,color:C.textMuted,marginBottom:14}}>
-                    จาก {objSummary.total} เกมที่กรอกข้อมูล Objective ไว้
-                  </div>
-                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(100px,1fr))",gap:12}}>
-                    {[
-                      {icon:"🩸",label:"First Blood",our:objSummary.fbOur,enemy:objSummary.fbEnemy},
-                      {icon:"🏯",label:"First Tower",our:objSummary.ftOur,enemy:objSummary.ftEnemy},
-                      {icon:"🐉",label:"Abyssal",our:objSummary.abyOur,enemy:objSummary.abyEnemy},
-                      {icon:"⚫",label:"Dark",our:objSummary.darkOur,enemy:objSummary.darkEnemy},
-                      {icon:"👑",label:"Godslayer",our:objSummary.gsOur,enemy:objSummary.gsEnemy},
-                      {icon:"🏰",label:"Turret พัง",our:objSummary.turOur,enemy:objSummary.turEnemy},
-                    ].map(c=>(
-                      <div key={c.label} style={{background:C.bgCard,borderRadius:10,padding:"12px 10px",textAlign:"center"}}>
-                        <div style={{fontSize:10,color:C.textMuted,marginBottom:6}}>{c.icon} {c.label}</div>
-                        <div style={{fontSize:18,fontWeight:800}}>
-                          <span style={{color:C.win}}>{c.our}</span>
-                          <span style={{color:C.textMuted,fontSize:13}}> : </span>
-                          <span style={{color:C.lose}}>{c.enemy}</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  <div style={{display:"flex",gap:12,marginTop:14,flexWrap:"wrap"}}>
-                    {objSummary.ftWinRate!==null && (
-                      <div style={{background:C.primary+"12",borderRadius:8,padding:"8px 14px",fontSize:12,
-                        color:C.primaryLight,borderLeft:`3px solid ${C.primary}`}}>
-                        💡 เกมที่เราได้ First Tower ก่อน → ชนะ <b>{objSummary.ftWinRate}%</b>
-                      </div>
-                    )}
-                    {objSummary.gsEdgeWinRate!==null && (
-                      <div style={{background:C.primary+"12",borderRadius:8,padding:"8px 14px",fontSize:12,
-                        color:C.primaryLight,borderLeft:`3px solid ${C.primary}`}}>
-                        💡 เกมที่เราคุม Godslayer ได้มากกว่า → ชนะ <b>{objSummary.gsEdgeWinRate}%</b>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
+              <ObjectiveSummaryDisplay objSummary={objSummary}/>
 
               {/* ── Ban/Pick Rate Panel ── */}
               {(()=>{
@@ -6886,6 +6937,9 @@ function RovAppInner() {
                               </div>
                             ))}
                           </div>
+
+                          <ObjectiveSummaryDisplay objSummary={computeObjectiveSummary(rGames)}/>
+
                           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:16}}>
                             <div style={{background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:14,padding:18}}>
                               <div style={{fontWeight:700,fontSize:13,color:C.ban,marginBottom:12}}>🚫 Hero ที่คู่แข่งชอบแบน</div>
