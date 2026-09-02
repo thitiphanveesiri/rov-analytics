@@ -430,6 +430,24 @@ function flattenScoutObjectivesForFocus(records, teamFocus) {
   return out;
 }
 
+// Same idea as flattenScoutObjectivesForFocus, but pulls out teamFocus's
+// own picks (not objectives) + result from each scouted game — used to
+// compute a rival player's stats from games they played against teams
+// OTHER than us (i.e. every scout record, since scout records are always
+// "some rival vs some other rival", never involving our own team).
+function flattenScoutGamesForFocus(records, teamFocus) {
+  const out = [];
+  records.forEach(sm=>{
+    const isA = sm.teamA===teamFocus;
+    (sm.games||[]).forEach(g=>{
+      const picks = isA ? (g.picksA||[]) : (g.picksB||[]);
+      const result = isA ? g.teamAResult : (g.teamAResult==="WIN"?"LOSE":"WIN");
+      out.push({ picks, result });
+    });
+  });
+  return out;
+}
+
 function ObjectiveSummaryDisplay({ objSummary, ourLabel="เรา", enemyLabel="คู่แข่ง", title="🐉 Objective Control" }) {
   if (objSummary.total === 0) return null;
   return (
@@ -5512,6 +5530,7 @@ function initUIState() {
     selPlayer:      null,
     selPlayerEnemy: false,
     selEnemyTeam:   null,
+    enemyStatsScope: "all",  // "all" | "vsUs" | "vsOthers" — filter for enemy player stats on Roster page
     newName:        "",
     newEnemyName:   "",
     scoutView:      null,   // null | "log" | "new"
@@ -5530,7 +5549,8 @@ function uiReducer(state, action) {
     case "SET_ROSTER_TAB":      return { ...state, rosterTab: action.payload, selEnemyTeam: null };
     case "SET_SEL_PLAYER":      return { ...state, selPlayer: action.payload.name, selPlayerEnemy: action.payload.isEnemy };
     case "CLEAR_SEL_PLAYER":    return { ...state, selPlayer: null, selPlayerEnemy: false };
-    case "SET_SEL_ENEMY_TEAM":  return { ...state, selEnemyTeam: action.payload };
+    case "SET_SEL_ENEMY_TEAM":  return { ...state, selEnemyTeam: action.payload, enemyStatsScope: "all" };
+    case "SET_ENEMY_STATS_SCOPE": return { ...state, enemyStatsScope: action.payload };
     case "SET_NEW_NAME":        return { ...state, newName: action.payload };
     case "SET_NEW_ENEMY_NAME":  return { ...state, newEnemyName: action.payload };
     case "CLEAR_NEW_NAME":      return { ...state, newName: "" };
@@ -6153,7 +6173,7 @@ function RovAppInner() {
 
   // ── short aliases for readability ──
   const { page, selRival, rivalView, rosterTab, selPlayer, selPlayerEnemy,
-          selEnemyTeam, newName, newEnemyName } = ui;
+          selEnemyTeam, newName, newEnemyName, enemyStatsScope } = ui;
   const { rivals, roster, enemyRosters } = app;
 
   // ── loading screen until Database hydration completes ──
@@ -7182,13 +7202,49 @@ function RovAppInner() {
                               + เพิ่ม
                             </button>
                           </div>
+                          <div style={{display:"flex",gap:4,background:C.bgBase,borderRadius:8,padding:3,
+                            marginBottom:14,width:"fit-content",border:`1px solid ${C.border}`}}>
+                            {[
+                              {id:"all",       label:"ทั้งหมด"},
+                              {id:"vsUs",      label:"เจอเรา"},
+                              {id:"vsOthers",  label:"เจอทีมอื่น"},
+                            ].map(t=>(
+                              <button key={t.id}
+                                onClick={()=>dispatchUI({type:"SET_ENEMY_STATS_SCOPE",payload:t.id})}
+                                style={{background:enemyStatsScope===t.id?C.lose:"transparent",
+                                  border:"none",color:enemyStatsScope===t.id?"#fff":C.textMuted,
+                                  borderRadius:6,padding:"6px 16px",cursor:"pointer",fontWeight:700,fontSize:12}}>
+                                {t.label}
+                              </button>
+                            ))}
+                          </div>
+
                           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:14}}>
-                            {(enemyRosters[selEnemyTeam]||[]).map(player=>{
+                            {(() => {
+                              // คำนวณครั้งเดียวนอก loop ผู้เล่น แทนที่จะคำนวณซ้ำทุกคน
+                              const scoutGamesForTeam = (enemyStatsScope==="all" || enemyStatsScope==="vsOthers")
+                                ? flattenScoutGamesForFocus(patchFilteredScoutMatches, selEnemyTeam)
+                                : [];
+                              return (enemyRosters[selEnemyTeam]||[]).map(player=>{
                               let pg=0,pw=0; const ph={};
-                              allGames.filter(g=>g.rivalName===selEnemyTeam).forEach(g=>{
-                                const s=(g.enemyPicks||[]).find(d=>d.player===player);
-                                if(s){pg++;if(g.result==="LOSE")pw++;if(s.hero?.name)ph[s.hero.name]=(ph[s.hero.name]||0)+1;}
-                              });
+                              // "เจอเรา" — แมตช์จริงที่เราเจอทีมนี้ (allGames)
+                              if (enemyStatsScope==="all" || enemyStatsScope==="vsUs") {
+                                allGames.filter(g=>g.rivalName===selEnemyTeam).forEach(g=>{
+                                  const s=(g.enemyPicks||[]).find(d=>d.player===player);
+                                  if(s){pg++;if(g.result==="LOSE")pw++;if(s.hero?.name)ph[s.hero.name]=(ph[s.hero.name]||0)+1;}
+                                });
+                              }
+                              // "เจอทีมอื่น" — ข้อมูลจาก Scout (ทีมนี้เจอคู่แข่งทีมอื่น ไม่ใช่เรา)
+                              // สำคัญ: g.result ตรงนี้ถูก normalize เป็นมุมมองของ "ทีมคู่แข่งที่กำลังดู"
+                              // อยู่แล้ว (จาก flattenScoutGamesForFocus) ต่างจาก allGames ด้านบนที่
+                              // g.result เป็นมุมมองของ "เรา" — ถ้าใช้เงื่อนไข LOSE เหมือนกันจะนับ
+                              // แพ้/ชนะสลับกันของข้อมูลส่วนนี้ทั้งหมด
+                              if (enemyStatsScope==="all" || enemyStatsScope==="vsOthers") {
+                                scoutGamesForTeam.forEach(g=>{
+                                  const s=(g.picks||[]).find(d=>d.player===player);
+                                  if(s){pg++;if(g.result==="WIN")pw++;if(s.hero?.name)ph[s.hero.name]=(ph[s.hero.name]||0)+1;}
+                                });
+                              }
                               const pwr=pg?Math.round(pw/pg*100):0;
                               const top=Object.entries(ph).sort((a,b)=>b[1]-a[1])[0];
                               const photoKey = `enemy:${selEnemyTeam}:${player}`;
@@ -7204,7 +7260,8 @@ function RovAppInner() {
                                   onSetPhoto={(url)=>dispatchApp({type:"SET_PHOTO",payload:{key:photoKey,dataUrl:url}})}
                                 />
                               );
-                            })}
+                              });
+                            })()}
                             {(enemyRosters[selEnemyTeam]||[]).length===0&&(
                               <div style={{textAlign:"center",color:C.textMuted,padding:30,background:C.bgPanel,borderRadius:12}}>
                                 ยังไม่มีผู้เล่น — เพิ่มชื่อด้านบนได้เลย
