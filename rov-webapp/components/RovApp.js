@@ -448,6 +448,35 @@ function flattenScoutGamesForFocus(records, teamFocus) {
   return out;
 }
 
+// Adapts scouted games into the exact same shape PlayerProfile already
+// expects for an enemy player (g.enemyPicks / g.gameStats.enemy / g.result
+// in the {WIN,LOSE} convention meaning "did WE win", even though there's
+// no "us" in scout data at all) — this is what lets a rival player's
+// scouted performance (against teams OTHER than us) feed the same
+// detailed stat view (KDA, Dmg, Gold/min, hero table, last-10-games) that
+// otherwise only had data when we'd actually played them ourselves.
+// statsA/statsB use the identical index-keyed shape as gameStats.our/
+// .enemy already (see UnifiedStatsEditor's gameStats={{our,enemy}} usage
+// in EditScoutGameModal), so no reshaping is needed beyond picking the
+// right side.
+function adaptScoutGamesForPlayerProfile(records, teamFocus) {
+  const out = [];
+  records.forEach(sm=>{
+    const isA = sm.teamA===teamFocus;
+    (sm.games||[]).forEach(g=>{
+      const teamWon = isA ? g.teamAResult==="WIN" : g.teamAResult==="LOSE";
+      out.push({
+        ourPicks: [],
+        enemyPicks: isA ? (g.picksA||[]) : (g.picksB||[]),
+        gameStats: { our:{}, enemy: isA ? (g.statsA||{}) : (g.statsB||{}) },
+        result: teamWon ? "LOSE" : "WIN", // convention: "LOSE" = the scouted team won
+        duration: g.duration,
+      });
+    });
+  });
+  return out;
+}
+
 function ObjectiveSummaryDisplay({ objSummary, ourLabel="เรา", enemyLabel="คู่แข่ง", title="🐉 Objective Control" }) {
   if (objSummary.total === 0) return null;
   return (
@@ -6176,6 +6205,25 @@ function RovAppInner() {
           selEnemyTeam, newName, newEnemyName, enemyStatsScope } = ui;
   const { rivals, roster, enemyRosters } = app;
 
+  // ── games to feed PlayerProfile ──
+  // For our own players, PlayerProfile keeps using the plain app-wide
+  // allGames like before (only one "our team", no scoping needed). For an
+  // enemy player, scope to THIS specific rival team AND respect whichever
+  // stats filter (all/vsUs/vsOthers) is currently selected — same filter
+  // the card-level summary above already uses, so the detailed profile
+  // view never disagrees with what the card just showed. This also
+  // incidentally fixes a latent risk in the enemy case: without scoping
+  // by rivalName, PlayerProfile would match a player purely by name
+  // across every rival ever recorded, which could silently mix two
+  // different teams' stats together if they happened to share a player
+  // name — a real (if uncommon) risk in esports where names repeat.
+  const profileGames = selPlayerEnemy
+    ? [
+        ...(enemyStatsScope!=="vsOthers" ? allGames.filter(g=>g.rivalName===selEnemyTeam) : []),
+        ...(enemyStatsScope!=="vsUs" ? adaptScoutGamesForPlayerProfile(patchFilteredScoutMatches, selEnemyTeam) : []),
+      ]
+    : allGames;
+
   // ── loading screen until Database hydration completes ──
   if (!app._loaded) {
     return (
@@ -7065,7 +7113,7 @@ function RovAppInner() {
                 <PlayerProfile
                   player={selPlayer}
                   isEnemy={selPlayerEnemy}
-                  allGames={allGames}
+                  allGames={profileGames}
                   onBack={()=>dispatchUI({type:"CLEAR_SEL_PLAYER"})}
                   photoUrl={app.playerPhotos?.[selPlayerEnemy ? `enemy:${selEnemyTeam}:${selPlayer}` : `our:${selPlayer}`]}
                 />
