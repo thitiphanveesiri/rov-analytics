@@ -5608,6 +5608,7 @@ function initDraftState() {
     bluePicks:      ROLES_PICK.map(r => ({ role: r, hero: null, player: "" })),
     redPicks:       ROLES_PICK.map(r => ({ role: r, hero: null, player: "" })),
     roleFilter:     "All",
+    heroViewMode:   "flat",   // "flat" | "grouped" — flat = filter by one role at a time (existing behavior); grouped = show all heroes sectioned by role
     search:         "",
     meta:           { result:"WIN", ourScore:"", enemyScore:"", duration:"", hasPause:false, pauseDuration:"", note:"" },
   };
@@ -5673,6 +5674,7 @@ function draftReducer(state, action) {
     }
 
     case "SET_ROLE_FILTER": return { ...state, roleFilter: action.payload };
+    case "SET_HERO_VIEW_MODE": return { ...state, heroViewMode: action.payload };
     case "SET_SEARCH":      return { ...state, search: action.payload };
     case "SET_META":        return { ...state, meta: { ...state.meta, ...action.payload } };
 
@@ -7816,7 +7818,7 @@ function DraftPageR({ draft, dispatch, roster, rivals, enemyRosters, onFinishSes
 
   const { stage, boType, rivalName, ourSide, currentGame, completedGames,
           step, blueBans, redBans, bluePicks, redPicks,
-          roleFilter, search, meta } = draft;
+          roleFilter, heroViewMode, search, meta } = draft;
 
   const bo = BO_OPTIONS.find(b=>b.label===boType) || BO_OPTIONS[2];
   const currentEnemyRoster = enemyRosters[rivalName] || [];
@@ -8189,6 +8191,7 @@ function DraftPageR({ draft, dispatch, roster, rivals, enemyRosters, onFinishSes
           <TeamPanelR side="blue" isOurTeam={ourSide==="blue"}
             bans={blueBans} picks={bluePicks} cur={cur}
             roster={roster} enemyRoster={currentEnemyRoster}
+            usedHeroNames={[...(ourSide==="blue" ? globalLockedOur : globalLockedEnemy)]}
             onPlayerChange={(i,v)=>dispatch({type:"SET_PLAYER",payload:{team:"blue",idx:i,playerName:v}})}
           />
           {/* center hero grid */}
@@ -8260,7 +8263,18 @@ function DraftPageR({ draft, dispatch, roster, rivals, enemyRosters, onFinishSes
                 onChange={e=>dispatch({type:"SET_SEARCH",payload:e.target.value})}
                 placeholder="🔍 Hero..."
                 style={{...iStyle,width:140,padding:"5px 10px",fontSize:12}}/>
-              {ROLES_FILTER.map(r=>(
+              {/* ── flat vs grouped-by-role view mode ── */}
+              <div style={{display:"flex",gap:2,background:"#14112a",borderRadius:99,padding:2,border:`1px solid ${C.border}`}}>
+                {[{id:"flat",label:"📋 ปกติ"},{id:"grouped",label:"🗂️ แยกตำแหน่ง"}].map(m=>(
+                  <button key={m.id} onClick={()=>dispatch({type:"SET_HERO_VIEW_MODE",payload:m.id})}
+                    style={{background:heroViewMode===m.id?C.primary:"transparent",
+                      border:"none",color:heroViewMode===m.id?"#fff":C.textMuted,
+                      borderRadius:99,padding:"3px 9px",fontSize:10,cursor:"pointer",fontWeight:700}}>
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+              {heroViewMode==="flat" && ROLES_FILTER.map(r=>(
                 <button key={r} onClick={()=>dispatch({type:"SET_ROLE_FILTER",payload:r})} style={{
                   background:roleFilter===r?(ROLE_COLOR[r]||C.primary):"#14112a",
                   border:`1px solid ${roleFilter===r?(ROLE_COLOR[r]||C.primary):C.border}`,
@@ -8268,8 +8282,12 @@ function DraftPageR({ draft, dispatch, roster, rivals, enemyRosters, onFinishSes
                   borderRadius:99,padding:"3px 9px",fontSize:10,cursor:"pointer",fontWeight:700}}>{r}</button>
               ))}
             </div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(66px,1fr))",gap:4,flex:1}}>
-              {filtered.map(hero=>{
+            {(() => {
+              // เก็บ markup การ์ดฮีโร่แต่ละใบไว้ในฟังก์ชันเดียว ใช้ร่วมกันได้
+              // ทั้งโหมด "เรียงปกติ" (flat) และ "แยกตามตำแหน่ง" (grouped)
+              // — เงื่อนไข used/global-lock/banned เหมือนกันทุกอย่าง ต่างแค่
+              // จะเอาฮีโร่ตัวไหนมาวางตรงไหนเท่านั้น
+              function renderHeroCard(hero) {
                 const usedHere = usedThisGame.has(hero.name);
                 const glLocked = isGlobalLocked(hero.name);
                 const disabled = usedHere || glLocked;
@@ -8290,8 +8308,43 @@ function DraftPageR({ draft, dispatch, roster, rivals, enemyRosters, onFinishSes
                     )}
                   </div>
                 );
-              })}
-            </div>
+              }
+
+              if (heroViewMode==="flat") {
+                return (
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(66px,1fr))",gap:4,flex:1}}>
+                    {filtered.map(renderHeroCard)}
+                  </div>
+                );
+              }
+
+              // ── โหมด "แยกตามตำแหน่ง" — โชว์ครบทุกตำแหน่ง เรียงเป็นหัวข้อ
+              //    ตามด้วยฮีโร่ตำแหน่งนั้น (ฮีโร่ที่มีหลายตำแหน่งจะโผล่ซ้ำใน
+              //    ทุกหัวข้อที่ตัวเองสังกัดอยู่ — ตรงกับตอนค้นหาจากตำแหน่งไหน
+              //    ก็เจอ ไม่ใช่แค่ตำแหน่งหลัก) ยังกรองด้วยช่องค้นหาเหมือนกัน
+              return (
+                <div style={{flex:1,overflowY:"auto"}}>
+                  {ROLES_FILTER.filter(r=>r!=="All").map(role=>{
+                    const heroesInRole = HERO_DATA.filter(h=>
+                      (h.roles||[h.role]).includes(role) &&
+                      h.name.toLowerCase().includes(search.toLowerCase())
+                    );
+                    if (heroesInRole.length===0) return null;
+                    return (
+                      <div key={role} style={{marginBottom:10}}>
+                        <div style={{fontSize:11,fontWeight:800,color:ROLE_COLOR[role]||C.primaryLight,
+                          marginBottom:5,paddingBottom:3,borderBottom:`1px solid ${C.border}`}}>
+                          {role} <span style={{color:C.textMuted,fontWeight:400}}>({heroesInRole.length})</span>
+                        </div>
+                        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(66px,1fr))",gap:4}}>
+                          {heroesInRole.map(renderHeroCard)}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
             <div style={{marginTop:6,display:"flex",gap:5,flexWrap:"wrap"}}>
               {DRAFT_ORDER.slice(step+1,step+4).map((s,i)=>(
                 <div key={i} style={{display:"flex",alignItems:"center",gap:4,background:C.bgPanel,
@@ -8310,6 +8363,7 @@ function DraftPageR({ draft, dispatch, roster, rivals, enemyRosters, onFinishSes
           <TeamPanelR side="red" isOurTeam={ourSide==="red"}
             bans={redBans} picks={redPicks} cur={cur}
             roster={roster} enemyRoster={currentEnemyRoster}
+            usedHeroNames={[...(ourSide==="red" ? globalLockedOur : globalLockedEnemy)]}
             onPlayerChange={(i,v)=>dispatch({type:"SET_PLAYER",payload:{team:"red",idx:i,playerName:v}})}
           />
         </div>
@@ -8401,12 +8455,16 @@ function DraftPageR({ draft, dispatch, roster, rivals, enemyRosters, onFinishSes
 }
 
 // TeamPanel renamed to TeamPanelR (same logic, already stateless)
-function TeamPanelR({ side, isOurTeam, bans, picks, cur, roster, enemyRoster=[], onPlayerChange }) {
+function TeamPanelR({ side, isOurTeam, bans, picks, cur, roster, enemyRoster=[], onPlayerChange, usedHeroNames=[] }) {
   const color       = side==="blue" ? C.blue : C.red;
   const isActive    = cur?.team===side;
   const isBanPhase  = cur?.action==="ban";
   const isPickPhase = cur?.action==="pick";
   const usedPlayers = new Set(picks.map(s=>s.player).filter(Boolean));
+  // แปลงชื่อฮีโร่ (จาก globalLockedOur/Enemy — สะสมทั้ง series) เป็น hero
+  // object จริงเพื่อโชว์เป็นรูปแทนที่จะเป็นแค่ข้อความ — ชื่อไหนหาไม่เจอใน
+  // HERO_DATA (เช่น พิมพ์ผิดตอนกรอกในอดีต) ก็แค่ข้ามไป ไม่ error
+  const usedHeroObjs = usedHeroNames.map(n=>HERO_DATA.find(h=>h.name===n)).filter(Boolean);
 
   return (
     <div style={{width:190,background:"#0e0b1e",
@@ -8436,6 +8494,19 @@ function TeamPanelR({ side, isOurTeam, bans, picks, cur, roster, enemyRoster=[],
           </div>
         )}
       </div>
+      {usedHeroObjs.length>0 && (
+        <div>
+          <div style={{fontSize:9,color:C.textMuted,fontWeight:700,marginBottom:5,
+            letterSpacing:0.5,textAlign:"center"}}>
+            ใช้ไปแล้วทั้ง Series ({usedHeroObjs.length})
+          </div>
+          <div style={{display:"flex",gap:4,justifyContent:"center",flexWrap:"wrap"}}>
+            {usedHeroObjs.map(h=>(
+              <HeroCard key={h.name} hero={h} size={32} showName={false}/>
+            ))}
+          </div>
+        </div>
+      )}
       <div>
         <div style={{fontSize:10,color:C.ban,fontWeight:700,marginBottom:5,letterSpacing:1}}>— BAN —</div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:4}}>
