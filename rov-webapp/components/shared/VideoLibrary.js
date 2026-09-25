@@ -25,15 +25,33 @@ const TAG_COLORS = {
 
 const TAGS = ["drill","review","scrim","tutorial","highlight"];
 
+// ── Embed security ──
+// เดิมทุก URL ที่ขึ้นต้นด้วย "http" ถูกฝังเป็น <iframe> ได้หมด (ใครใส่ URL ก็ได้ → เว็บแปลกๆ ทำ
+// clickjacking/redirect/tracking ใส่ผู้ชมทั้งทีมได้) ตอนนี้: YouTube ผ่าน id เท่านั้น, โดเมนอื่นฝังได้เฉพาะ
+// ใน allowlist นี้, ที่เหลือแสดงเป็นลิงก์ให้กดเปิดเอง — และทุก iframe ใส่ sandbox
+const EMBED_HOST_ALLOWLIST = [
+  "drive.google.com", "player.vimeo.com", "vimeo.com",
+  "player.twitch.tv", "clips.twitch.tv", "streamable.com",
+];
+const IFRAME_SANDBOX = "allow-scripts allow-same-origin allow-presentation allow-popups";
+const YT_ORIGIN = "https://www.youtube.com";
+
+function isAllowedEmbedHost(hostname) {
+  const h = hostname.toLowerCase();
+  return EMBED_HOST_ALLOWLIST.some(a => h === a || h.endsWith("." + a));
+}
+
 // detect YouTube/video URL type
 function getVideoInfo(url) {
   try {
-    const u = url.trim();
-    const ytMatch = u.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/live\/)([a-zA-Z0-9_-]{11})/);
+    const u = String(url || "").trim();
+    const ytMatch = u.match(/^(?:https?:\/\/)?(?:www\.|m\.)?(?:youtube\.com\/(?:watch\?(?:[^#]*&)?v=|embed\/|live\/|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
     if (ytMatch) return { type:"youtube", id:ytMatch[1] };
-    if (u.startsWith("blob:") || /\.(mp4|webm|mov|avi|mkv)$/i.test(u)) return { type:"video", url:u };
-    if (u.startsWith("http")) return { type:"iframe", url:u };
-    return null;
+    if (u.startsWith("blob:") || /^https?:\/\/.+\.(mp4|webm|mov|avi|mkv)(\?.*)?$/i.test(u)) return { type:"video", url:u };
+    const parsed = new URL(u);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return null;
+    if (isAllowedEmbedHost(parsed.hostname)) return { type:"iframe", url:u };
+    return { type:"link", url:u };
   } catch { return null; }
 }
 
@@ -74,6 +92,7 @@ function VideoEmbed({ src, title }) {
         style={{width:"100%",aspectRatio:"16/9",border:"none",borderRadius:8}}
         src={`https://www.youtube.com/embed/${info.id}?rel=0`}
         title={title} allowFullScreen
+        sandbox={IFRAME_SANDBOX} referrerPolicy="strict-origin-when-cross-origin"
         onError={()=>setEmbedFailed(true)}/>
     );
   }
@@ -82,9 +101,24 @@ function VideoEmbed({ src, title }) {
       <source src={src}/>
     </video>
   );
+  if (info.type==="link") return (
+    <div style={{width:"100%",aspectRatio:"16/9",background:"#0f0f0f",borderRadius:8,
+      display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:12}}>
+      <div style={{fontSize:13,color:C.textMuted,textAlign:"center",padding:"0 20px"}}>
+        เว็บนี้ไม่อยู่ในรายการที่ฝังในแอปได้ — กดเพื่อเปิดในแท็บใหม่
+      </div>
+      <a href={info.url} target="_blank" rel="noopener noreferrer"
+        style={{background:C.primary,color:"#fff",borderRadius:8,padding:"8px 20px",
+          fontWeight:700,fontSize:13,textDecoration:"none",maxWidth:"90%",
+          overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+        🔗 เปิดลิงก์
+      </a>
+    </div>
+  );
   return (
-    <iframe src={src} title={title}
+    <iframe src={info.url} title={title}
       style={{width:"100%",aspectRatio:"16/9",border:"none",borderRadius:8}}
+      sandbox={IFRAME_SANDBOX} referrerPolicy="strict-origin-when-cross-origin"
       allowFullScreen/>
   );
 }
@@ -273,12 +307,12 @@ function VideoCard({ v, onDelete, onEdit, forceOpen, onForceOpenHandled }) {
     // YouTube iframe API: seekTo via postMessage
     iframeRef.current.contentWindow?.postMessage(
       JSON.stringify({ event:"command", func:"seekTo", args:[seconds, true] }),
-      "*"
+      YT_ORIGIN
     );
     // also ensure it's playing
     iframeRef.current.contentWindow?.postMessage(
       JSON.stringify({ event:"command", func:"playVideo", args:[] }),
-      "*"
+      YT_ORIGIN
     );
   }
 
@@ -382,7 +416,8 @@ function VideoCard({ v, onDelete, onEdit, forceOpen, onForceOpenHandled }) {
               <iframe
                 ref={iframeRef}
                 style={{width:"100%",height:"100%",border:"none"}}
-                src={embedSrc} title={v.title} allowFullScreen/>
+                src={embedSrc} title={v.title} allowFullScreen
+                sandbox={IFRAME_SANDBOX} referrerPolicy="strict-origin-when-cross-origin"/>
             ) : (
               <VideoEmbed src={v.url} title={v.title}/>
             )}

@@ -1,6 +1,8 @@
 // Storage layer: load/save team data via the /api/data API route.
 // Replaces the original window.storage calls from the Claude.ai artifact.
 
+import { stableStringify } from "./permissions.js";
+
 const FIELDS = [
   "matches","rivals","roster","enemyRosters","scoutMatches",
   "playerPhotos","heroPhotos","customHeroes","roleOverrides","videos",
@@ -22,6 +24,34 @@ const FALLBACK = {
 // else (another team member, or another tab of the same user) saved in
 // between — see the optimistic-locking check in app/api/data/route.js.
 let lastKnownUpdatedAt = null;
+
+// ── "Base snapshot" สำหรับ 3-way merge ──
+// เก็บ JSON ของแต่ละ field ตามที่ server มีล่าสุดเท่าที่ client รู้ (ตอนโหลด หรือหลัง save สำเร็จ)
+// เป็นสตริงเพราะถูกและกันการแก้ค่าในหน่วยความจำโดยไม่ตั้งใจ — parse เฉพาะตอนชน conflict (นานๆ ที)
+// ใช้ตอบคำถามที่ merge แบบเดิม (เอา server เป็นฐาน แล้วเติมของใหม่ฝั่ง local) ตอบไม่ได้:
+//   • local ลบของ → เดิมถูกเติมกลับ (ลบไม่เป็นผล)      • คนอื่นลบของ → เดิม local เติมกลับ (ของที่ถูกลบฟื้นคืนชีพ)
+//   • แก้ field ที่ merge ไม่ได้ (patchInfo/whiteboard/โลโก้) ขณะคนอื่นแก้ field อื่น → เดิมแพ้ server เงียบๆ
+let baseJson = null; // { [field]: string } | null
+
+function serializeFields(obj) {
+  const fieldJson = {};
+  const parts = [];
+  for (const f of FIELDS) {
+    const j = JSON.stringify(obj[f] === undefined ? null : obj[f]);
+    fieldJson[f] = j;
+    parts.push(`${JSON.stringify(f)}:${j}`);
+  }
+  return { fieldJson, partsJoined: parts.join(",") };
+}
+
+function setBase(fieldJson, skip = []) {
+  const next = { ...(baseJson || {}) };
+  for (const f of FIELDS) {
+    if (skip.includes(f)) continue;
+    if (fieldJson[f] !== undefined) next[f] = fieldJson[f];
+  }
+  baseJson = next;
+}
 
 export async function loadFromStorage() {
   try {
@@ -58,6 +88,7 @@ export async function loadFromStorage() {
     // Build state from DB data, falling back to safe defaults per field
     const state = { _loaded: true, pending: false, noTeam: false };
     FIELDS.forEach(f => { state[f] = data[f] ?? FALLBACK[f]; });
+    setBase(serializeFields(state).fieldJson);
     return state;
   } catch (err) {
     console.error("loadFromStorage failed:", err);
@@ -77,61 +108,99 @@ export async function loadFromStorage() {
   }
 }
 
-// Fields that are arrays of objects with a stable `id` — safe to
-// union-merge on conflict (any local item whose id isn't in the fresh
-// server array is a genuine new addition, not an edit to something that
-// already exists, so adding it back in can't silently clobber someone
-// else's change to an existing item).
+// ── Merge classification ──
+// list (id)   : array ของ object ที่มี `id` คงที่
+// list (name) : customHeroes — ใช้ `name` เป็นตัวระบุ (ดู ADD_CUSTOM_HERO ใน RovApp.js)
+// map         : key→value (ชื่อฮีโร่→รูป, ทีม→roster ฯลฯ)
+// strings     : roster = array ของชื่อ (ตัวสตริงเองคือตัวระบุ)
+// อื่นๆ (patchInfo, teamLogo, whiteboardElements, whiteboardMapUrl) = atomic ทั้งก้อน
 const MERGEABLE_LIST_FIELDS = ["matches", "rivals", "scoutMatches", "videos", "schedules", "practiceAssignments", "whiteboardFormations"];
-
-// Fields that are plain key→value maps (hero name → photo URL, rival name
-// → roster, etc.) — same idea as MERGEABLE_LIST_FIELDS but merging by
-// object key instead of an `id` field. A key present only locally is a
-// new addition (safe to keep); a key present in both defers to the fresh
-// server value rather than risk clobbering someone else's edit to that
-// same entry.
 const MERGEABLE_MAP_FIELDS = ["enemyRosters", "playerPhotos", "heroPhotos", "roleOverrides", "rivalLogos", "heroTiers"];
-
-// customHeroes is an array of objects but keyed by `name`, not `id` (see
-// the ADD_CUSTOM_HERO reducer in RovApp.js) — needs its own merge that
-// matches on name instead of id.
 const MERGEABLE_BY_NAME_FIELDS = ["customHeroes"];
-
-// roster is a plain array of player-name strings (no id, no key — the
-// string itself IS the identity) — union merge is just a Set union.
 const MERGEABLE_STRING_LIST_FIELDS = ["roster"];
 
-function unionMergeById(freshArr, localArr) {
+const norm = stableStringify;
+const isObj = v => typeof v === "object" && v !== null && !Array.isArray(v);
+
+// 3-way merge ของ array ที่มีตัวระบุ — base = ตอนที่ client ซิงก์ล่าสุด, local = สิ่งที่ผู้ใช้เห็น, fresh = server ตอนนี้
+//   ทั้งสองฝั่งไม่ชนกัน → เก็บทั้งสองฝั่ง | ชนกัน (แก้ item เดียวกันทั้งคู่) → server ชนะ
+//   local ลบ + server ไม่ได้แก้ → ลบจริง | server ลบ → ไม่ฟื้นคืนชีพ | local ลบ + server แก้ → เก็บฉบับ server
+export function mergeListThreeWay(baseArr, localArr, freshArr, keyOf) {
   if (!Array.isArray(freshArr) || !Array.isArray(localArr)) return freshArr ?? localArr ?? [];
-  const freshIds = new Set(freshArr.map(item => item?.id));
-  const localOnly = localArr.filter(item => item?.id !== undefined && !freshIds.has(item.id));
-  return [...freshArr, ...localOnly];
+  const index = arr => {
+    const m = new Map();
+    (Array.isArray(arr) ? arr : []).forEach(it => { const k = keyOf(it); if (k !== undefined) m.set(k, it); });
+    return m;
+  };
+  const base = index(baseArr), local = index(localArr);
+  const out = [];
+  const seen = new Set();
+
+  for (const item of freshArr) {
+    const k = keyOf(item);
+    if (k === undefined) { out.push(item); continue; }
+    seen.add(k);
+    if (!base.has(k)) { out.push(item); continue; }                         // server เพิ่มเอง (หรือ base ไม่รู้จัก)
+    const serverChanged = norm(item) !== norm(base.get(k));
+    if (!local.has(k)) { if (serverChanged) out.push(item); continue; }     // local ลบ: ลบจริงถ้า server ไม่ได้แก้
+    const localChanged = norm(local.get(k)) !== norm(base.get(k));
+    out.push(localChanged && !serverChanged ? local.get(k) : item);          // ชนกัน → server ชนะ
+  }
+  for (const item of localArr) {
+    const k = keyOf(item);
+    if (k === undefined || seen.has(k)) continue;
+    if (!base.has(k)) out.push(item);                                        // เพิ่มใหม่ฝั่ง local
+    // อยู่ใน base แต่ server ไม่มีแล้ว = คนอื่นลบไปแล้ว → ไม่เติมกลับ
+  }
+  return out;
 }
 
-function unionMergeByName(freshArr, localArr) {
-  if (!Array.isArray(freshArr) || !Array.isArray(localArr)) return freshArr ?? localArr ?? [];
-  const freshNames = new Set(freshArr.map(item => item?.name));
-  const localOnly = localArr.filter(item => item?.name !== undefined && !freshNames.has(item.name));
-  return [...freshArr, ...localOnly];
+export function mergeMapThreeWay(baseMap, localMap, freshMap) {
+  if (!isObj(freshMap)) return localMap ?? {};
+  if (!isObj(localMap)) return freshMap ?? {};
+  const base = isObj(baseMap) ? baseMap : {};
+  const out = {};
+  for (const k of Object.keys(freshMap)) {
+    if (!(k in base)) { out[k] = freshMap[k]; continue; }
+    const serverChanged = norm(freshMap[k]) !== norm(base[k]);
+    if (!(k in localMap)) { if (serverChanged) out[k] = freshMap[k]; continue; }
+    const localChanged = norm(localMap[k]) !== norm(base[k]);
+    out[k] = localChanged && !serverChanged ? localMap[k] : freshMap[k];
+  }
+  for (const k of Object.keys(localMap)) {
+    if (k in out) continue;
+    if (k in freshMap) continue;                 // (ถูกจัดการในลูปบนแล้ว — กรณีที่ถูกตัดทิ้งโดยตั้งใจ)
+    if (!(k in base)) out[k] = localMap[k];      // key ใหม่ฝั่ง local
+  }
+  return out;
 }
 
-function unionMergeMap(freshMap, localMap) {
-  if (typeof freshMap !== "object" || freshMap === null) return localMap ?? {};
-  if (typeof localMap !== "object" || localMap === null) return freshMap ?? {};
-  const merged = { ...freshMap };
-  Object.keys(localMap).forEach(key => {
-    if (!(key in merged)) merged[key] = localMap[key]; // local-only key = new addition, keep it
-    // key exists in both → defer to fresh's value (already copied above),
-    // don't let the local (possibly stale) value overwrite it
-  });
-  return merged;
-}
-
-function unionMergeStringList(freshArr, localArr) {
+export function mergeStringListThreeWay(baseArr, localArr, freshArr) {
   if (!Array.isArray(freshArr)) return localArr ?? [];
   if (!Array.isArray(localArr)) return freshArr;
-  const merged = [...freshArr];
-  localArr.forEach(name => { if (!merged.includes(name)) merged.push(name); });
+  const base = new Set(Array.isArray(baseArr) ? baseArr : []);
+  const local = new Set(localArr), fresh = new Set(freshArr);
+  const out = freshArr.filter(x => !(base.has(x) && !local.has(x)));         // local ลบ (และ server ยังมีเท่าเดิม) → ลบ
+  localArr.forEach(x => { if (!fresh.has(x) && !base.has(x)) out.push(x); }); // เพิ่มใหม่ฝั่ง local
+  return out;
+}
+
+// รวมทุก field: ถ้า local ไม่เคยแตะ field นั้น → เอา server | ถ้า server ไม่เคยแตะ → เอา local (ของเดิมตรงนี้แพ้ server เสมอ)
+// | ถ้าแก้ทั้งคู่ → ใช้ merge ตามชนิด (atomic = server ชนะ)
+export function mergeWithBase(baseObj, localObj, freshObj) {
+  const merged = {};
+  for (const f of FIELDS) {
+    const b = baseObj?.[f], l = localObj?.[f], s = freshObj?.[f] ?? FALLBACK[f];
+    if (baseObj && b !== undefined) {
+      if (norm(l) === norm(b)) { merged[f] = s; continue; }   // เราไม่ได้แก้ field นี้
+      if (norm(s) === norm(b)) { merged[f] = l; continue; }   // คนอื่นไม่ได้แก้ field นี้
+    }
+    if (MERGEABLE_LIST_FIELDS.includes(f))           merged[f] = mergeListThreeWay(b, l, s, it => it?.id);
+    else if (MERGEABLE_BY_NAME_FIELDS.includes(f))   merged[f] = mergeListThreeWay(b, l, s, it => it?.name);
+    else if (MERGEABLE_MAP_FIELDS.includes(f))       merged[f] = mergeMapThreeWay(b, l, s);
+    else if (MERGEABLE_STRING_LIST_FIELDS.includes(f)) merged[f] = mergeStringListThreeWay(b, l, s);
+    else                                              merged[f] = s;   // atomic ที่ทั้งสองฝั่งแก้: server ชนะ
+  }
   return merged;
 }
 
@@ -146,6 +215,17 @@ async function fetchFreshData() {
 // ── Internal: the actual save implementation (was previously the whole
 //    exported saveToStorage body) — now only ever called one-at-a-time
 //    via the queue below, never concurrently. ──
+async function putData(fieldJson, partsJoined, expectedUpdatedAt) {
+  const body = `{${partsJoined}${expectedUpdatedAt ? `,"expectedUpdatedAt":${JSON.stringify(expectedUpdatedAt)}` : ""}}`;
+  return fetch("/api/data", { method: "PUT", headers: { "Content-Type": "application/json" }, body });
+}
+
+function makeError(message, extra = {}) {
+  const e = new Error(message);
+  Object.assign(e, extra);
+  return e;
+}
+
 async function _doSaveToStorage(appState) {
   // Pending-approval / no-team accounts can't save anything — server
   // blocks this with a 403 anyway (see app/api/data PUT), but skip the
@@ -157,73 +237,43 @@ async function _doSaveToStorage(appState) {
   // Only send the fields that belong in the DB — strip all React/internal state
   const payload = {};
   FIELDS.forEach(f => { payload[f] = appState[f] ?? FALLBACK[f]; });
-  if (lastKnownUpdatedAt) payload.expectedUpdatedAt = lastKnownUpdatedAt;
+  const { fieldJson, partsJoined } = serializeFields(payload);
 
-  const res = await fetch("/api/data", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  const res = await putData(fieldJson, partsJoined, lastKnownUpdatedAt);
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
 
+    // ── 428: server ไม่ได้รับเลขเวอร์ชัน (client ยังไม่เคยโหลดสำเร็จ/state หลุด) ──
+    // ดึงเวอร์ชันล่าสุดมาตั้งฐาน แล้วให้ autosave รอบถัดไป (retry อัตโนมัติของ RovApp) ลองใหม่
+    if (res.status === 428) {
+      const fresh = await fetchFreshData();
+      if (fresh?.updatedAt) lastKnownUpdatedAt = fresh.updatedAt;
+      throw makeError("ต้องซิงก์เวอร์ชันข้อมูลก่อนบันทึก กำลังลองใหม่", { isConflict: true });
+    }
+
     if (res.status === 409) {
       // ── Someone else saved in between ──
-      // The old behavior here was to just refuse and tell the user to
-      // manually refresh — safe, but it meant losing whatever they were
-      // in the middle of (e.g. a video they'd just added), even though
-      // in the common case nobody actually touched the SAME data: someone
-      // just autosaved something unrelated a moment earlier. So: try a
-      // one-time automatic recovery first — pull the fresh server state,
-      // union-merge any locally-added items (by id) from the "safe to
-      // merge" list fields into it, and retry the save once with that
-      // merged payload. Only fall back to the hard "please refresh" error
-      // if that merge+retry ALSO conflicts (a genuine back-to-back
-      // collision, or a conflict in a field we can't safely auto-merge).
+      // Try a one-time automatic recovery first: pull the fresh server state,
+      // 3-way merge it with what this client has (base = last synced version),
+      // and retry the save once with the merged payload. Only fall back to the
+      // hard "please refresh" error if that merge+retry ALSO conflicts.
       const fresh = await fetchFreshData();
       if (fresh) {
-        // เริ่มจาก "fresh" (ค่าล่าสุดจาก server) เป็นฐาน ไม่ใช่ payload เดิม
-        // — สำคัญมาก: field ที่ merge ไม่ได้ (teamLogo, patchInfo,
-        // whiteboardElements ฯลฯ) ต้อง "แพ้" ให้ค่าฝั่ง server เสมอ ไม่งั้น
-        // การ retry นี้จะเอาค่า local (ที่อาจจะเก่ากว่าคนอื่นไปแล้ว) ไปทับ
-        // สิ่งที่อีกคนเพิ่งบันทึกไว้ซ้ำ กลายเป็นบั๊กเดิมที่ optimistic lock
-        // มีไว้กันตั้งแต่แรกเป๊ะๆ — เอาแค่ field ที่รู้วิธี merge อย่าง
-        // ปลอดภัยแล้วเท่านั้นที่เอาของ local มาเสริมทับ fresh
-        const merged = {};
-        FIELDS.forEach(f => { merged[f] = fresh[f] ?? FALLBACK[f]; });
-        MERGEABLE_LIST_FIELDS.forEach(f => {
-          merged[f] = unionMergeById(fresh[f], payload[f]);
-        });
-        MERGEABLE_BY_NAME_FIELDS.forEach(f => {
-          merged[f] = unionMergeByName(fresh[f], payload[f]);
-        });
-        MERGEABLE_MAP_FIELDS.forEach(f => {
-          merged[f] = unionMergeMap(fresh[f], payload[f]);
-        });
-        MERGEABLE_STRING_LIST_FIELDS.forEach(f => {
-          merged[f] = unionMergeStringList(fresh[f], payload[f]);
-        });
-        merged.expectedUpdatedAt = fresh.updatedAt;
+        const baseObj = {};
+        if (baseJson) FIELDS.forEach(f => { try { baseObj[f] = baseJson[f] !== undefined ? JSON.parse(baseJson[f]) : undefined; } catch {} });
+        const merged = mergeWithBase(baseJson ? baseObj : null, payload, fresh);
+        const m = serializeFields(merged);
 
-        const retryRes = await fetch("/api/data", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(merged),
-        });
+        const retryRes = await putData(m.fieldJson, m.partsJoined, fresh.updatedAt);
 
         if (retryRes.ok) {
           const retryBody = await retryRes.json().catch(() => ({}));
           if (retryBody.updatedAt) lastKnownUpdatedAt = retryBody.updatedAt;
+          setBase(m.fieldJson, retryBody.ignoredFields || []);
           // Let the caller know a merge happened, so the UI can say so
-          // instead of pretending it was a completely normal save — the
-          // user should still know their view of some non-mergeable
-          // fields (roster/photos/etc, if anyone touched those in the
-          // same window) may now reflect the other person's version, not
-          // whatever they had on screen a moment ago.
-          const mergedNotice = new Error("merged");
-          mergedNotice.wasMerged = true;
-          throw mergedNotice;
+          // instead of pretending it was a completely normal save.
+          throw makeError("merged", { wasMerged: true });
         }
         // retry also failed — fall through to the hard conflict error below,
         // using whatever updatedAt that second attempt reports
@@ -233,11 +283,10 @@ async function _doSaveToStorage(appState) {
         lastKnownUpdatedAt = body.currentUpdatedAt || lastKnownUpdatedAt;
       }
 
-      const conflictErr = new Error(
-        body.message || "ข้อมูลถูกแก้ไขจากที่อื่นระหว่างนี้ กรุณารีเฟรชหน้าก่อนบันทึกต่อ"
+      throw makeError(
+        body.message || "ข้อมูลถูกแก้ไขจากที่อื่นระหว่างนี้ กรุณารีเฟรชหน้าก่อนบันทึกต่อ",
+        { isConflict: true }
       );
-      conflictErr.isConflict = true;
-      throw conflictErr;
     }
 
     // Surface the real reason (e.g. Zod validation details) instead of a
@@ -245,11 +294,22 @@ async function _doSaveToStorage(appState) {
     // save silently fails, so don't swallow it here.
     const detail = body.error || body.message || JSON.stringify(body.issues || body) || `HTTP ${res.status}`;
     console.error("saveToStorage: server rejected save:", detail);
-    throw new Error(detail);
+    // code/userMessage ให้ UI แยกเคส "ต้องรีเฟรช" (ข้อมูลลดผิดปกติ/ใหญ่เกิน) ออกจาก error ทั่วไปได้
+    throw makeError(detail, {
+      code: body.error === "SHRINK_GUARD" ? "SHRINK_GUARD" : body.code,
+      userMessage: body.message,
+    });
   }
 
   const body = await res.json().catch(() => ({}));
   if (body.updatedAt) lastKnownUpdatedAt = body.updatedAt;
+
+  // ── field ที่ server ไม่ยอมให้เขียน (สิทธิ์ member) ──
+  // server ตอบ ok แต่ทิ้ง field เหล่านั้นไป — อย่าถือว่าซิงก์แล้ว (ไม่อัปเดต base ของ field นั้น)
+  // และบอก UI ให้แจ้งผู้ใช้ ไม่งั้นจะเห็นเป็น "บันทึกแล้ว ✅" ทั้งที่การแก้ไขไม่ถูกเก็บ
+  const ignored = Array.isArray(body.ignoredFields) ? body.ignoredFields : [];
+  setBase(fieldJson, ignored);
+  if (ignored.length) throw makeError("ignored fields", { wasIgnored: true, ignoredFields: ignored });
 
   // IMPORTANT: never catch-and-return-false here — the caller relies on
   // this throwing so it can show an accurate save-failed state to the

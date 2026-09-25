@@ -63,7 +63,7 @@ export const authOptions = {
 
         const user = await prisma.user.findUnique({
           where: { email },
-          include: { team: { select: { name: true, inviteCode: true } } }
+          include: { team: { select: { name: true } } }
         });
 
         // ── always pay the bcrypt cost, whether or not `user` exists ──
@@ -77,7 +77,11 @@ export const authOptions = {
           name:       user.name,
           teamId:     user.teamId,
           teamName:   user.team?.name,
-          inviteCode: user.team?.inviteCode,
+          // ── ไม่ใส่ inviteCode ที่นี่ ──
+          // เดิมทุก user (ไม่ใช่แค่ admin) ได้ inviteCode ติดไปใน JWT/session ของตัวเอง — ใครก็เปิด
+          // DevTools แล้วอ่าน useSession() ดู invite code ของทีมได้หมด ทั้งที่ควรเป็นความลับระดับ admin
+          // AdminPanel ดึง inviteCode สดจาก GET /api/data แทน (route นั้น gate ด้วย role จริงทุก request
+          // อยู่แล้ว — ดู app/api/data/route.js) จึงไม่ต้องพก secret นี้ไว้ใน token ของทุกคนเลย
           role:       user.role,
           playerName: user.playerName,
         };
@@ -94,8 +98,8 @@ export const authOptions = {
         token.name       = user.name;
         token.teamId     = user.teamId;
         token.teamName   = user.teamName;
-        token.inviteCode = user.inviteCode;
         token.role       = user.role;
+        token.roleCheckedAt = Date.now(); // ใช้คู่กับ periodic re-check ด้านล่าง
         token.playerName = user.playerName;
       }
       // เมื่อฝั่ง client เรียก useSession().update({ playerName }) เพื่ออัปเดตทันที
@@ -103,6 +107,36 @@ export const authOptions = {
       if (trigger === "update" && session?.playerName !== undefined) {
         token.playerName = session.playerName;
       }
+
+      // ── Periodic re-check ของ role/team จาก DB ──
+      // session ใช้ JWT strategy (ไม่แตะ DB ทุก request) อายุ 30 วัน — ทุก endpoint ที่เขียนข้อมูล
+      // (app/api/data, app/api/upload) เช็ค role/status/teamId สดจาก DB เองอยู่แล้วทุกครั้ง ดังนั้นการที่
+      // token นี้ค้างค่าเก่าไม่ใช่ช่องโหว่ความปลอดภัย — แต่เป็นเรื่อง UX: คนที่เพิ่งถูกลด role จาก coach
+      // เป็น member (หรือถูกเตะออกจากทีม) จะยังเห็นเมนู/ปุ่มตามสิทธิ์เดิมจนกว่าจะ login ใหม่ ซึ่งกดแล้ว
+      // จะโดน server เงียบๆ เพิกเฉย (ผ่าน lib/permissions.js) — งงได้โดยไม่จำเป็น จึง sync ทุก ~5 นาที
+      // แทนที่จะรอเต็ม 30 วัน โดยไม่ต้องแตะ DB ทุก request (เช็คด้วย roleCheckedAt ก่อน)
+      const ROLE_RECHECK_MS = 5 * 60 * 1000;
+      if (token.id && (!token.roleCheckedAt || Date.now() - token.roleCheckedAt > ROLE_RECHECK_MS)) {
+        try {
+          const fresh = await prisma.user.findUnique({
+            where: { id: token.id },
+            select: { role: true, teamId: true, team: { select: { name: true } } },
+          });
+          if (fresh) {
+            token.role     = fresh.role;
+            token.teamId   = fresh.teamId;
+            token.teamName = fresh.team?.name;
+          } else {
+            // บัญชีถูกลบไปแล้ว — เคลียร์ทีม/สิทธิ์ ไม่ต้องรอให้ server route อื่นมาปฏิเสธทีละครั้ง
+            token.role = null; token.teamId = null; token.teamName = null;
+          }
+        } catch (err) {
+          // ล้มเหลว (DB ชั่วคราว) ก็ยังใช้ token เดิมต่อไปได้ — ไม่ทำให้คน login ไม่ได้เพราะ DB สะดุดแป๊บเดียว
+          console.error("jwt role re-check failed (non-fatal):", err);
+        }
+        token.roleCheckedAt = Date.now();
+      }
+
       return token;
     },
     async session({ session, token }) {
@@ -112,7 +146,6 @@ export const authOptions = {
         session.user.name       = token.name;
         session.user.teamId     = token.teamId;
         session.user.teamName   = token.teamName;
-        session.user.inviteCode = token.inviteCode;
         session.user.role       = token.role;
         session.user.playerName = token.playerName;
       }

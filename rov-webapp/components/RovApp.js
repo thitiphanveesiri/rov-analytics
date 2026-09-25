@@ -87,6 +87,9 @@ import {
 // ═══════════════════════════════════════════════════════════════
 const BANS_PER_TEAM = 4; // TODO: เปลี่ยนเป็น 5 ตอนแพตช์ปล่อยจริงพร้อมลำดับใหม่
 const DRAFT_LS_KEY = "rov_analytics_draft_inprogress_v1"; // localStorage key สำหรับ autosave draft ที่ทำค้างไว้
+// key เดิมไม่ผูกกับผู้ใช้ — เครื่องที่ใช้ร่วมกัน (คอมร้านเน็ต/เครื่องกลางทีม) จะเห็น/กู้ draft ของคนก่อนหน้า
+// จึงผูกกับ user id และลบ key เก่าทิ้งตอนเปิดแอป (ดู effect ใน RovAppInner)
+function draftKeyFor(userId) { return userId ? `${DRAFT_LS_KEY}:${userId}` : null; }
 
 const DRAFT_ORDER = [
   {team:"blue",action:"ban", slot:0},{team:"red", action:"ban", slot:0},
@@ -3168,6 +3171,21 @@ function RivalStatsSection({ selRival, rGames, enemyRosters }) {
 // ═══════════════════════════════════════════
 //  CSV EXPORT UTIL
 // ═══════════════════════════════════════════
+// ── Security helpers ──
+// escHtml: ใช้กับทุกค่าที่ผู้ใช้กรอก ก่อนใส่ลง HTML string (หน้า Print ใช้ document.write
+// ใน window ที่สืบทอด origin ของแอป จึงต้อง escape เสมอ ไม่งั้นเป็น stored XSS)
+function escHtml(v) {
+  return String(v ?? "").replace(/[&<>"']/g,
+    c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
+}
+// csvCell: ครอบเครื่องหมายคำพูดตามมาตรฐาน CSV + กัน formula injection ใน Excel/Sheets
+// (ค่าที่ขึ้นต้นด้วย = + - @ tab CR จะถูกใส่ ' นำหน้าให้กลายเป็นข้อความธรรมดา)
+function csvCell(v) {
+  let t = String(v ?? "");
+  if (/^[=+\-@\t\r]/.test(t)) t = "'" + t;
+  return `"${t.replace(/"/g, '""')}"`;
+}
+
 function exportCSV(matches, allGames) {
   const rows = [];
   // header
@@ -3188,9 +3206,9 @@ function exportCSV(matches, allGames) {
         const k=Number(gs.kills||0), d=Number(gs.deaths||0), a=Number(gs.assists||0);
         const kda = (k+a)/Math.max(d,1);
         rows.push([
-          m.date, si+1, `"${m.rivalName||""}"`, m.boType||"BO1", gameNo,
+          m.date, si+1, csvCell(m.rivalName), m.boType||"BO1", gameNo,
           g.result||"", g.ourSide||"", g.ourScore||0, g.enemyScore||0, durationToMinutes(g.duration).toFixed(2),
-          "เรา", idx, slot.role||"", `"${slot.hero?.name||""}"`, `"${slot.player||""}"`,
+          "เรา", idx, slot.role||"", csvCell(slot.hero?.name), csvCell(slot.player),
           gs.kills??"-", gs.deaths??"-", gs.assists??"-",
           gs.damage??"-", gs.damageTaken??"-", gs.gold??"-",
           gs.kills!==undefined ? kda.toFixed(2) : "-"
@@ -3202,9 +3220,9 @@ function exportCSV(matches, allGames) {
         const k=Number(gs.kills||0), d=Number(gs.deaths||0), a=Number(gs.assists||0);
         const kda = (k+a)/Math.max(d,1);
         rows.push([
-          m.date, si+1, `"${m.rivalName||""}"`, m.boType||"BO1", gameNo,
+          m.date, si+1, csvCell(m.rivalName), m.boType||"BO1", gameNo,
           g.result||"", g.ourSide||"", g.ourScore||0, g.enemyScore||0, durationToMinutes(g.duration).toFixed(2),
-          "คู่แข่ง", idx, slot.role||"", `"${slot.hero?.name||""}"`, `"${slot.player||""}"`,
+          "คู่แข่ง", idx, slot.role||"", csvCell(slot.hero?.name), csvCell(slot.player),
           gs.kills??"-", gs.deaths??"-", gs.assists??"-",
           gs.damage??"-", gs.damageTaken??"-", gs.gold??"-",
           gs.kills!==undefined ? kda.toFixed(2) : "-"
@@ -5749,17 +5767,22 @@ function RovAppInner() {
   // ── Autosave in-progress draft ไว้ที่ localStorage ──
   // ป้องกันเสีย progress ทั้งหมดถ้าแท็บ crash/refresh/ปิดพลาดกลางคันตอน
   // กำลัง ban/pick อยู่ (ระหว่างแข่งจริง ที่กดดันเรื่องเวลามาก เสียแล้วเสียเลย)
+  const draftKey = draftKeyFor(session?.user?.id);
   useEffect(() => {
+    try { localStorage.removeItem(DRAFT_LS_KEY); } catch {} // ล้าง key แบบเก่าที่ไม่ผูกกับผู้ใช้
+  }, []);
+  useEffect(() => {
+    if (!draftKey) return; // session ยังไม่พร้อม — อย่าเขียนลง key ที่ไม่รู้เจ้าของ
     try {
       if (draft.stage === "setup") {
-        localStorage.removeItem(DRAFT_LS_KEY);
+        localStorage.removeItem(draftKey);
       } else {
-        localStorage.setItem(DRAFT_LS_KEY, JSON.stringify(draft));
+        localStorage.setItem(draftKey, JSON.stringify(draft));
       }
     } catch (err) {
       console.warn("Draft autosave to localStorage failed (non-fatal):", err);
     }
-  }, [draft]);
+  }, [draft, draftKey]);
   const [saveStatus, setSaveStatus] = useState("idle"); // idle | saving | saved | error
   const [heroDataVersion, setHeroDataVersion] = useState(0); // bump to force re-render after HERO_DATA mutation
   // 1400px covers iPad landscape (max ~1366 CSS px) too — with 13 nav items
@@ -5823,6 +5846,7 @@ function RovAppInner() {
   const pendingRef = useRef(false);
 
   const conflictRetryRef = useRef(0);
+  const ignoredToastRef = useRef(""); // จำชุด field ที่เคยแจ้งไปแล้ว จะได้ไม่เด้ง toast ซ้ำทุกครั้งที่ autosave
   const conflictRetryTimerRef = useRef(null);
   const MAX_CONFLICT_RETRIES = 4;
 
@@ -5836,7 +5860,23 @@ function RovAppInner() {
       setSaveStatus("saved");
       setTimeout(()=>setSaveStatus("idle"), 2000);
     } catch (err) {
-      if (err.wasMerged) {
+      if (err.wasIgnored) {
+        // ── server รับ request แต่ทิ้งบาง field เพราะบัญชีนี้ไม่มีสิทธิ์แก้ (member) ──
+        // ไม่ใช่ความล้มเหลวของระบบ (ส่วนที่มีสิทธิ์ถูกบันทึกแล้ว) แต่ต้องบอกผู้ใช้ตรงๆ ว่าส่วนที่แก้ไม่ถูกเก็บ
+        // ไม่งั้นจะเห็น "บันทึกแล้ว ✅" ทั้งที่รีเฟรชแล้วค่าเดิมกลับมา
+        conflictRetryRef.current = 0;
+        setSaveStatus("saved");
+        setTimeout(()=>setSaveStatus("idle"), 2000);
+        const IGNORED_LABEL = { matches:"แมตช์", rivals:"ทีมคู่แข่ง", roster:"Roster", enemyRosters:"Roster คู่แข่ง",
+          scoutMatches:"Scout", playerPhotos:"รูปผู้เล่น", teamLogo:"โลโก้ทีม", rivalLogos:"โลโก้คู่แข่ง",
+          schedules:"ตารางแข่ง", patchInfo:"Patch notes", heroTiers:"Tier list", practiceAssignments:"การบ้านฝึกซ้อม" };
+        const key = (err.ignoredFields||[]).join(",");
+        if (ignoredToastRef.current !== key) {
+          ignoredToastRef.current = key;
+          const names = (err.ignoredFields||[]).map(f=>IGNORED_LABEL[f]||f).join(", ");
+          toast(`บัญชีของคุณแก้ส่วนนี้ไม่ได้ (${names}) — การเปลี่ยนแปลงจะไม่ถูกบันทึก รีเฟรชหน้าเพื่อดูข้อมูลจริงของทีม`, "error", 10000);
+        }
+      } else if (err.wasMerged) {
         // ── ชนกันแต่กู้คืนอัตโนมัติสำเร็จ ──
         // saveToStorage() พยายามรวมข้อมูลที่เพิ่ม (แมตช์/วิดีโอ/ตารางซ้อม
         // ฯลฯ) เข้ากับข้อมูลล่าสุดจาก server ให้แล้วและบันทึกสำเร็จ — ไม่ใช่
@@ -5892,6 +5932,9 @@ function RovAppInner() {
             toast("บันทึกไม่สำเร็จหลายครั้งติดกัน — กรุณารีเฟรชหน้าเว็บแล้วลองบันทึกใหม่ด้วยตัวเอง เพื่อไม่ให้ข้อมูลล่าสุดหายไป", "error", 15000);
             conflictRetryRef.current = 0;
           }
+        } else if (err.code === "SHRINK_GUARD" || err.code === "PAYLOAD_TOO_LARGE") {
+          // server ปฏิเสธเพื่อกันข้อมูลหาย/ใหญ่เกิน — ต้องให้ผู้ใช้รู้เหตุผลจริง ไม่ใช่ "ลองใหม่" (ลองซ้ำก็ไม่ผ่าน)
+          toast(err.userMessage || err.message, "error", 15000);
         } else {
           toast("บันทึกไม่สำเร็จ กรุณาลองใหม่", "error", 5000);
         }
@@ -6017,17 +6060,17 @@ function RovAppInner() {
       const w = games.filter(g=>g.result==="WIN").length;
       const t = games.length||1;
       return `<tr>
-        <td>${m.date||""}</td>
+        <td>${escHtml(m.date)}</td>
         <td>${m.category==="tournament"?"🏆 แข่ง":"🏋️ ซ้อม"}</td>
-        <td><strong>vs ${m.rivalName||""}</strong></td>
-        <td>${m.boType||"BO1"}</td>
-        <td style="color:${w>t/2?"#00b894":"#fd79a8"};font-weight:700">${games.length>0?`${w}W-${t-w}L`:m.result}</td>
-        <td>${m.note||""}</td>
+        <td><strong>vs ${escHtml(m.rivalName)}</strong></td>
+        <td>${escHtml(m.boType||"BO1")}</td>
+        <td style="color:${w>t/2?"#00b894":"#fd79a8"};font-weight:700">${games.length>0?`${w}W-${t-w}L`:escHtml(m.result)}</td>
+        <td>${escHtml(m.note)}</td>
       </tr>`;
     }).join("");
 
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
-    <title>Match Report — ${app.teamName||"RoV Team"}</title>
+    <title>Match Report — ${escHtml(app.teamName||"RoV Team")}</title>
     <style>
       body{font-family:'Segoe UI',sans-serif;padding:24px;color:#1a1a2e}
       h1{color:#6C5CE7;margin-bottom:4px}
@@ -6042,7 +6085,7 @@ function RovAppInner() {
       tr:nth-child(even){background:#f9f9ff}
       @media print{body{padding:10px}}
     </style></head><body>
-    <h1>🦅 Match Report — ${app.teamName||"RoV Team"}</h1>
+    <h1>🦅 Match Report — ${escHtml(app.teamName||"RoV Team")}</h1>
     <div class="meta">สร้างเมื่อ ${new Date().toLocaleDateString("th-TH",{day:"numeric",month:"long",year:"numeric"})}
       · ประเภท: ${filterCat==="all"?"ทั้งหมด":filterCat==="tournament"?"เฉพาะแข่ง":"เฉพาะซ้อม"}</div>
     <div class="summary">
@@ -6057,10 +6100,11 @@ function RovAppInner() {
     </body></html>`;
 
     const w = window.open("","_blank");
+    if (!w) { toast("เบราว์เซอร์บล็อกหน้าต่างพิมพ์ — กรุณาอนุญาต popup แล้วลองใหม่", "error"); return; }
     w.document.write(html);
     w.document.close();
     setTimeout(()=>w.print(), 500);
-  }, [patchFilteredMatches, app.teamName]);
+  }, [patchFilteredMatches, app.teamName, toast]);
 
   const handleEditMatchMeta = useCallback(({ id, rivalName, category, note }) => {
     dispatchApp({ type:"UPDATE_MATCH_META", payload:{ id, rivalName, category, note } });
@@ -6373,7 +6417,7 @@ function RovAppInner() {
                   {isAdmin?"👑 Admin":isCoach?"🎓 Coach":"👤 Member"}
                 </span>
               </div>
-              <button onClick={()=>signOut({ callbackUrl: "/login" })}
+              <button onClick={()=>{ try{ if(draftKey) localStorage.removeItem(draftKey); }catch{} signOut({ callbackUrl: "/login" }); }}
                 style={{background:"transparent",border:`1px solid ${C.border}`,color:C.textMuted,
                   borderRadius:7,padding:"8px 14px",cursor:"pointer",fontSize:12,fontWeight:600,minHeight:40}}>
                 ออกจากระบบ
@@ -7796,13 +7840,15 @@ function MockDraftTrainer({ rivals, allGames, scoutMatches, heroTiers, onExit })
 }
 
 function DraftPageR({ draft, dispatch, roster, rivals, enemyRosters, onFinishSession, allGames, scoutMatches, heroTiers }) {
+  const { data: draftSession } = useSession();
+  const draftKey = draftKeyFor(draftSession?.user?.id);
   const [mockMode, setMockMode] = useState(false);
 
   // เช็คครั้งเดียวตอนเปิดหน้านี้ว่ามี draft ที่ทำค้างไว้ (จากแท็บก่อนหน้าที่ crash/ปิดพลาด) ไหม
   const [recoverable] = useState(() => {
     if (draft.stage !== "setup") return null; // อยู่กลาง session อยู่แล้ว ไม่ต้องเสนอกู้คืน
     try {
-      const raw = localStorage.getItem(DRAFT_LS_KEY);
+      const raw = draftKey ? localStorage.getItem(draftKey) : null;
       if (!raw) return null;
       const saved = JSON.parse(raw);
       if (saved && saved.stage && saved.stage !== "setup") return saved;
@@ -7916,7 +7962,7 @@ function DraftPageR({ draft, dispatch, roster, rivals, enemyRosters, onFinishSes
                 🔄 กู้คืนต่อ
               </button>
               <button onClick={()=>{
-                  try{ localStorage.removeItem(DRAFT_LS_KEY); }catch{}
+                  try{ if(draftKey) localStorage.removeItem(draftKey); }catch{}
                   setDismissedRecovery(true);
                 }}
                 style={{background:"transparent",border:`1px solid ${C.border}`,color:C.textMuted,

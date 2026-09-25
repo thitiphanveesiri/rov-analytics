@@ -31,6 +31,7 @@ model User {
   resetTokenExpiry DateTime?
 
   googleCalendar   GoogleCalendarConnection?
+  blobAssets       BlobAsset[]
 }
 
 // ── Team ──
@@ -49,6 +50,7 @@ model Team {
   youtubeSyncedVideos YoutubeSyncedVideo[]
   youtubeKeywords String[] @default(["scrim", "ซ้อม"])
   activityLogs ActivityLog[]
+  blobAssets  BlobAsset[]
 }
 
 // ── Content activity log (matches/roster/schedules edited — visible to
@@ -77,6 +79,22 @@ model AdminAuditLog {
   createdAt   DateTime @default(now())
 
   @@index([teamId, createdAt])
+}
+
+// ── Blob storage ownership ──
+// บันทึกว่าไฟล์ที่อัปโหลดขึ้น Vercel Blob (รูปผู้เล่น/โลโก้ทีม/โลโก้คู่แข่ง/รูปฮีโร่ ฯลฯ) เป็นของทีมไหน
+// และใครเป็นคนอัปโหลด — ใช้ตรวจสิทธิ์ตอนลบ (DELETE /api/upload/delete): ไม่งั้น member/coach ทีมหนึ่ง
+// จะลบไฟล์ของอีกทีมได้แค่เดา URL ถูก (URL มี random suffix แต่ไม่ใช่ secret — ไม่ควรพึ่ง URL เป็นตัวป้องกัน)
+model BlobAsset {
+  id           String   @id @default(cuid())
+  url          String   @unique
+  teamId       String
+  team         Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  uploadedById String?
+  uploadedBy   User?    @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  createdAt    DateTime @default(now())
+
+  @@index([teamId])
 }
 
 // ── Team Data (1 row per team) ──

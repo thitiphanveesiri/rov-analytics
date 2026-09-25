@@ -33,6 +33,12 @@ export async function POST(req) {
 
   const inviteCode = body.inviteCode?.trim();
   if (!inviteCode) return NextResponse.json({ error: "กรุณากรอก Invite Code" }, { status: 400 });
+  // cuid v2 ที่ Team.inviteCode ใช้ยาวไม่เกิน ~30 ตัวอักษร — เช็คคร่าวๆ กันส่ง payload
+  // ประหลาด/ยาวเกินจริงมาให้ Prisma query โดยไม่จำเป็น (defense-in-depth เท่านั้น ไม่ใช่ช่องโหว่จริง
+  // เพราะ Prisma parameterize query อยู่แล้ว)
+  if (inviteCode.length > 64) {
+    return NextResponse.json({ error: "Invite Code ไม่ถูกต้อง" }, { status: 400 });
+  }
 
   const user = await prisma.user.findUnique({
     where: { email: session.user.email },
@@ -46,7 +52,8 @@ export async function POST(req) {
     return NextResponse.json({ error: "บัญชีนี้อยู่ในทีมอยู่แล้ว" }, { status: 400 });
   }
 
-  const team = await prisma.team.findUnique({ where: { inviteCode } });
+  // เลือกเฉพาะ field ที่ใช้จริง (id, name) — ไม่ต้องดึงทั้งแถว Team กลับมา
+  const team = await prisma.team.findUnique({ where: { inviteCode }, select: { id: true, name: true } });
   if (!team) return NextResponse.json({ error: "Invite Code ไม่ถูกต้อง" }, { status: 404 });
 
   await prisma.user.update({

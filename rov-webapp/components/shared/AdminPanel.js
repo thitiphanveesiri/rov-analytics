@@ -15,6 +15,19 @@ export default function AdminPanel({ session }) {
   const [updating,   setUpdating]   = useState(null); // userId กำลัง update
   const toast = useToast();
 
+  // ── Invite code: ดึงสดจาก /api/data แทนการอ่านจาก session ──
+  // เดิม session.user.inviteCode ถูกฝังไว้ให้ "ทุกคน" (ไม่ใช่แค่ admin) — ใครเปิด DevTools ดู
+  // useSession() ก็เห็น invite code ของทีมได้หมด (ดู lib/auth.js) ตอนนี้ GET /api/data ส่ง
+  // inviteCode ให้เฉพาะ role admin เท่านั้น (เช็คสดทุก request ที่ server — ดู app/api/data/route.js)
+  // หน้านี้เปิดได้เฉพาะ admin อยู่แล้ว (isAdmin gate ใน RovApp.js) จึงดึงมาแสดงตรงนี้ได้อย่างปลอดภัย
+  const [inviteCode, setInviteCode] = useState(null); // null = กำลังโหลด
+  useEffect(() => {
+    fetch("/api/data")
+      .then(r => r.ok ? r.json() : null)
+      .then(d => setInviteCode(d?.inviteCode || ""))
+      .catch(() => setInviteCode(""));
+  }, []);
+
   const ROLES = [
     { id:"admin",  label:"👑 Admin",   desc:"จัดการสมาชิก + ใช้ได้ทุกอย่าง" },
     { id:"coach",  label:"🎓 Coach",   desc:"ใช้ Live Draft + บันทึกแมตช์" },
@@ -289,14 +302,17 @@ export default function AdminPanel({ session }) {
         <div style={{display:"flex",gap:10,alignItems:"center"}}>
           <code style={{background:C.bgBase,padding:"8px 14px",borderRadius:8,
             fontSize:14,fontWeight:700,color:C.textMain,letterSpacing:2,flex:1}}>
-            {session?.user?.inviteCode || "..."}
+            {inviteCode === null ? "กำลังโหลด..." : (inviteCode || "—")}
           </code>
           <button onClick={()=>{
-            navigator.clipboard.writeText(session?.user?.inviteCode||"");
+            if (!inviteCode) return;
+            navigator.clipboard.writeText(inviteCode);
             toast("คัดลอก Invite Code แล้ว!", "success");
-          }} style={{background:C.primary+"20",border:`1px solid ${C.primary}40`,
+          }} disabled={!inviteCode}
+          style={{background:C.primary+"20",border:`1px solid ${C.primary}40`,
             color:C.primaryLight,borderRadius:8,padding:"8px 14px",
-            cursor:"pointer",fontWeight:700,fontSize:12}}>
+            cursor:inviteCode?"pointer":"default",fontWeight:700,fontSize:12,
+            opacity:inviteCode?1:0.5}}>
             📋 Copy
           </button>
         </div>

@@ -6,16 +6,33 @@ import { validateTeamData } from "@/lib/validation";
 import { syncMatchesToRelational } from "@/lib/matchSync";
 import { syncScheduleForTeam } from "@/lib/googleCalendar";
 import { checkRateLimit } from "@/lib/rateLimit";
+import {
+  isActiveUser, visibleScoutMatches,
+  applyWritePolicy, detectShrink, sameJson,
+} from "@/lib/permissions";
 
-// NOTE: no body-size-limit config for App Router Route Handlers.
-// Photos are stored as Vercel Blob URLs (not base64) so payload stays small.
+// ข้อมูลทีมต้องสดเสมอ ห้ามให้ Next/CDN แคช response ของ route นี้
+export const dynamic = "force-dynamic";
+
+// เพดาน body ของ Vercel Functions คือ ~4.5MB — ตัดก่อนถึงเพดานเพื่อให้ได้ error ที่อ่านรู้เรื่อง
+// (ไม่ใช่ 413 เปล่าๆ จากแพลตฟอร์ม) และ log เตือนล่วงหน้าเมื่อเริ่มโตใกล้เพดาน
+const MAX_BODY_BYTES  = 4_200_000;
+const WARN_BODY_BYTES = 3_000_000;
+
+const NO_STORE = { "Cache-Control": "no-store" };
+const json = (body, init = {}) =>
+  NextResponse.json(body, { ...init, headers: { ...NO_STORE, ...(init.headers || {}) } });
 
 async function getTeamUser(session) {
-  const user = await prisma.user.findUnique({
-    where: { email: session.user.email },
-    select: { teamId: true, role: true, status: true }
+  const email = session?.user?.email;
+  if (!email) return null;
+  return prisma.user.findUnique({
+    where: { email },
+    // playerName ใช้ตัดสินว่า member ติ๊ก "เสร็จ" การบ้านของตัวเองได้เฉพาะแถวไหน
+    // (ดู sanitizeMemberAssignments ใน lib/permissions.js) — ไม่มี field นี้จะทำให้ gate
+    // ปฏิเสธการแก้ practiceAssignments ของ member ทุกคนเงียบๆ (ปลอดภัยแต่ใช้งานไม่ได้)
+    select: { teamId: true, role: true, status: true, playerName: true },
   });
-  return user;
 }
 
 // Compares the "before" snapshot against the fields present in this save
@@ -35,7 +52,7 @@ function buildActivitySummary(before, after) {
     const a = Array.isArray(afterArr) ? afterArr.length : 0;
     if (a > b) parts.push(`เพิ่ม${label} ${a - b} รายการ`);
     else if (a < b) parts.push(`ลบ${label} ${b - a} รายการ`);
-    else if (JSON.stringify(beforeArr) !== JSON.stringify(afterArr)) parts.push(`แก้ไข${label}`);
+    else if (!sameJson(beforeArr, afterArr)) parts.push(`แก้ไข${label}`);
   };
 
   arrayDelta("แมตช์", before.matches, after.matches);
@@ -43,7 +60,7 @@ function buildActivitySummary(before, after) {
   arrayDelta("scout log", before.scoutMatches, after.scoutMatches);
   arrayDelta("วิดีโอ", before.videos, after.videos);
 
-  if (after.roster !== undefined && JSON.stringify(before.roster) !== JSON.stringify(after.roster)) {
+  if (after.roster !== undefined && !sameJson(before.roster, after.roster)) {
     parts.push("แก้ไข roster ทีม");
   }
 
@@ -52,102 +69,114 @@ function buildActivitySummary(before, after) {
 
 export async function GET() {
   const session = await getServerSession(authOptions);
-  if (!session) return NextResponse.json({ error: "ไม่ได้ login" }, { status: 401 });
+  if (!session) return json({ error: "ไม่ได้ login" }, { status: 401 });
 
   const user = await getTeamUser(session);
   const teamId = user?.teamId;
-  if (!teamId) return NextResponse.json({ error: "ยังไม่ได้เข้าทีม" }, { status: 403 });
+  if (!teamId) return json({ error: "ยังไม่ได้เข้าทีม" }, { status: 403 });
 
   const team = await prisma.team.findUnique({
     where: { id: teamId },
-    select: { name: true, inviteCode: true }
+    select: { name: true, inviteCode: true },
   });
 
   // ── Pending-approval gate ──
   // คนที่เข้าทีมผ่าน invite code ยังไม่ได้รับอนุมัติจาก admin — ให้เข้าแอปได้
-  // ปกติ (เห็นเมนู, เห็นชื่อทีม) แต่ "ไม่เห็นข้อมูลทีมจริง" ตามที่ตกลงกันไว้
-  // เลย return ไปแค่ pending:true โดยไม่แตะ/ส่ง TeamData เลย ฝั่ง client
-  // (lib/storage.js) จะ fallback เป็นค่า default ว่างๆ ให้เองเมื่อไม่เจอ field
-  // พวกนั้นในผลลัพธ์ + โชว์ banner "รออนุมัติ" จาก flag pending นี้
-  if (user.status === "pending") {
-    return NextResponse.json({ pending: true, teamName: team?.name });
+  // ปกติ (เห็นเมนู, เห็นชื่อทีม) แต่ "ไม่เห็นข้อมูลทีมจริง" — return แค่ pending:true
+  // โดยไม่แตะ/ส่ง TeamData เลย ใช้ allowlist (active) แทน blacklist (pending) เพื่อให้
+  // status แปลกๆ/ที่เพิ่มทีหลัง (เช่น suspended) ถูกบล็อกโดยอัตโนมัติ
+  if (!isActiveUser(user)) {
+    return json({ pending: true, teamName: team?.name });
   }
 
-  const data = await prisma.teamData.upsert({
-    where: { teamId },
-    update: {},
-    create: { teamId },
-  });
-
-  // ── Scout log visibility gate (scrim/practice scouting only) ──
-  // Coaches wanted opponent PRACTICE scouting hidden from regular players
-  // specifically — the concern being a player could leak it to someone on
-  // the scouted team. Official TOURNAMENT scouting stays visible to
-  // everyone as before (that's public information once it's been played).
-  // This has to happen here, not just hidden in the UI — the whole point
-  // is that a player shouldn't be able to see this even via devtools/the
-  // network tab, so it's filtered out of the response entirely rather
-  // than sent and hidden client-side.
-  let scoutMatches = data.scoutMatches;
-  const isCoachOrAdminForRead = user.role === "admin" || user.role === "coach";
-  if (!isCoachOrAdminForRead && Array.isArray(scoutMatches)) {
-    scoutMatches = scoutMatches.filter(sm => sm.category !== "scrim");
+  // อ่านก่อน สร้างเมื่อไม่มี — เดิมใช้ upsert ทุกครั้งที่โหลด ซึ่งเขียน DB ตอนอ่าน
+  // และมีโอกาสชนกัน (unique) เมื่อสองคนเปิดแอปพร้อมกันตอนทีมเพิ่งสร้าง
+  let data = await prisma.teamData.findUnique({ where: { teamId } });
+  if (!data) {
+    try {
+      data = await prisma.teamData.create({ data: { teamId } });
+    } catch {
+      data = await prisma.teamData.findUnique({ where: { teamId } }); // อีกคนสร้างไปก่อนพอดี
+    }
   }
+  if (!data) return json({ error: "โหลดข้อมูลทีมไม่สำเร็จ" }, { status: 500 });
 
-  return NextResponse.json({
+  // ── Scout log visibility gate (allowlist: member เห็นเฉพาะ "tournament") ──
+  // ต้องกรองที่ server — ไม่ใช่แค่ซ่อนใน UI — เพื่อให้ member เปิด DevTools ก็ไม่เห็น
+  // (ดูเหตุผล/ข้อมูลเก่าที่ไม่มี category ใน lib/permissions.js)
+  const scoutMatches = visibleScoutMatches(data.scoutMatches, user.role);
+
+  return json({
     ...data,
     scoutMatches,
     teamName: team?.name,
-    inviteCode: team?.inviteCode,
+    // invite code = กุญแจเข้าทีม → ส่งให้ admin เท่านั้น (เดิมส่งให้สมาชิกทุกคน)
+    inviteCode: user.role === "admin" ? team?.inviteCode : undefined,
+    // อีเมลคนแก้ล่าสุดไม่จำเป็นต่อ client (ไม่มีหน้าไหนใช้)
+    updatedBy: undefined,
   });
 }
 
 export async function PUT(req) {
   const session = await getServerSession(authOptions);
-  if (!session) return NextResponse.json({ error: "ไม่ได้ login" }, { status: 401 });
+  if (!session) return json({ error: "ไม่ได้ login" }, { status: 401 });
 
   const user = await getTeamUser(session);
   const teamId = user?.teamId;
-  if (!teamId) return NextResponse.json({ error: "ยังไม่ได้เข้าทีม" }, { status: 403 });
+  if (!teamId) return json({ error: "ยังไม่ได้เข้าทีม" }, { status: 403 });
 
-  // pending user บันทึกอะไรไม่ได้เลยจนกว่าจะได้รับอนุมัติ — กันไว้ตั้งแต่
-  // ต้นทาง ต่อให้ client ถูกแก้ให้ส่ง PUT มาตรงๆ ก็ยังโดนบล็อกที่นี่อยู่ดี
-  if (user.status === "pending") {
-    return NextResponse.json(
+  // pending/ถูกระงับ บันทึกอะไรไม่ได้เลย — กันไว้ตั้งแต่ต้นทาง ต่อให้ client ถูกแก้ให้ส่ง PUT ตรงๆ
+  if (!isActiveUser(user)) {
+    return json(
       { error: "บัญชีของคุณยังไม่ได้รับอนุมัติจาก Admin ของทีม กรุณารอก่อนบันทึกข้อมูล" },
       { status: 403 }
     );
   }
 
-  // ── Rate limit ──
-  // Unlike /login, this endpoint previously had no limit at all — normal
-  // autosave (600ms debounce, client-serialized) stays way under this, so
-  // it only kicks in for abusive/bugged traffic (e.g. a client stuck in a
-  // retry loop). Keyed per-team, not per-user, since a save conflict from
-  // ANY teammate can trigger the same team's data to be re-saved.
-  const rateOk = await checkRateLimit(`save-data:${teamId}`, 60, 60); // 60 ครั้ง / 60 วินาที ต่อทีม
-  if (!rateOk) {
-    return NextResponse.json(
-      { error: "บันทึกถี่เกินไป กรุณารอสักครู่แล้วลองใหม่" },
-      { status: 429 }
-    );
+  // ── Rate limit (2 ชั้น) ──
+  // ต่อทีม: กัน retry loop/traffic ผิดปกติ (คนในทีม save ชนกันก็ทำให้ทั้งทีมยิงซ้ำได้)
+  // ต่อคน: กันสมาชิกคนเดียวยิงรัวจนกิน quota ของทีม แล้วทำให้ autosave ของโค้ชโดน 429
+  const email = session.user.email;
+  const [teamOk, userOk] = await Promise.all([
+    checkRateLimit(`save-data:${teamId}`, 60, 60),       // 60 ครั้ง / 60 วินาที ต่อทีม
+    checkRateLimit(`save-data-user:${email}`, 30, 60),   // 30 ครั้ง / 60 วินาที ต่อคน
+  ]);
+  if (!teamOk || !userOk) {
+    return json({ error: "บันทึกถี่เกินไป กรุณารอสักครู่แล้วลองใหม่" }, { status: 429 });
+  }
+
+  // ── อ่าน body เป็นข้อความก่อน เพื่อวัดขนาดจริง ──
+  const declaredLen = Number(req.headers.get("content-length") || 0);
+  if (declaredLen > MAX_BODY_BYTES) {
+    return json({ error: "ข้อมูลทีมใหญ่เกินกว่าจะบันทึกได้ในครั้งเดียว", code: "PAYLOAD_TOO_LARGE" }, { status: 413 });
+  }
+  let raw;
+  try {
+    raw = await req.text();
+  } catch {
+    return json({ error: "อ่านข้อมูลที่ส่งมาไม่สำเร็จ" }, { status: 400 });
+  }
+  const bytes = Buffer.byteLength(raw, "utf8");
+  if (bytes > MAX_BODY_BYTES) {
+    return json({ error: "ข้อมูลทีมใหญ่เกินกว่าจะบันทึกได้ในครั้งเดียว", code: "PAYLOAD_TOO_LARGE" }, { status: 413 });
+  }
+  if (bytes > WARN_BODY_BYTES) {
+    // เตือนล่วงหน้า — ถ้าเห็น log นี้บ่อย ถึงเวลาแยก field ก้อนใหญ่ (whiteboard/scout) ออกเป็น endpoint ของตัวเอง
+    console.warn(`[data PUT] payload ${(bytes / 1e6).toFixed(2)}MB approaching limit — team ${teamId}`);
   }
 
   let body;
   try {
-    body = await req.json();
+    body = JSON.parse(raw);
   } catch {
-    return NextResponse.json({ error: "รูปแบบข้อมูลไม่ถูกต้อง (invalid JSON)" }, { status: 400 });
+    return json({ error: "รูปแบบข้อมูลไม่ถูกต้อง (invalid JSON)" }, { status: 400 });
   }
 
   // ── Schema validation ──
   const validation = validateTeamData(body);
   if (!validation.success) {
     console.error("Validation error for team", teamId, validation.error);
-    return NextResponse.json(
-      { error: "ข้อมูลไม่ผ่านการตรวจสอบ", details: validation.error },
-      { status: 400 }
-    );
+    return json({ error: "ข้อมูลไม่ผ่านการตรวจสอบ", details: validation.error }, { status: 400 });
   }
 
   const {
@@ -158,148 +187,145 @@ export async function PUT(req) {
     expectedUpdatedAt, // เวลาที่ client เห็นข้อมูลล่าสุดตอนโหลด — ใช้เช็ค conflict
   } = validation.data;
 
-  const writeData = {
+  // ── Optimistic lock บังคับใช้เสมอ ──
+  // เดิมถ้า client ไม่ส่ง expectedUpdatedAt จะ upsert ทับตรงๆ ข้าม lock ทั้งหมด (client เก่า/ที่ถูกดัดแปลง
+  // เลี่ยง lock ได้) — client ปกติส่งเสมอหลังโหลดสำเร็จ (storage.js) จึงไม่กระทบผู้ใช้จริง
+  if (!expectedUpdatedAt) {
+    return json(
+      { error: "MISSING_VERSION", message: "ไม่พบเลขเวอร์ชันของข้อมูล กรุณารีเฟรชหน้าแล้วลองใหม่" },
+      { status: 428 }
+    );
+  }
+
+  const requestedWrite = {
     matches, rivals, roster, enemyRosters, scoutMatches,
     playerPhotos, heroPhotos, customHeroes, roleOverrides, videos,
     teamLogo, rivalLogos, schedules, patchInfo, heroTiers, practiceAssignments,
     whiteboardElements, whiteboardFormations, whiteboardMapUrl,
-    updatedBy: session.user.email,
   };
 
-  // ── Field-level permission gate ──
-  // Patch notes & the meta tier list are meant to be coach/admin-managed
-  // calls — if a plain "member" tries to change either field, silently
-  // keep the existing DB value instead of failing the whole save.
-  //
-  // schedules is gated the same way — the Schedule page UI only lets a
-  // coach/admin add/edit schedule entries ("รอ Coach เพิ่มตารางแข่ง" is
-  // shown to plain members instead of the add form), so a member's client
-  // should never be sending a changed `schedules` array in the first
-  // place. Without this gate that intent was only enforced in the UI —
-  // anyone could still PUT straight to /api/data with a hand-edited
-  // schedules array (delete every match date, plant a fake one, etc.)
-  // and the server would accept it. Same non-fatal pattern as the other
-  // gated fields: revert to what's already in the DB rather than fail
-  // the whole save.
-  //
-  // scoutMatches gets the same treatment for a different reason: members
-  // never receive the scrim-category entries in the first place (see the
-  // GET handler above), so their client-side scoutMatches array is
-  // ALREADY missing those entries. If we let their PUT write it back
-  // as-is, autosave would silently wipe every hidden scrim scout entry
-  // out of the database — this isn't a permission nicety here, it's
-  // preventing real data loss from an incomplete read being written back.
-  // ── Combined "current DB state" read ──
-  // Previously this was TWO separate findUnique calls: one (conditional,
-  // coach-gate only) for patchInfo/heroTiers/scoutMatches/schedules, and
-  // another (always) for matches/roster/schedules/scoutMatches/videos for
-  // the activity log. Every save already pays for at least the second
-  // query, so folding the first into it costs nothing extra on the common
-  // path and removes a full DB round trip (10-50ms+ depending on region/
-  // cold start) from every save that touches a gated field — noticeable
-  // on an endpoint that fires on every autosave.
+  // ── สถานะปัจจุบันใน DB (อ่านครั้งเดียว ใช้ทั้ง permission / shrink guard / activity log) ──
   const currentState = await prisma.teamData.findUnique({
     where: { teamId },
     select: {
-      matches: true, roster: true, schedules: true, scoutMatches: true, videos: true,
-      patchInfo: true, heroTiers: true,
+      updatedAt: true,
+      matches: true, rivals: true, roster: true, enemyRosters: true, scoutMatches: true,
+      playerPhotos: true, teamLogo: true, rivalLogos: true,
+      schedules: true, videos: true, patchInfo: true, heroTiers: true, practiceAssignments: true,
     },
   });
-  const beforeState = currentState; // same read, used for the activity-log diff below
 
-  const isCoachOrAdmin = user.role === "admin" || user.role === "coach";
-  if (!isCoachOrAdmin && (
-    writeData.patchInfo !== undefined ||
-    writeData.heroTiers !== undefined ||
-    writeData.scoutMatches !== undefined ||
-    writeData.schedules !== undefined
-  )) {
-    if (currentState) {
-      if (writeData.patchInfo !== undefined) writeData.patchInfo = currentState.patchInfo;
-      if (writeData.heroTiers !== undefined) writeData.heroTiers = currentState.heroTiers;
-      if (writeData.scoutMatches !== undefined) writeData.scoutMatches = currentState.scoutMatches;
-      if (writeData.schedules !== undefined) writeData.schedules = currentState.schedules;
-    }
+  // ── Field-level permission (whitelist ต่อ role) ──
+  // แทนที่บล็อก gate เดิมที่ครอบแค่ 4 field — ตอนนี้ทุก field ที่ตั้งเป็น coach-only จะถูกตัดออก
+  // (undefined = ไม่เขียน) เมื่อผู้เรียกเป็น member ไม่ว่า client จะส่งอะไรมา
+  const { writeData: gated, ignored } = applyWritePolicy({
+    role: user.role,
+    // ใช้ user.playerName (อ่านสดจาก DB ใน getTeamUser ด้านบน) ไม่ใช่ session.user.playerName —
+    // session มาจาก JWT ที่ sync กับ DB แค่ตอน login/ทุก ~5 นาที (ดู lib/auth.js) การอ่านสดตรงนี้
+    // (ซึ่งต้อง query DB อยู่แล้วเพื่อเอา role/teamId) ตัดปัญหา JWT ค้างค่าเก่าออกไปได้ฟรี
+    playerName: user.playerName,
+    writeData: requestedWrite,
+    current: currentState,
+  });
+  const writeData = { ...gated, updatedBy: email };
+
+  // ── Shrink guard ──
+  // แมตช์/scout หายเกิน 30% ในการบันทึกครั้งเดียว (เมื่อเดิมมี >10 รายการ) เกือบแน่ว่า bug หรือ
+  // client เก่าค้างส่งอาร์เรย์ว่างมาทับ — ปฏิเสธแล้วให้ client โหลดข้อมูลจริงใหม่ ดีกว่าเขียนทับเงียบๆ
+  const shrink = detectShrink(currentState, writeData);
+  if (shrink) {
+    console.error("Shrink guard blocked save", teamId, email, shrink);
+    return json({
+      error: "SHRINK_GUARD",
+      message: `ข้อมูล${shrink.field === "matches" ? "แมตช์" : "scout"}ลดลงผิดปกติ (${shrink.before} → ${shrink.after}) ระบบจึงไม่บันทึกเพื่อป้องกันข้อมูลหาย กรุณารีเฟรชหน้า`,
+    }, { status: 422 });
   }
 
-  try {
-    let updated;
+  const hasRealWrite = Object.entries(writeData).some(([k, v]) => k !== "updatedBy" && v !== undefined);
 
-    if (expectedUpdatedAt) {
-      // ── Optimistic locking: ป้องกันคนสองคน (หรือ 2 แท็บของคนเดียว) save
-      //    พร้อมกันแล้วคนหลังทับข้อมูลคนแรกแบบเงียบๆ ──
+  try {
+    let updatedAt;
+
+    if (!hasRealWrite) {
+      // ไม่มี field ไหนที่ผู้เรียกมีสิทธิ์เขียน (เช่น member ที่แก้แต่ส่วนของ coach) —
+      // ไม่ต้องเขียน DB ซึ่งจะเป็นแค่การขยับเลขเวอร์ชันแล้วทำให้คนอื่นเจอ conflict ลอยๆ
+      // แต่ยังต้องเช็คว่าเวอร์ชันที่ client ถืออยู่ยังตรงกับปัจจุบันไหม
+      if (currentState && new Date(expectedUpdatedAt).getTime() !== currentState.updatedAt.getTime()) {
+        return json({
+          error: "CONFLICT",
+          message: "ข้อมูลถูกแก้ไขจากที่อื่นระหว่างที่คุณกำลังแก้ไข กรุณารีเฟรชหน้าเพื่อดูข้อมูลล่าสุดก่อนบันทึกต่อ",
+          currentUpdatedAt: currentState.updatedAt,
+        }, { status: 409 });
+      }
+      updatedAt = currentState?.updatedAt ?? new Date();
+    } else {
+      // ── Optimistic locking: ป้องกันคนสองคน (หรือ 2 แท็บของคนเดียว) save พร้อมกันแล้วคนหลังทับคนแรกเงียบๆ ──
+      // server กำหนด updatedAt เอง แล้วคืนค่านั้นให้ client เลย (เดิมอ่านซ้ำด้วย findUnique ซึ่งถ้ามีคนอื่น save แทรก
+      // ตรงกลาง client จะได้เวอร์ชันของ "อีกคน" ไปเป็นฐาน แล้ว save ถัดไปจะผ่าน lock ทั้งที่ยังไม่เคยเห็นข้อมูลนั้น)
+      const now = new Date();
       const result = await prisma.teamData.updateMany({
         where: { teamId, updatedAt: new Date(expectedUpdatedAt) },
-        data: writeData,
+        data: { ...writeData, updatedAt: now },
       });
 
       if (result.count === 0) {
-        const existing = await prisma.teamData.findUnique({ where: { teamId } });
+        const existing = await prisma.teamData.findUnique({ where: { teamId }, select: { updatedAt: true } });
         if (existing) {
-          return NextResponse.json({
+          return json({
             error: "CONFLICT",
             message: "ข้อมูลถูกแก้ไขจากที่อื่นระหว่างที่คุณกำลังแก้ไข กรุณารีเฟรชหน้าเพื่อดูข้อมูลล่าสุดก่อนบันทึกต่อ",
             currentUpdatedAt: existing.updatedAt,
           }, { status: 409 });
         }
-        updated = await prisma.teamData.create({ data: { teamId, ...writeData } });
+        const created = await prisma.teamData.create({ data: { teamId, ...writeData } });
+        updatedAt = created.updatedAt;
       } else {
-        updated = await prisma.teamData.findUnique({ where: { teamId } });
+        updatedAt = now;
       }
-    } else {
-      updated = await prisma.teamData.upsert({
-        where: { teamId },
-        update: writeData,
-        create: { teamId, ...writeData },
+
+      // ── Deferred, best-effort post-save work ──
+      // after() รันหลังส่ง response ไปแล้ว (ต้อง Next.js 14.1+/15) — ใช้ "writeData" (ค่าหลังผ่านสิทธิ์)
+      // เท่านั้น ห้ามใช้ค่าดิบจาก client: เดิมใช้ `schedules` ดิบ ทำให้ member ที่ถูกตัดสิทธิ์แล้วก็ยังสั่ง
+      // sync ตารางปลอมเข้า Google Calendar ของทั้งทีมได้ และ activity log ก็จดตามค่าดิบ
+      // นอกจากนี้ sync เฉพาะเมื่อข้อมูลเปลี่ยนจริง — client ส่งทุก field ทุก autosave การยิง Google API
+      // /matchSync ทุกครั้งเปลือง quota โดยไม่จำเป็น
+      const before = currentState;
+      after(async () => {
+        if (writeData.matches !== undefined && !sameJson(before?.matches, writeData.matches)) {
+          try {
+            await syncMatchesToRelational(teamId, writeData.matches, writeData.customHeroes || [], writeData.roleOverrides || {});
+          } catch (err) {
+            console.error("matchSync error (non-fatal) for team", teamId, err);
+          }
+        }
+
+        if (writeData.schedules !== undefined && !sameJson(before?.schedules, writeData.schedules)) {
+          try {
+            await syncScheduleForTeam(teamId, writeData.schedules);
+          } catch (err) {
+            console.error("Google Calendar sync error (non-fatal) for team", teamId, err);
+          }
+        }
+
+        try {
+          const summary = buildActivitySummary(before, writeData);
+          if (summary) {
+            await prisma.activityLog.create({ data: { teamId, userEmail: email, summary } });
+          }
+        } catch (err) {
+          console.error("Activity log write error (non-fatal) for team", teamId, err);
+        }
       });
     }
 
-    // ── Deferred, best-effort post-save work ──
-    // matchSync / calendar sync / activity log were already designed to
-    // be non-fatal (failures here never fail the save) — but they were
-    // still `await`ed IN LINE before the response went out, so the user's
-    // save was only as fast as the SLOWEST of these three, every single
-    // time (autosave fires on every meaningful edit). Google Calendar
-    // sync in particular is a live network call to Google's API, which
-    // can easily take longer than the actual DB write itself.
-    //
-    // after() (Next.js) runs this code AFTER the response has already
-    // been sent to the client — the platform keeps the serverless
-    // function alive just long enough to finish it, but the person sees
-    // "saved" the moment the real write completes, not after Google's
-    // API answers too. Requires Next.js 14.1+ (stable as of Next 15).
-    after(async () => {
-      if (matches) {
-        try {
-          await syncMatchesToRelational(teamId, matches, customHeroes || [], roleOverrides || {});
-        } catch (err) {
-          console.error("matchSync error (non-fatal) for team", teamId, err);
-        }
-      }
-
-      if (schedules) {
-        try {
-          await syncScheduleForTeam(teamId, schedules);
-        } catch (err) {
-          console.error("Google Calendar sync error (non-fatal) for team", teamId, err);
-        }
-      }
-
-      try {
-        const summary = buildActivitySummary(beforeState, { matches, roster, schedules, scoutMatches, videos });
-        if (summary) {
-          await prisma.activityLog.create({
-            data: { teamId, userEmail: session.user.email, summary },
-          });
-        }
-      } catch (err) {
-        console.error("Activity log write error (non-fatal) for team", teamId, err);
-      }
+    return json({
+      ok: true,
+      updatedAt,
+      // field ที่ผู้เรียกพยายามแก้แต่ไม่มีสิทธิ์ (ไม่รวมกรณีค่าเท่าเดิม) — ให้ client แจ้งผู้ใช้
+      ...(ignored.length ? { ignoredFields: ignored } : {}),
     });
-
-    return NextResponse.json({ ok: true, updatedAt: updated.updatedAt });
   } catch (err) {
     console.error("Save error:", err);
-    return NextResponse.json({ error: "บันทึกไม่สำเร็จ" }, { status: 500 });
+    return json({ error: "บันทึกไม่สำเร็จ" }, { status: 500 });
   }
 }
