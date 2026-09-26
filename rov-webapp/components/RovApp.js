@@ -5604,6 +5604,7 @@ function uiReducer(state, action) {
     case "CLEAR_NEW_ENEMY_NAME":return { ...state, newEnemyName: "" };
     case "SET_MATCH_CAT_FILTER":  return { ...state, matchCatFilter: action.payload };
     case "SET_MATCH_PATCH_FILTER": return { ...state, matchPatchFilter: action.payload };
+    case "SET_MATCH_RIVAL_FILTER": return { ...state, matchRivalFilter: action.payload };
     default: return state;
   }
 }
@@ -5720,6 +5721,35 @@ function draftReducer(state, action) {
 
     case "FINISH_EARLY":
       return { ...state, stage: "done" };
+
+    // ── เพิ่มเกมพิเศษเข้า series ตอนจะปิดแมตช์ ──
+    // ใช้เมื่อโค้ชตั้ง Bo ผิดตอนแรก (เช่น ตั้งใจซ้อม Bo4 แต่กด Bo3) แล้วมาเจอตอนจบเกมสุดท้าย
+    // ของ Bo เดิมพอดี — ทำสิ่งเดียวกับ GAME_DONE (เก็บเกมที่เพิ่งจบ ไปเกมถัดไป) แต่ "ขยาย" boType
+    // ให้รองรับเกมใหม่นี้ด้วย ผลคือทั้ง header ของ Live Draft และแมตช์ที่บันทึกลง Match Log ในที่สุด
+    // (finishSession อ่าน draft.boType ตรงๆ ตอนบันทึก) จะเห็นเป็น Bo ใหม่ที่ถูกต้องแทน
+    case "ADD_EXTRA_GAME": {
+      const newGames = [...state.completedGames, { ...action.payload, gameNo: state.currentGame }];
+      const nextGameNo = state.currentGame + 1;
+      const curTotal = (BO_OPTIONS.find(b => b.label === state.boType) || BO_OPTIONS[2]).total;
+      // ถ้าเกมถัดไปยังเกินจำนวนที่ Bo ปัจจุบันรองรับอยู่ ขยาย Bo ให้พอดี เช่น Bo3 กด "เพิ่มแมตช์"
+      // ตอนจบเกม 3 → เกมถัดไปคือเกม 4 ซึ่งเกิน Bo3 (รองรับสูงสุด 3) เลยขยับเป็น Bo4 ให้อัตโนมัติ
+      // จำกัดไม่เกิน Bo7 (ตัวเลือกสูงสุดที่มี — ดู BO_OPTIONS)
+      const newTotal = Math.min(7, Math.max(curTotal, nextGameNo));
+      const newBoType = (BO_OPTIONS.find(b => b.total === newTotal) || BO_OPTIONS[BO_OPTIONS.length - 1]).label;
+      return {
+        ...state,
+        boType: newBoType,
+        completedGames: newGames,
+        currentGame: nextGameNo,
+        stage: "chooseSide",
+        step: 0,
+        blueBans:  Array(BANS_PER_TEAM).fill(null),
+        redBans:   Array(BANS_PER_TEAM).fill(null),
+        bluePicks: ROLES_PICK.map(r => ({ role: r, hero: null, player: "" })),
+        redPicks:  ROLES_PICK.map(r => ({ role: r, hero: null, player: "" })),
+        meta: { result:"WIN", ourScore:"", enemyScore:"", duration:"", hasPause:false, pauseDuration:"", note:"" },
+      };
+    }
 
     default: return state;
   }
@@ -6811,10 +6841,15 @@ function RovAppInner() {
               {(() => {
                 const matchCatFilter = ui.matchCatFilter||"all";
                 const matchPatchFilter = ui.matchPatchFilter||"all";
+                const matchRivalFilter = ui.matchRivalFilter||"all";
                 // รวม patch ทั้งหมด — เฉพาะภายในแมตช์ที่อยู่ในช่วง patch
                 // (ตัว dropdown บนสุด) ที่เลือกไว้แล้วเท่านั้น ไม่ใช่ทุก patch
                 // ที่เคยมีมาทั้งหมด
                 const patches = [...new Set(patchFilteredMatches.filter(m=>m.patch).map(m=>m.patch))].sort().reverse();
+                // รายชื่อทีมคู่แข่งในตัวกรอง — อ้างอิงจากลิสต์ Rivals ตรงๆ (ไม่ใช่ไล่เก็บชื่อจาก
+                // ตัวแมตช์เอง) กันปัญหาพิมพ์ชื่อไม่ตรงกันระหว่างแมตช์เก่า/ใหม่ และให้เลือกทีมที่ยังไม่มี
+                // ประวัติเลยได้ด้วย (จะเจอ empty state ปกติ ไม่ใช่หาย)
+                const rivalOptions = [...rivals].sort((a,b)=>a.name.localeCompare(b.name,"th"));
                 const tabs = [
                   {id:"all",        label:"ทั้งหมด",  count: patchFilteredMatches.length},
                   {id:"scrim",      label:"🏋️ ซ้อม",  count: patchFilteredMatches.filter(m=>!m.category||m.category==="scrim").length},
@@ -6824,6 +6859,13 @@ function RovAppInner() {
                   : matchCatFilter==="tournament" ? patchFilteredMatches.filter(m=>m.category==="tournament")
                   : patchFilteredMatches.filter(m=>!m.category||m.category==="scrim");
                 if (matchPatchFilter!=="all") filtered = filtered.filter(m=>m.patch===matchPatchFilter);
+                if (matchRivalFilter!=="all") filtered = filtered.filter(m=>m.rivalName===matchRivalFilter);
+                // ── เรียงล่าสุด → เก่าสุด เสมอ ──
+                // ไม่พึ่งลำดับเดิมของ array (SAVE_MATCH ใหม่ prepend ไว้ก่อนก็จริง แต่ import JSON/
+                // merge ตอน sync ชนกัน (lib/storage.js) อาจเรียงสลับได้) ใช้ m.id ตรงๆ แทน — เป็น
+                // Date.now() ของตอนบันทึก จึงเทียบเวลาได้ตรง ไม่ต้อง sort ก่อน slice จะได้ไม่กระทบ
+                // ต้นฉบับ (filtered เป็น array ใหม่จาก .filter อยู่แล้วทุกครั้ง)
+                filtered = filtered.sort((a,b)=>(b.id||0)-(a.id||0));
                 return (
                   <>
                     <div style={{display:"flex",gap:6,marginBottom:10,flexWrap:"wrap",alignItems:"center"}}>
@@ -6847,12 +6889,24 @@ function RovAppInner() {
                           {patches.map(p=><option key={p} value={p}>🗂️ {p}</option>)}
                         </select>
                       )}
+                      {rivalOptions.length>0&&(
+                        <select value={matchRivalFilter}
+                          onChange={e=>dispatchUI({type:"SET_MATCH_RIVAL_FILTER",payload:e.target.value})}
+                          style={{background:"#1a1535",border:`1px solid ${C.border}`,
+                            color:C.textMain,borderRadius:8,padding:"5px 10px",
+                            fontSize:12,cursor:"pointer"}}>
+                          <option value="all">🎯 ทุกทีม</option>
+                          {rivalOptions.map(rv=><option key={rv.id} value={rv.name}>🎯 {rv.name}</option>)}
+                        </select>
+                      )}
                     </div>
                     {filtered.length===0
                       ?<div style={{textAlign:"center",padding:60,background:C.bgPanel,borderRadius:14,color:C.textMuted}}>
                           {patchFilteredMatches.length===0
                             ? "ยังไม่มีประวัติ — บันทึกแมตช์จาก Live Draft ก่อน"
-                            : `ยังไม่มีแมตช์ประเภท "${tabs.find(t=>t.id===matchCatFilter)?.label}"`}
+                            : matchRivalFilter!=="all"
+                              ? `ยังไม่มีแมตช์กับ "${matchRivalFilter}"`
+                              : `ยังไม่มีแมตช์ประเภท "${tabs.find(t=>t.id===matchCatFilter)?.label}"`}
                         </div>
                       :filtered.map(m=>(
                           <MatchCardWithStats key={m.id} m={m} onUpdateStats={handleUpdateStats} onUpdateObjectives={handleUpdateObjectives} onUpdateGameFull={handleUpdateGameFull} onJumpToVideo={handleJumpToVideo} roster={roster} enemyRoster={app.enemyRosters?.[m.rivalName]||[]} videos={app.videos||[]} playerPhotos={app.playerPhotos} ourTeamName={session?.user?.teamName||app.teamName||"ทีมเรา"} ourTeamLogo={app.teamLogo} rivalLogo={app.rivalLogos?.[m.rivalName]} onDelete={id=>dispatchApp({type:"DELETE_MATCH",payload:id})} onEditMeta={handleEditMatchMeta}/>
@@ -7839,6 +7893,54 @@ function MockDraftTrainer({ rivals, allGames, scoutMatches, heroTiers, onExit })
   );
 }
 
+// ── ถามก่อนปิดแมตช์ตอนจบเกมสุดท้ายของ Bo ──
+// เผื่อกรณีตั้ง Bo ผิดตอนแรก (เช่น ตั้งใจซ้อม Bo4 แต่กด Bo3 ตอน setup) จะได้แก้ทัน
+// ไม่ต้องลบแมตช์ทิ้งแล้วเริ่ม Live Draft ใหม่ทั้งหมด
+function FinishMatchChoiceModal({ boType, nextBoLabel, canAddExtra, onConfirmFinish, onAddExtraGame, onCancel }) {
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.75)",zIndex:600,
+      display:"flex",alignItems:"center",justifyContent:"center",padding:16}}
+      onClick={onCancel}>
+      <div onClick={e=>e.stopPropagation()}
+        style={{background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:16,
+          padding:26,width:440,maxWidth:"100%",boxShadow:"0 20px 60px rgba(0,0,0,0.4)"}}>
+        <div style={{fontSize:32,textAlign:"center",marginBottom:10}}>🏁</div>
+        <div style={{fontWeight:800,fontSize:16,textAlign:"center",marginBottom:6,color:C.primaryLight}}>
+          จบเกมสุดท้ายของ {boType} แล้ว
+        </div>
+        <p style={{margin:"0 0 20px",color:C.textMuted,fontSize:13,textAlign:"center",lineHeight:1.6}}>
+          ยืนยันจบแมตช์นี้เลย หรือถ้าตั้ง Bo ผิดตอนแรก (เช่น ตั้งใจ {nextBoLabel} แต่กด {boType})
+          สามารถเพิ่มอีก 1 เกมต่อได้ทันที โดยไม่ต้องเริ่ม Draft ใหม่
+        </p>
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          <button onClick={onConfirmFinish}
+            style={{background:`linear-gradient(135deg,${C.primary},${C.primaryLight})`,
+              color:"#fff",border:"none",borderRadius:9,padding:"11px 0",
+              cursor:"pointer",fontWeight:800,fontSize:14}}>
+            ✅ ยืนยันจบแมตช์ ({boType})
+          </button>
+          {canAddExtra ? (
+            <button onClick={onAddExtraGame}
+              style={{background:"transparent",border:`1px solid ${C.primary}60`,color:C.primaryLight,
+                borderRadius:9,padding:"10px 0",cursor:"pointer",fontWeight:700,fontSize:13}}>
+              ➕ เพิ่มอีก 1 เกม (เปลี่ยนเป็น {nextBoLabel})
+            </button>
+          ) : (
+            <div style={{fontSize:11,color:C.textMuted,textAlign:"center",padding:"4px 0"}}>
+              ({boType} คือ Bo สูงสุดที่รองรับ — เพิ่มเกมต่อไม่ได้แล้ว)
+            </div>
+          )}
+          <button onClick={onCancel}
+            style={{background:"transparent",border:"none",color:C.textMuted,
+              cursor:"pointer",fontSize:12,padding:"6px 0",textDecoration:"underline"}}>
+            ยกเลิก กลับไปแก้เกมนี้
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DraftPageR({ draft, dispatch, roster, rivals, enemyRosters, onFinishSession, allGames, scoutMatches, heroTiers }) {
   const { data: draftSession } = useSession();
   const draftKey = draftKeyFor(draftSession?.user?.id);
@@ -7856,6 +7958,9 @@ function DraftPageR({ draft, dispatch, roster, rivals, enemyRosters, onFinishSes
     } catch { return null; }
   });
   const [dismissedRecovery, setDismissedRecovery] = useState(false);
+  // เก็บเกมที่เพิ่งกรอกจบ (แต่ยังไม่ dispatch) ไว้ระหว่างถามว่าจะปิดแมตช์เลยหรือเพิ่มอีกเกม —
+  // ถามเฉพาะตอนเป็นเกมสุดท้ายของ Bo เท่านั้น (ดู handleGameDone) ไม่กระทบเกมกลางๆ ของ series
+  const [pendingFinishGame, setPendingFinishGame] = useState(null);
 
   if (mockMode) return (
     <MockDraftTrainer rivals={rivals} allGames={allGames} scoutMatches={scoutMatches} heroTiers={heroTiers}
@@ -7869,10 +7974,17 @@ function DraftPageR({ draft, dispatch, roster, rivals, enemyRosters, onFinishSes
   const bo = BO_OPTIONS.find(b=>b.label===boType) || BO_OPTIONS[2];
   const currentEnemyRoster = enemyRosters[rivalName] || [];
 
-  const globalLockedOur = new Set(
+  // ── Fearless draft: ฮีโร่ที่แต่ละฝั่ง Pick ไปแล้วใน series นี้ Pick ซ้ำไม่ได้อีก ──
+  // (Ban ไม่ติดกฎนี้ — แบนซ้ำได้ปกติ ดู isGlobalLocked ด้านล่างที่เช็คเฉพาะ action !== "ban")
+  //
+  // ยกเว้น "เกมที่ 7 ของ Bo7" — กติกาทัวร์นาเมนต์ทั่วไปให้เกมตัดสิน (decider) ของ Bo7 รีเซ็ต
+  // hero pool ใหม่ทั้งหมด ฮีโร่ที่เกมก่อนหน้าใช้ไปแล้วกลับมา pick ได้ทั้ง 2 ฝั่ง เหมือนเริ่ม series ใหม่
+  // (Bo อื่นที่ไม่ใช่ 7 ไม่มีข้อยกเว้นนี้ ใช้ fearless ตลอดทั้ง series ตามเดิม)
+  const isBo7DeciderGame = bo.total === 7 && currentGame === 7;
+  const globalLockedOur = isBo7DeciderGame ? new Set() : new Set(
     completedGames.flatMap(g=>(g.ourPicks||[]).filter(s=>s.hero).map(s=>s.hero.name))
   );
-  const globalLockedEnemy = new Set(
+  const globalLockedEnemy = isBo7DeciderGame ? new Set() : new Set(
     completedGames.flatMap(g=>(g.enemyPicks||[]).filter(s=>s.hero).map(s=>s.hero.name))
   );
 
@@ -7918,16 +8030,27 @@ function DraftPageR({ draft, dispatch, roster, rivals, enemyRosters, onFinishSes
       gameNo: currentGame,
     };
 
-    // If this was the last game in the BO series, save the whole match
-    // immediately instead of relying on the user to notice and press the
-    // separate "Finish" button — that button doesn't even exist once the
-    // reducer's "done" stage is reached, leaving the match unsaved.
+    // ถ้าเป็นเกมสุดท้ายของ Bo — ไม่ปิดแมตช์ทันที ถามก่อนว่าจะยืนยันจบ หรือตั้ง Bo ผิดแล้วอยากเพิ่ม
+    // อีกเกม (เช่น ซ้อม Bo4 แต่กด Bo3 ตอน setup) กดจริงๆ ค่อยไปที่ confirmFinishMatch/
+    // confirmAddExtraGame ด้านล่าง — ยังไม่ dispatch อะไรตรงนี้ ข้อมูลเกมนี้เลยยังแก้ต่อได้ถ้ากด "ยกเลิก"
     if (currentGame >= bo.total) {
-      onFinishSession([...completedGames, finishedGame]);
+      setPendingFinishGame(finishedGame);
       return;
     }
 
     dispatch({ type:"GAME_DONE", payload: finishedGame });
+  }
+
+  function confirmFinishMatch() {
+    if (!pendingFinishGame) return;
+    onFinishSession([...completedGames, pendingFinishGame]);
+    setPendingFinishGame(null);
+  }
+
+  function confirmAddExtraGame() {
+    if (!pendingFinishGame) return;
+    dispatch({ type:"ADD_EXTRA_GAME", payload: pendingFinishGame });
+    setPendingFinishGame(null);
   }
 
   const filtered = HERO_DATA.filter(h =>
@@ -8158,6 +8281,7 @@ function DraftPageR({ draft, dispatch, roster, rivals, enemyRosters, onFinishSes
 
   // ── PLAYING ──
   if (stage==="playing") return (
+    <>
     <div style={{padding:"10px 16px",display:"flex",flexDirection:"column",minHeight:"calc(100vh - 56px)",boxSizing:"border-box"}}>
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10,flexWrap:"wrap"}}>
         <span style={{fontWeight:800,fontSize:14,color:C.primaryLight}}>{boType} vs {rivalName}</span>
@@ -8471,6 +8595,17 @@ function DraftPageR({ draft, dispatch, roster, rivals, enemyRosters, onFinishSes
         </div>
       </div>
     </div>
+    {pendingFinishGame && (
+      <FinishMatchChoiceModal
+        boType={boType}
+        nextBoLabel={(BO_OPTIONS.find(b=>b.total===Math.min(7, bo.total+1))||BO_OPTIONS[BO_OPTIONS.length-1]).label}
+        canAddExtra={bo.total < 7}
+        onConfirmFinish={confirmFinishMatch}
+        onAddExtraGame={confirmAddExtraGame}
+        onCancel={()=>setPendingFinishGame(null)}
+      />
+    )}
+    </>
   );
 
   // ── DONE ──
