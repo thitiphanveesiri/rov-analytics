@@ -3,6 +3,8 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { checkRateLimit } from "@/lib/rateLimit";
+import { isActiveUser } from "@/lib/permissions";
 
 // ── เช็คว่า request มาจาก admin จริง ──
 async function requireAdmin() {
@@ -11,9 +13,13 @@ async function requireAdmin() {
 
   const user = await prisma.user.findUnique({
     where: { email: session.user.email },
-    select: { id: true, email: true, teamId: true, role: true },
+    select: { id: true, email: true, teamId: true, role: true, status: true },
   });
   if (!user?.teamId) return { error: "ยังไม่ได้เข้าทีม", status: 403 };
+  // เดิมเช็คแค่ role === "admin" — เพิ่ม isActiveUser (allowlist เดียวกับที่ /api/data และ
+  // /api/upload ใช้) เผื่อ status ในอนาคตมีค่าอื่นนอกจาก active/pending (เช่น suspended) ที่ควร
+  // บล็อกไว้ก่อนแม้ role ในฐานข้อมูลจะยังเป็น admin อยู่ก็ตาม
+  if (!isActiveUser(user)) return { error: "บัญชีนี้ถูกระงับการใช้งาน", status: 403 };
   if (user.role !== "admin") return { error: "ต้องเป็น Admin เท่านั้น", status: 403 };
 
   return { user };
@@ -40,7 +46,20 @@ export async function PATCH(req) {
   const auth = await requireAdmin();
   if (auth.error) return NextResponse.json({ error: auth.error }, { status: auth.status });
 
-  const { userId, role, status } = await req.json();
+  // การกระทำที่เปลี่ยนสิทธิ์คนอื่น (เปลี่ยน role/อนุมัติ/ปฏิเสธ) ควรมี rate limit ไว้เป็น
+  // defense-in-depth เผื่อ session ของ admin หลุด/ถูกใช้ผิดจากสคริปต์อัตโนมัติ ต่อให้ต้อง
+  // ผ่าน requireAdmin() มาก่อนแล้วก็ตาม (คนละชั้นการป้องกัน ไม่ใช่ทดแทนกัน)
+  if (!(await checkRateLimit(`admin-members-patch:${auth.user.id}`, 30, 60))) {
+    return NextResponse.json({ error: "ทำรายการถี่เกินไป กรุณารอสักครู่" }, { status: 429 });
+  }
+
+  let body;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "รูปแบบข้อมูลไม่ถูกต้อง" }, { status: 400 });
+  }
+  const { userId, role, status } = body;
   if (!userId) return NextResponse.json({ error: "ไม่ระบุ userId" }, { status: 400 });
   if (role === undefined && status === undefined)
     return NextResponse.json({ error: "ต้องระบุ role หรือ status อย่างน้อย 1 อย่าง" }, { status: 400 });
@@ -98,6 +117,10 @@ export async function PATCH(req) {
 export async function DELETE(req) {
   const auth = await requireAdmin();
   if (auth.error) return NextResponse.json({ error: auth.error }, { status: auth.status });
+
+  if (!(await checkRateLimit(`admin-members-delete:${auth.user.id}`, 30, 60))) {
+    return NextResponse.json({ error: "ทำรายการถี่เกินไป กรุณารอสักครู่" }, { status: 429 });
+  }
 
   const { searchParams } = new URL(req.url);
   const userId = searchParams.get("userId");

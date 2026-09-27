@@ -42,6 +42,13 @@ export const authOptions = {
       async authorize(credentials, req) {
         if (!credentials?.email || !credentials?.password) return null;
 
+        // เพดานความยาว email ก่อนใช้เป็นทั้ง DB query และส่วนหนึ่งของ rate-limit key
+        // (`login:email:${email}`) — ไม่มีเพดานนี้มาก่อน ใครก็ส่ง email ปลอมยาวเป็น MB มาได้
+        // ซึ่งนอกจากเปลืองรอบ query แล้ว ยังกลายเป็น key แปลกๆ ยาวๆ ค้างอยู่ใน in-memory
+        // rate-limit store (lib/rateLimit.js) ตลอดไปถ้า Upstash ไม่ได้ตั้งค่าไว้ — ยิ่งกดสมัคร/
+        // ลอง login ด้วย email ปลอมที่ไม่ซ้ำกันเลยหลายครั้ง ยิ่งสะสม memory จนกว่า sweep รอบถัดไป
+        if (credentials.email.length > 320) return null; // ยาวเกิน email จริงตาม RFC ไปแล้ว ไม่ต้องเสียเวลา query ต่อ
+
         const email = credentials.email.toLowerCase().trim();
         const ip = getClientIp(req);
 

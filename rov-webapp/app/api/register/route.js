@@ -14,6 +14,19 @@ function getIP(req) {
   );
 }
 
+// ── Length caps ──
+// เดิมมีแค่ email ที่ผ่าน regex format check และ password ที่มีแค่ "ขั้นต่ำ" (>=6)
+// แต่ไม่มี "เพดานบน" ของ field ไหนเลย field ที่น่าห่วงที่สุดคือ password: bcrypt.hash()
+// ยิ่ง input ยาวยิ่งกินเวลา/CPU ประมวลผลก่อนถึงจุดที่ bcrypt เองจะตัดทอนที่ 72 bytes
+// (ข้อจำกัดที่รู้จักกันดีของ bcrypt) — ส่ง password ยาวมากๆ (เช่นหลาย MB) มาซ้ำๆ คือช่องทาง
+// DoS ที่ทำได้ฟรี แม้จะถูกจำกัดด้วย rate limit (5 ครั้ง/15 นาที/IP) อยู่แล้วก็ตาม แก้ไว้กัน
+// ไว้ก่อนเพราะไม่มีต้นทุนอะไรเลยที่จะเพิ่มเพดานนี้
+const MAX_EMAIL = 320;    // ความยาวสูงสุดของอีเมลที่ถูกต้องตาม RFC
+const MAX_PASSWORD = 128; // เกินพอสำหรับ passphrase ที่ยาวที่สุดที่คนจะพิมพ์จริง
+const MAX_NAME = 100;
+const MAX_TEAM_NAME = 100;
+const MAX_INVITE_CODE = 64; // เท่ากับเพดานที่ตั้งไว้ใน app/api/team/join/route.js แล้ว
+
 export async function POST(req) {
   try {
     const ip = getIP(req);
@@ -34,13 +47,29 @@ export async function POST(req) {
       return NextResponse.json({ error: "กรุณากรอกอีเมลและรหัสผ่าน" }, { status: 400 });
     }
 
+    if (typeof email !== "string" || email.length > MAX_EMAIL) {
+      return NextResponse.json({ error: "อีเมลยาวเกินไป" }, { status: 400 });
+    }
+
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
       return NextResponse.json({ error: "รูปแบบอีเมลไม่ถูกต้อง" }, { status: 400 });
     }
 
-    if (password.length < 6) {
+    if (typeof password !== "string" || password.length < 6) {
       return NextResponse.json({ error: "รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร" }, { status: 400 });
+    }
+    if (password.length > MAX_PASSWORD) {
+      return NextResponse.json({ error: `รหัสผ่านยาวเกินไป (สูงสุด ${MAX_PASSWORD} ตัวอักษร)` }, { status: 400 });
+    }
+    if (name !== undefined && (typeof name !== "string" || name.length > MAX_NAME)) {
+      return NextResponse.json({ error: "ชื่อยาวเกินไป" }, { status: 400 });
+    }
+    if (teamName !== undefined && typeof teamName === "string" && teamName.length > MAX_TEAM_NAME) {
+      return NextResponse.json({ error: "ชื่อทีมยาวเกินไป" }, { status: 400 });
+    }
+    if (inviteCode !== undefined && typeof inviteCode === "string" && inviteCode.length > MAX_INVITE_CODE) {
+      return NextResponse.json({ error: "Invite Code ไม่ถูกต้อง" }, { status: 400 });
     }
 
     const normalizedEmail = email.toLowerCase().trim();
@@ -118,6 +147,14 @@ export async function POST(req) {
 
     return NextResponse.json({ error: "action ไม่ถูกต้อง" }, { status: 400 });
   } catch (err) {
+    // ── Race condition: สองคนสมัครอีเมลเดียวกันพร้อมกัน ──
+    // เช็ค findUnique ด้านบนผ่านทั้งคู่ได้ (ยังไม่มีใครสร้างสำเร็จตอนเช็ค) แต่ DB มี unique
+    // constraint บน email กันไว้อยู่แล้ว (ดู schema.prisma) — ฝั่งที่ create() ทีหลังจะชน
+    // P2002 แทนที่จะปล่อยให้ตกไปเป็น "เกิดข้อผิดพลาด" 500 แบบรวมๆ ให้ตอบ 409 แบบเดียวกับตอน
+    // findUnique เจอ (ผู้ใช้เห็นข้อความเดิม ไม่ต้องรู้ว่าเบื้องหลังมันชนกันตรงไหน)
+    if (err?.code === "P2002") {
+      return NextResponse.json({ error: "อีเมลนี้ถูกใช้ไปแล้ว" }, { status: 409 });
+    }
     console.error("Register error:", err);
     return NextResponse.json({ error: "เกิดข้อผิดพลาด ลองใหม่อีกครั้ง" }, { status: 500 });
   }
