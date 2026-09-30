@@ -260,6 +260,17 @@ const whiteboardFormationSchema = z.object({
   createdAt: z.string().optional(),
 }).passthrough();
 
+// ── rosterMembership: ประวัติย้ายทีมของผู้เล่น ──
+// { [playerName]: [{ team:"our"|<ชื่อ rival>, from:epochMs, to:epochMs|null }] }
+// เขียนโดย reducer TRANSFER_PLAYER_TO_RIVAL เท่านั้น จึงรูปร่างตายตัว — ถ้าไม่ตรงรูปแบบนี้ปฏิเสธทั้ง request (400)
+// ต่างจาก URL fields ที่ใช้ .catch(null) เพราะไม่มีข้อมูลเก่าที่ "เคยถูกต้องตามเกณฑ์เดิม" ให้ต้องประคองไว้
+// (ฟิลด์นี้เพิ่งเกิดใหม่) และค่าเพี้ยนที่ถูกเก็บเงียบๆ จะทำให้การกรอง roster ตาม patch ผิดโดยไม่มีใครรู้ตัว
+const rosterMembershipPeriodSchema = z.object({
+  team: z.string().max(MAX_SHORT_TEXT),
+  from: z.number().finite(),
+  to: z.number().finite().nullable().optional(),
+}).passthrough();
+
 // Top-level payload for PUT /api/data — every field optional because the
 // client always sends the *full* app state object, but we still don't want
 // to assume it always includes every key.
@@ -309,6 +320,9 @@ export const teamDataSchema = z.object({
   whiteboardElements: z.array(whiteboardElementSchema).max(3000).optional(),
   whiteboardFormations: z.array(whiteboardFormationSchema).max(500).optional(),
   whiteboardMapUrl: httpUrlOrNull().nullable().optional(),
+  rosterMembership: z.record(z.string().max(MAX_SHORT_TEXT), z.array(rosterMembershipPeriodSchema).max(50))
+    .refine((obj) => Object.keys(obj).length <= 500, { message: "rosterMembership มีจำนวนผู้เล่นมากเกินไป" })
+    .optional(),
 }).passthrough(); // don't reject the whole save if the frontend adds a field we haven't modeled yet
 
 /**

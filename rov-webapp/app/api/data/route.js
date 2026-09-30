@@ -183,7 +183,7 @@ export async function PUT(req) {
     matches, rivals, roster, enemyRosters, scoutMatches,
     playerPhotos, heroPhotos, customHeroes, roleOverrides, videos,
     teamLogo, rivalLogos, schedules, patchInfo, heroTiers, practiceAssignments,
-    whiteboardElements, whiteboardFormations, whiteboardMapUrl,
+    whiteboardElements, whiteboardFormations, whiteboardMapUrl, rosterMembership,
     expectedUpdatedAt, // เวลาที่ client เห็นข้อมูลล่าสุดตอนโหลด — ใช้เช็ค conflict
   } = validation.data;
 
@@ -201,7 +201,7 @@ export async function PUT(req) {
     matches, rivals, roster, enemyRosters, scoutMatches,
     playerPhotos, heroPhotos, customHeroes, roleOverrides, videos,
     teamLogo, rivalLogos, schedules, patchInfo, heroTiers, practiceAssignments,
-    whiteboardElements, whiteboardFormations, whiteboardMapUrl,
+    whiteboardElements, whiteboardFormations, whiteboardMapUrl, rosterMembership,
   };
 
   // ── สถานะปัจจุบันใน DB (อ่านครั้งเดียว ใช้ทั้ง permission / shrink guard / activity log) ──
@@ -212,6 +212,7 @@ export async function PUT(req) {
       matches: true, rivals: true, roster: true, enemyRosters: true, scoutMatches: true,
       playerPhotos: true, teamLogo: true, rivalLogos: true,
       schedules: true, videos: true, patchInfo: true, heroTiers: true, practiceAssignments: true,
+      rosterMembership: true,
     },
   });
 

@@ -29,6 +29,11 @@ export function TeamCard({
   accentColor = C.lose,     // red-ish for rivals by default; pass C.primary for "our team"
   deleteLabel = "🗑️ ลบทีมนี้",
   deleteConfirmMessage,
+  // ── รับผู้เล่นที่ถูกลากมาวาง (ย้ายทีม) ──
+  // onDropPlayer(playerName): ถ้าส่งมา การ์ดนี้จะกลายเป็น drop target — page เป็นคนถือ state ว่ากำลังลากใครอยู่
+  // isDropTarget: page บอกว่าตอนนี้กำลังลากอะไรอยู่ (ไว้เน้นการ์ดให้เห็นว่าวางตรงนี้ได้)
+  onDropPlayer,
+  isDropTarget = false,
 }) {
   // ── hover state managed by React, not direct DOM mutation ──
   // Same fix as RosterPlayerCard: setting `.style.transform` imperatively
@@ -38,15 +43,27 @@ export function TeamCard({
   // `position:fixed` descendant. Driving it from state means React always
   // renders the correct value, every time, no matter what else changes.
   const [hovered, setHovered] = useState(false);
+  const [dragOver, setDragOver] = useState(false); // กำลังมีผู้เล่นลากอยู่เหนือการ์ดนี้ไหม (ไฮไลต์แรงกว่า isDropTarget)
+  const canDrop = typeof onDropPlayer === "function";
+  const highlighted = canDrop && (dragOver || isDropTarget);
   return (
     <div
       style={{borderRadius:16,overflow:"hidden",
-        border:`1px solid ${C.border}`,
-        transform:hovered?"translateY(-3px)":"none",
-        boxShadow:hovered?`0 8px 28px ${accentColor}30`:"none",
+        border: dragOver ? `2px solid ${C.win}` : (highlighted ? `2px dashed ${accentColor}` : `1px solid ${C.border}`),
+        transform:(hovered||dragOver)?"translateY(-3px)":"none",
+        boxShadow: dragOver ? `0 0 0 4px ${C.win}30, 0 8px 28px ${C.win}40` : (hovered?`0 8px 28px ${accentColor}30`:"none"),
         transition:"transform 0.15s, box-shadow 0.15s"}}
       onMouseEnter={()=>setHovered(true)}
-      onMouseLeave={()=>setHovered(false)}>
+      onMouseLeave={()=>setHovered(false)}
+      // ต้อง preventDefault ใน dragover ไม่งั้นเบราว์เซอร์ไม่ยอมให้ drop ลงบน element นี้
+      onDragOver={canDrop ? (e=>{ e.preventDefault(); e.dataTransfer.dropEffect="move"; if(!dragOver) setDragOver(true); }) : undefined}
+      onDragLeave={canDrop ? (e=>{ if(!e.currentTarget.contains(e.relatedTarget)) setDragOver(false); }) : undefined}
+      onDrop={canDrop ? (e=>{
+        e.preventDefault();
+        setDragOver(false);
+        const name = e.dataTransfer.getData("text/plain");
+        if (name) onDropPlayer(name);
+      }) : undefined}>
 
       {/* ── COVER ZONE — คลิกเข้าหน้า detail ── */}
       <div onClick={onClick}
@@ -81,6 +98,15 @@ export function TeamCard({
             {sessionCount} session · {gameCount} เกม
           </div>
         </div>
+
+        {canDrop && dragOver && (
+          <div style={{position:"absolute",inset:0,background:"rgba(0,184,148,0.35)",
+            display:"flex",alignItems:"center",justifyContent:"center",
+            fontWeight:900,fontSize:15,color:"#fff",textShadow:"0 1px 6px rgba(0,0,0,0.8)",
+            pointerEvents:"none"}}>
+            📥 วางเพื่อย้ายมาทีมนี้
+          </div>
+        )}
 
         {/* Win rate badge มุมขวาบน — ซ่อนถ้าไม่ส่ง winRatePct มา */}
         {winRatePct !== null && (

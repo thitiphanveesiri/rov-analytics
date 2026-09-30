@@ -8,6 +8,7 @@ const FIELDS = [
   "playerPhotos","heroPhotos","customHeroes","roleOverrides","videos",
   "teamLogo","rivalLogos","schedules","patchInfo","heroTiers","practiceAssignments",
   "whiteboardElements","whiteboardFormations","whiteboardMapUrl",
+  "rosterMembership",
 ];
 
 const FALLBACK = {
@@ -16,7 +17,7 @@ const FALLBACK = {
   customHeroes:[], roleOverrides:{}, videos:[],
   teamLogo:null, rivalLogos:{}, schedules:[],
   patchInfo:{version:"",notes:"",updatedAt:null}, heroTiers:{}, practiceAssignments:[],
-  whiteboardElements:[], whiteboardFormations:[], whiteboardMapUrl:null, _loaded:true,
+  whiteboardElements:[], whiteboardFormations:[], whiteboardMapUrl:null, rosterMembership:{}, _loaded:true,
 };
 
 // Tracks the last-known `updatedAt` timestamp of TeamData as this client
@@ -115,7 +116,9 @@ export async function loadFromStorage() {
 // strings     : roster = array ของชื่อ (ตัวสตริงเองคือตัวระบุ)
 // อื่นๆ (patchInfo, teamLogo, whiteboardElements, whiteboardMapUrl) = atomic ทั้งก้อน
 const MERGEABLE_LIST_FIELDS = ["matches", "rivals", "scoutMatches", "videos", "schedules", "practiceAssignments", "whiteboardFormations"];
-const MERGEABLE_MAP_FIELDS = ["enemyRosters", "playerPhotos", "heroPhotos", "roleOverrides", "rivalLogos", "heroTiers"];
+// rosterMembership อยู่ในกลุ่มนี้ด้วย: key = ชื่อผู้เล่น ค่า = อาร์เรย์ประวัติ (เทียบทั้งก้อนต่อ key) —
+// โค้ชสองคนย้ายผู้เล่น "คนละคน" พร้อมกันจะรวมกันได้ ไม่ต้องให้ฝั่งใดฝั่งหนึ่งแพ้ทั้งก้อน
+const MERGEABLE_MAP_FIELDS = ["enemyRosters", "playerPhotos", "heroPhotos", "roleOverrides", "rivalLogos", "heroTiers", "rosterMembership"];
 const MERGEABLE_BY_NAME_FIELDS = ["customHeroes"];
 const MERGEABLE_STRING_LIST_FIELDS = ["roster"];
 

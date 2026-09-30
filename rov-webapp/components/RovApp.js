@@ -201,6 +201,17 @@ function parsePatchEffectiveFrom(dateStr) {
 
 function filterMatchesByPatch(matches, patchVersions, selectedPatch) {
   if (selectedPatch === "all" || !patchVersions.length) return matches;
+  const { from, to } = resolvePatchWindow(patchVersions, selectedPatch);
+  if (from === null) return matches; // เผื่อ patch ที่เลือกไว้โดนลบไปแล้ว
+  return matches.filter(m => m.id >= from && m.id < to);
+}
+
+// ── ดึงช่วงเวลา [from, to) ของ patch ที่เลือกไว้ ──
+// แยกออกมาจาก filterMatchesByPatch เดิม เพื่อให้ roster membership filtering
+// (isMembershipActiveForPatch ด้านล่าง) ใช้สูตรคำนวณเดียวกันเป๊ะ ไม่ต้องเขียนซ้ำ
+// คืน { from:null, to:null } ถ้า resolve ไม่ได้ (patch ที่เลือกไว้ถูกลบไปแล้ว)
+function resolvePatchWindow(patchVersions, selectedPatch) {
+  if (!patchVersions.length) return { from: null, to: null };
   const sorted = [...patchVersions].sort((a,b) => parsePatchEffectiveFrom(a.effectiveFrom) - parsePatchEffectiveFrom(b.effectiveFrom));
 
   let from, to = Infinity;
@@ -208,11 +219,137 @@ function filterMatchesByPatch(matches, patchVersions, selectedPatch) {
     from = parsePatchEffectiveFrom(sorted[sorted.length-1].effectiveFrom).getTime();
   } else {
     const idx = sorted.findIndex(v => v.version === selectedPatch);
-    if (idx === -1) return matches; // เผื่อ patch ที่เลือกไว้โดนลบไปแล้ว
+    if (idx === -1) return { from: null, to: null };
     from = parsePatchEffectiveFrom(sorted[idx].effectiveFrom).getTime();
     if (idx+1 < sorted.length) to = parsePatchEffectiveFrom(sorted[idx+1].effectiveFrom).getTime();
   }
-  return matches.filter(m => m.id >= from && m.id < to);
+  return { from, to };
+}
+
+// ── Roster membership: ผู้เล่นคนนี้อยู่ทีม `team` ("our" หรือชื่อ rival) ในช่วง patch ที่เลือกไว้ไหม ──
+// history = rosterMembership[playerName] — array ของ { team, from, to } เรียงตามลำดับเวลาไม่จำเป็น
+// (from/to เป็น epoch ms แบบเดียวกับ match.id — to:null แปลว่ายังอยู่ทีมนั้นจนถึงตอนนี้)
+//
+// ไม่มีประวัติเลย (history undefined/[]) = ผู้เล่นที่ไม่เคยผ่านการ "ย้ายทีม" มาก่อน → โชว์เสมอทุก patch
+// (backward-compat: ทีมที่ไม่เคยใช้ฟีเจอร์นี้เลยจะเห็นพฤติกรรมเดิมทุกประการ ไม่ต้อง migrate อะไร)
+//
+// selectedPatch==="all" → นับว่า "อยู่ทีมนี้" ถ้าเคยมีช่วงไหนที่สังกัดทีมนี้เลยก็พอ (ไม่สนเวลา)
+// เลือก patch เจาะจง → ต้องมีช่วงที่สังกัดทีมนี้ "ทับซ้อน" กับช่วงเวลาของ patch นั้นจริงๆ (interval overlap)
+function isMembershipActiveForPatch(history, team, patchVersions, selectedPatch) {
+  if (!Array.isArray(history) || history.length === 0) return true;
+  if (selectedPatch === "all") return history.some(h => h.team === team);
+
+  const { from: patchFrom, to: patchTo } = resolvePatchWindow(patchVersions, selectedPatch);
+  if (patchFrom === null) return true; // resolve ไม่ได้ (patch ถูกลบ) — fallback แสดงเหมือน "all"
+  return history.some(h =>
+    h.team === team &&
+    h.from < patchTo &&
+    (h.to === null || h.to === undefined || h.to > patchFrom)
+  );
+}
+
+// ── ผู้เล่นคนนี้ "ตอนนี้" สังกัดทีมไหน (record ที่ยังเปิดอยู่ to:null) — ไม่มีประวัติ = ทีมเรา ──
+function getCurrentTeamOf(history) {
+  if (!Array.isArray(history) || history.length === 0) return "our";
+  const open = history.find(h => h.to === null || h.to === undefined);
+  return open ? open.team : null; // null = ปิดทุกช่วงไปแล้ว (ไม่ควรเกิด แต่กันไว้)
+}
+
+// ── ย้ายชื่อ key ใน rosterMembership ตอนเปลี่ยนชื่อผู้เล่น (ประวัติต้องตามคนไป ไม่ใช่ค้างที่ชื่อเก่า) ──
+function renameMembershipKey(membership, oldName, newName) {
+  const src = membership?.[oldName];
+  if (!src) return membership || {};
+  const { [oldName]: _omit, ...rest } = membership;
+  const existing = rest[newName] || [];
+  return { ...rest, [newName]: [...existing, ...src].sort((a, b) => a.from - b.from) };
+}
+
+// ── ลบช่วงสังกัดของทีมหนึ่งออกจากประวัติ (ใช้ตอนลบผู้เล่นออกจาก roster ของทีมนั้น) ──
+// พิเศษ: ถ้าช่วงที่ลบไปคือ "ช่วงล่าสุดที่เพิ่งย้ายเข้ามา" และช่วงก่อนหน้าปิดด้วยเวลาเดียวกับที่ช่วงนี้เริ่มพอดี
+// (= ย้ายมาต่อเนื่องกัน) ให้ "เปิดช่วงก่อนหน้ากลับ" (to:null) = undo การย้าย ผู้เล่นจึงกลับมาอยู่ทีมเดิมต่อ
+// แทนที่จะหายไปจากทุกทีมเงียบๆ (กรณีลากผิดทีมแล้วลบออกจากทีมที่ลากไปผิด)
+function removeTeamFromHistory(history, team) {
+  if (!Array.isArray(history)) return history;
+  const removed = history.filter(h => h.team === team);
+  let kept = history.filter(h => h.team !== team);
+  if (removed.length && kept.length) {
+    const wasOpen = removed.some(r => r.to === null || r.to === undefined);
+    if (wasOpen) {
+      const startOfRemoved = Math.max(...removed.map(r => r.from));
+      const idx = kept.findIndex(k => k.to === startOfRemoved);
+      if (idx !== -1) kept = kept.map((k, i) => i === idx ? { ...k, to: null } : k);
+    }
+  }
+  return kept;
+}
+
+// ── สถิติของผู้เล่นแยกตามทีมที่สังกัดในแต่ละช่วง (ใช้ในหน้า Player Profile ตอนมีประวัติย้ายทีม) ──
+// history = rosterMembership[player]; matches = แมตช์ทั้งหมดที่ยังไม่กรอง patch (ต้องดูข้ามทุก patch เสมอ)
+// ช่วงของทีมเรา ("our"): นับเกมที่ชื่อนี้อยู่ใน ourPicks — ผลชนะ = result==="WIN"
+// ช่วงของทีมคู่แข่ง: นับเกมที่เราเจอทีมนั้น (m.rivalName===team) และชื่อนี้อยู่ใน enemyPicks — ผลชนะของเขา = result==="LOSE"
+//   (result ในแมตช์เป็นมุมมองของ "เรา" เสมอ)
+// ⚠ ใช้เฉพาะแมตช์จริงที่เราบันทึก — ไม่รวมข้อมูล Scout ที่เห็นเขาเล่นกับทีมอื่น เพราะ adaptScoutGamesForPlayerProfile
+//   ไม่ส่งเวลา/id ของแมตช์ Scout ต่อมา จึงเทียบกับช่วงเวลาสังกัดไม่ได้ (ถ้าจะรวมต้องแก้ตัว adapter ที่ใช้ร่วมกับหน้าอื่น)
+function computePlayerTeamBreakdown(history, matches, playerName) {
+  if (!Array.isArray(history) || history.length === 0) return [];
+  const periods = [...history].sort((a, b) => a.from - b.from);
+  return periods.map(period => {
+    const to = (period.to === null || period.to === undefined) ? Infinity : period.to;
+    let games = 0, wins = 0;
+    const heroes = {};
+    (matches || []).forEach(m => {
+      if (!(m.id >= period.from && m.id < to)) return;
+      const gs = Array.isArray(m.games) && m.games.length > 0 ? m.games : [m];
+      gs.forEach(g => {
+        if (period.team === "our") {
+          const slot = (g.ourPicks || []).find(d => d.player === playerName);
+          if (!slot) return;
+          games++; if (g.result === "WIN") wins++;
+          if (slot.hero?.name) heroes[slot.hero.name] = (heroes[slot.hero.name] || 0) + 1;
+        } else {
+          if (m.rivalName !== period.team) return;
+          const slot = (g.enemyPicks || []).find(d => d.player === playerName);
+          if (!slot) return;
+          games++; if (g.result === "LOSE") wins++;
+          if (slot.hero?.name) heroes[slot.hero.name] = (heroes[slot.hero.name] || 0) + 1;
+        }
+      });
+    });
+    const topHeroes = Object.entries(heroes).sort((a, b) => b[1] - a[1]).slice(0, 3);
+    return {
+      team: period.team, from: period.from, to: period.to ?? null,
+      games, wins, losses: games - wins,
+      winRate: games ? Math.round(wins / games * 100) : null,
+      topHeroes,
+    };
+  });
+}
+
+// ── ช่องรับผู้เล่นที่ลากมา (ย้ายทีม) — แสดงในแท็บ "ทีมเรา" ข้างการ์ดผู้เล่นที่ลากได้ ──
+// ต้องอยู่หน้าเดียวกับการ์ดผู้เล่นเสมอ (การ์ดผู้เล่นอยู่แท็บ "ทีมเรา" ส่วนการ์ดทีมคู่แข่งอยู่แท็บ "คู่แข่ง" — ลากข้ามแท็บไม่ได้)
+function RivalDropTile({ name, logoUrl, dragging, onDropPlayer }) {
+  const [over, setOver] = useState(false);
+  return (
+    <div
+      onDragOver={e=>{ e.preventDefault(); e.dataTransfer.dropEffect="move"; if(!over) setOver(true); }}
+      onDragLeave={e=>{ if(!e.currentTarget.contains(e.relatedTarget)) setOver(false); }}
+      onDrop={e=>{
+        e.preventDefault(); setOver(false);
+        const who = e.dataTransfer.getData("text/plain");
+        if (who) onDropPlayer(who, name);
+      }}
+      style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",borderRadius:10,
+        minWidth:120,maxWidth:200,
+        background: over ? C.win+"25" : C.bgPanel,
+        border: over ? `2px solid ${C.win}` : (dragging ? `2px dashed ${C.lose}80` : `1px solid ${C.border}`),
+        boxShadow: over ? `0 0 0 3px ${C.win}30` : "none",
+        transition:"all 0.12s"}}>
+      <LogoImg url={logoUrl} name={name} size={28}/>
+      <span style={{fontSize:12,fontWeight:800,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+        {over ? "📥 วางเลย" : name}
+      </span>
+    </div>
+  );
 }
 
 // PatchSelector, RosterPlayerCard moved to components/shared/RosterPlayerCard.js
@@ -2557,7 +2694,7 @@ function PhaseTracker({ step }) {
 // ═══════════════════════════════════════════
 //  PLAYER PROFILE — ✅ อ่าน stats จาก gameStats ใหม่
 // ═══════════════════════════════════════════
-function PlayerProfile({ player, isEnemy, allGames, onBack, photoUrl }) {
+function PlayerProfile({ player, isEnemy, allGames, onBack, photoUrl, teamBreakdown, ourTeamName, rivalLogos, ourTeamLogo }) {
   const SC = { card:{background:C.bgPanel,border:`1px solid ${C.border}`,borderRadius:12,padding:"14px 18px"} };
   const accentCol = isEnemy ? C.lose : C.win;
 
@@ -2660,6 +2797,66 @@ function PlayerProfile({ player, isEnemy, allGames, onBack, photoUrl }) {
           <div style={{fontSize:12,color:C.textMuted,marginTop:3}}>{pGames.length} เกมที่บันทึก</div>
         </div>
       </div>
+
+      {/* ── ประวัติการย้ายทีม: สถิติแยกตามทีมที่สังกัดในแต่ละช่วง (โผล่เฉพาะผู้เล่นที่เคยย้ายทีม) ──
+          ไม่ผูกกับตัวเลือก patch ด้านบน — เป็นภาพรวมข้ามทุก patch โดยนิยาม (ตัวเลขการ์ดด้านล่างยังตาม patch ที่เลือกเหมือนเดิม) */}
+      {Array.isArray(teamBreakdown) && teamBreakdown.length>1 && (
+        <div style={{...SC.card,marginBottom:16}}>
+          <div style={{fontWeight:800,fontSize:13,color:C.primaryLight,marginBottom:4}}>🔀 ประวัติการย้ายทีม</div>
+          <div style={{fontSize:10,color:C.textMuted,marginBottom:10}}>
+            สถิติแยกตามทีมที่สังกัดในแต่ละช่วง (ทุก patch) — นับเฉพาะแมตช์จริงที่บันทึก ไม่รวมข้อมูล Scout
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+            {teamBreakdown.map((b,i)=>{
+              const isOur = b.team==="our";
+              const label = isOur ? (ourTeamName||"ทีมเรา") : b.team;
+              const col = isOur ? C.win : C.lose;
+              const fmt = ts => new Date(ts).toLocaleDateString("th-TH",{day:"numeric",month:"short",year:"numeric"});
+              const range = `${b.from===0 ? "ตั้งแต่เริ่มต้น" : fmt(b.from)} → ${b.to===null ? "ปัจจุบัน" : fmt(b.to)}`;
+              return (
+                <div key={`${b.team}-${b.from}-${i}`}
+                  style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap",
+                    padding:"10px 12px",borderRadius:10,background:C.bgBase,
+                    border:`1px solid ${b.to===null?col+"60":C.border}`,borderLeft:`4px solid ${col}`}}>
+                  <LogoImg url={isOur?ourTeamLogo:rivalLogos?.[b.team]} name={label} size={30}/>
+                  <div style={{flex:1,minWidth:140}}>
+                    <div style={{fontWeight:800,fontSize:13,color:col}}>
+                      {isOur?"🛡️":"⚔️"} {label}
+                      {b.to===null && <span style={{marginLeft:8,fontSize:9,fontWeight:800,padding:"1px 8px",borderRadius:99,background:col+"25"}}>ปัจจุบัน</span>}
+                    </div>
+                    <div style={{fontSize:10,color:C.textMuted,marginTop:2}}>{range}</div>
+                  </div>
+                  {b.games===0 ? (
+                    <div style={{fontSize:11,color:C.textMuted}}>ยังไม่มีเกมที่บันทึกในช่วงนี้</div>
+                  ) : (
+                    <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
+                      <div style={{textAlign:"center"}}>
+                        <div style={{fontSize:15,fontWeight:800}}>{b.games}</div>
+                        <div style={{fontSize:9,color:C.textMuted}}>GAMES</div>
+                      </div>
+                      <div style={{textAlign:"center"}}>
+                        <div style={{fontSize:15,fontWeight:800,color:b.winRate>=50?C.win:C.lose}}>{b.wins}-{b.losses}</div>
+                        <div style={{fontSize:9,color:C.textMuted}}>W-L</div>
+                      </div>
+                      <div style={{textAlign:"center"}}>
+                        <div style={{fontSize:15,fontWeight:800,color:b.winRate>=50?C.win:C.lose}}>{b.winRate}%</div>
+                        <div style={{fontSize:9,color:C.textMuted}}>WIN RATE</div>
+                      </div>
+                      {b.topHeroes.length>0 && (
+                        <div style={{display:"flex",gap:6}}>
+                          {b.topHeroes.map(([h,n])=>(
+                            <div key={h} title={`${h} · ${n} เกม`}><HeroChip name={h} size={22} fontSize={10}/></div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(100px,1fr))",gap:12,marginBottom:16}}>
         {[
@@ -3256,6 +3453,7 @@ function exportJSON(appState) {
     customHeroes:  appState.customHeroes,
     roleOverrides: appState.roleOverrides,
     videos:        appState.videos,
+    rosterMembership: appState.rosterMembership,
   };
   const blob = new Blob([JSON.stringify(payload, null, 2)], {type:"application/json"});
   const url  = URL.createObjectURL(blob);
@@ -3292,6 +3490,18 @@ function importJSON(file, currentState, onMerge) {
         const names = new Set(existing.map(h=>h.name.toLowerCase()));
         return [...existing, ...(incoming||[]).filter(h=>!names.has(h.name.toLowerCase()))];
       };
+      // rosterMembership: รวมประวัติต่อผู้เล่น (union ตาม team+from, เรียงตามเวลา) — เหมือน mergeRosters
+      // แต่ต้อง dedupe ที่ระดับ "ช่วง" ไม่ใช่ "รายชื่อ" เฉยๆ กันไฟล์ backup เก่าที่ import ซ้ำเพิ่มประวัติซ้ำ
+      const mergeMembership = (a, b) => {
+        const result = { ...a };
+        Object.entries(b||{}).forEach(([name, periods]) => {
+          const existing = result[name] || [];
+          const seen = new Set(existing.map(p=>`${p.team}|${p.from}`));
+          const toAdd = (periods||[]).filter(p=>!seen.has(`${p.team}|${p.from}`));
+          result[name] = [...existing, ...toAdd].sort((x,y)=>x.from-y.from);
+        });
+        return result;
+      };
 
       const merged = {
         matches:       mergeById(currentState.matches,      data.matches),
@@ -3304,6 +3514,7 @@ function importJSON(file, currentState, onMerge) {
         customHeroes:  mergeCustomHeroes(currentState.customHeroes, data.customHeroes),
         roleOverrides: { ...currentState.roleOverrides, ...(data.roleOverrides||{}) },
         videos:        mergeById(currentState.videos||[], data.videos),
+        rosterMembership: mergeMembership(currentState.rosterMembership||{}, data.rosterMembership),
       };
 
       const added = {
@@ -5192,6 +5403,9 @@ function defaultAppState() {
     whiteboardElements: [],   // Tactical Whiteboard current board — paths/arrows/hero markers/text
     whiteboardFormations: [], // saved named boards — [{ id, name, elements, mapUrl, createdAt }]
     whiteboardMapUrl: null,   // uploaded background map — Vercel Blob URL
+    // ประวัติการสังกัดทีมของผู้เล่นที่เคยย้ายทีม — { [playerName]: [{ team:"our"|rivalName, from:epochMs, to:epochMs|null }] }
+    // ผู้เล่นที่ไม่มี key นี้ = ไม่เคยย้ายทีมเลย → โชว์ทุก patch ตามเดิม (ดู isMembershipActiveForPatch)
+    rosterMembership: {},
   };
 }
 
@@ -5298,7 +5512,49 @@ function appReducer(state, action) {
 
     case "REMOVE_PLAYER": {
       const { [`our:${action.payload}`]: _omit, ...restPhotos } = state.playerPhotos;
-      return { ...state, roster: state.roster.filter(p => p !== action.payload), playerPhotos: restPhotos };
+      // ลบช่วง "ทีมเรา" ออกจากประวัติย้ายทีมด้วย (ช่วงของทีมคู่แข่งยังอยู่ — คนนั้นยังอยู่ใน roster ทีมนั้น)
+      let rosterMembership = state.rosterMembership || {};
+      if (rosterMembership[action.payload]) {
+        const kept = removeTeamFromHistory(rosterMembership[action.payload], "our");
+        const { [action.payload]: _h, ...restM } = rosterMembership;
+        rosterMembership = kept.length ? { ...restM, [action.payload]: kept } : restM;
+      }
+      return { ...state, roster: state.roster.filter(p => p !== action.payload), playerPhotos: restPhotos, rosterMembership };
+    }
+
+    // ── ย้ายผู้เล่นจากทีมเราไปทีมคู่แข่ง (ลากการ์ดผู้เล่นไปวางบนการ์ดทีม Rival) ──
+    // payload: { playerName, toRivalName, at? }   (at = epoch ms — ไม่ส่งมาใช้ Date.now())
+    // ตั้งใจ "ไม่ลบ" ชื่อออกจาก state.roster — ต้องเก็บไว้เพื่อให้ข้อมูลทีมเก่า (สถิติเกมที่เล่นให้ทีมเรา)
+    // ยังอยู่และดูย้อนหลังได้ตอนเลือก patch เก่า/ทั้งหมด การซ่อนจาก patch ปัจจุบันทำผ่าน rosterMembership แทน
+    case "TRANSFER_PLAYER_TO_RIVAL": {
+      const { playerName, toRivalName } = action.payload;
+      const at = action.payload.at ?? Date.now();
+      if (!state.roster.includes(playerName)) return state;
+      if (!(state.rivals || []).some(r => r.name === toRivalName)) return state; // ย้ายไปได้เฉพาะทีมที่มีอยู่ใน Rival
+
+      const membership = state.rosterMembership || {};
+      // ไม่มีประวัติ = อยู่ทีมเรามาตลอดตั้งแต่ก่อนมีระบบนี้ — ต้องสร้างช่วงนั้นไว้ก่อนเสมอ ไม่งั้นพอเพิ่มช่วงของทีมใหม่
+      // ผู้เล่นจะดู "ไม่เคยอยู่ทีมเรา" ทั้งที่จริงเล่นให้เรามาก่อน
+      const history = membership[playerName] ? [...membership[playerName]] : [{ team: "our", from: 0, to: null }];
+
+      // ย้ายได้เฉพาะคนที่ "ตอนนี้" อยู่ทีมเรา (กันลากซ้ำ/ลากจากมุมมอง all-time ที่ยังเห็นการ์ดเก่า)
+      if (getCurrentTeamOf(history) !== "our") return state;
+
+      const closed = history.map(h => (h.to === null || h.to === undefined) ? { ...h, to: at } : h);
+      closed.push({ team: toRivalName, from: at, to: null });
+
+      const curEnemy = state.enemyRosters[toRivalName] || [];
+      const enemyRosters = curEnemy.includes(playerName)
+        ? state.enemyRosters
+        : { ...state.enemyRosters, [toRivalName]: [...curEnemy, playerName] };
+
+      // ก๊อปรูปโปรไฟล์ตามไปด้วย (key รูปแยกตามบริบททีม: our:<ชื่อ> / enemy:<ทีม>:<ชื่อ>) ไม่งั้นการ์ดใหม่จะไม่มีรูป
+      const oldPhotoKey = `our:${playerName}`, newPhotoKey = `enemy:${toRivalName}:${playerName}`;
+      const playerPhotos = (state.playerPhotos?.[oldPhotoKey] && !state.playerPhotos?.[newPhotoKey])
+        ? { ...state.playerPhotos, [newPhotoKey]: state.playerPhotos[oldPhotoKey] }
+        : state.playerPhotos;
+
+      return { ...state, rosterMembership: { ...membership, [playerName]: closed }, enemyRosters, playerPhotos };
     }
 
     case "RENAME_PLAYER": {
@@ -5336,7 +5592,9 @@ function appReducer(state, action) {
         a.player === oldName ? { ...a, player: newName } : a
       );
 
-      return { ...state, roster, playerPhotos, matches, practiceAssignments };
+      const rosterMembership = renameMembershipKey(state.rosterMembership, oldName, newName);
+
+      return { ...state, roster, playerPhotos, matches, practiceAssignments, rosterMembership };
     }
 
     case "ADD_ENEMY_PLAYER": {
@@ -5352,6 +5610,14 @@ function appReducer(state, action) {
     case "REMOVE_ENEMY_PLAYER": {
       const { rivalName, playerName } = action.payload;
       const { [`enemy:${rivalName}:${playerName}`]: _omit, ...restPhotos } = state.playerPhotos;
+      // ลบช่วงสังกัดทีมนี้ออกจากประวัติย้ายทีมด้วย — ถ้าเพิ่งถูกย้ายมาจากทีมเรา (ต่อเนื่องกัน) จะ "เปิดช่วงทีมเรากลับ"
+      // = undo การลากผิดทีม ดู removeTeamFromHistory
+      let rosterMembership = state.rosterMembership || {};
+      if (rosterMembership[playerName]) {
+        const kept = removeTeamFromHistory(rosterMembership[playerName], rivalName);
+        const { [playerName]: _h, ...restM } = rosterMembership;
+        rosterMembership = kept.length ? { ...restM, [playerName]: kept } : restM;
+      }
       return {
         ...state,
         enemyRosters: {
@@ -5359,6 +5625,7 @@ function appReducer(state, action) {
           [rivalName]: (state.enemyRosters[rivalName] || []).filter(p => p !== playerName),
         },
         playerPhotos: restPhotos,
+        rosterMembership,
       };
     }
 
@@ -5398,7 +5665,10 @@ function appReducer(state, action) {
           : renameInGame(m);
       });
 
-      return { ...state, enemyRosters, playerPhotos, matches };
+      // ประวัติย้ายทีมตามคนไปด้วย (ถ้าเปลี่ยนชื่อฝั่งทีมเราไปแล้ว key อยู่ที่ชื่อใหม่อยู่แล้ว — ตรงนี้ no-op ปลอดภัย)
+      const rosterMembership = renameMembershipKey(state.rosterMembership, oldName, newName);
+
+      return { ...state, enemyRosters, playerPhotos, matches, rosterMembership };
     }
 
     case "SET_PHOTO": {
@@ -5898,6 +6168,7 @@ function RovAppInner() {
         setSaveStatus("saved");
         setTimeout(()=>setSaveStatus("idle"), 2000);
         const IGNORED_LABEL = { matches:"แมตช์", rivals:"ทีมคู่แข่ง", roster:"Roster", enemyRosters:"Roster คู่แข่ง",
+          rosterMembership:"ประวัติย้ายทีม",
           scoutMatches:"Scout", playerPhotos:"รูปผู้เล่น", teamLogo:"โลโก้ทีม", rivalLogos:"โลโก้คู่แข่ง",
           schedules:"ตารางแข่ง", patchInfo:"Patch notes", heroTiers:"Tier list", practiceAssignments:"การบ้านฝึกซ้อม" };
         const key = (err.ignoredFields||[]).join(",");
@@ -6185,6 +6456,7 @@ function RovAppInner() {
   }, []);
 
   const [newPlayerPhoto,      setNewPlayerPhoto]      = useState(null);
+  const [draggingPlayer,      setDraggingPlayer]      = useState(null); // ชื่อผู้เล่นทีมเราที่กำลังถูกลากอยู่ (ย้ายทีมไปคู่แข่ง) — ใช้ไฮไลต์ drop tile
   const [newEnemyPlayerPhoto, setNewEnemyPlayerPhoto]  = useState(null);
   const [showAddRival,        setShowAddRival]         = useState(false);
   const [newRivalName,        setNewRivalName]         = useState("");
@@ -6205,6 +6477,18 @@ function RovAppInner() {
     if (window.confirm(`ลบ ${name} ออกจากทีม?`))
       dispatchApp({ type:"REMOVE_PLAYER", payload: name });
   }, []);
+
+  // ── ย้ายผู้เล่นจากทีมเราไปทีมคู่แข่ง (ลากการ์ดไปวาง หรือเลือกจาก dropdown บนการ์ดในจอสัมผัส) ──
+  // ถามยืนยันก่อนเสมอ เพราะเป็นการเปลี่ยนสถานะสังกัดของผู้เล่น (ยกเลิกได้ด้วยการลบชื่อออกจาก roster ทีมคู่แข่งทันที
+  // — ดู removeTeamFromHistory) และกันการลากพลาด/ปล่อยมือผิดทีมเงียบๆ
+  const handleTransferPlayer = useCallback((playerName, rivalName) => {
+    setDraggingPlayer(null);
+    if (!playerName || !rivalName) return;
+    if (!window.confirm(`ย้าย "${playerName}" ไปทีม "${rivalName}"?\n\nสถิติที่เล่นให้ทีมเราจะยังอยู่ครบ (ดูย้อนหลังได้ตอนเลือก patch เก่า หรือ "ทั้งหมด") ` +
+                        `ตั้งแต่วันนี้ผู้เล่นจะไปอยู่ใน Roster ของ ${rivalName} แทน`)) return;
+    dispatchApp({ type:"TRANSFER_PLAYER_TO_RIVAL", payload:{ playerName, toRivalName: rivalName } });
+    toast(`ย้าย ${playerName} ไปทีม ${rivalName} แล้ว`, "success");
+  }, [toast]);
 
   const handleAddEnemyPlayer = useCallback((rivalName) => {
     const name = ui.newEnemyName.trim();
@@ -6280,6 +6564,14 @@ function RovAppInner() {
   const { page, selRival, rivalView, rosterTab, selPlayer, selPlayerEnemy,
           selEnemyTeam, newName, newEnemyName, enemyStatsScope } = ui;
   const { rivals, roster, enemyRosters } = app;
+  // ── Roster ตาม patch ที่เลือก ──
+  // ผู้เล่นที่ไม่เคยย้ายทีม (ไม่มีประวัติ) โชว์ทุก patch เหมือนเดิม — เฉพาะคนที่เคยถูก "ย้ายทีม" เท่านั้นที่ถูกกรอง
+  // ตามช่วงเวลาที่สังกัดทีมนั้นจริง (ดู isMembershipActiveForPatch) เลือก "ทั้งหมด" = โชว์ทุกคนที่เคยอยู่ทีมนั้น
+  const rosterMembership = app.rosterMembership || {};
+  const visibleOurRoster = roster.filter(p =>
+    isMembershipActiveForPatch(rosterMembership[p], "our", patchVersions, selectedPatch));
+  const visibleEnemyRosterOf = (team) => (enemyRosters[team] || []).filter(p =>
+    isMembershipActiveForPatch(rosterMembership[p], team, patchVersions, selectedPatch));
 
   // ── games to feed PlayerProfile ──
   // For our own players, PlayerProfile keeps using the plain app-wide
@@ -7216,6 +7508,10 @@ function RovAppInner() {
                   allGames={profileGames}
                   onBack={()=>dispatchUI({type:"CLEAR_SEL_PLAYER"})}
                   photoUrl={app.playerPhotos?.[selPlayerEnemy ? `enemy:${selEnemyTeam}:${selPlayer}` : `our:${selPlayer}`]}
+                  teamBreakdown={computePlayerTeamBreakdown(rosterMembership[selPlayer], app.matches, selPlayer)}
+                  ourTeamName={session?.user?.teamName||app.teamName||"ทีมเรา"}
+                  ourTeamLogo={app.teamLogo}
+                  rivalLogos={app.rivalLogos}
                 />
               ) : (
                 <>
@@ -7261,8 +7557,22 @@ function RovAppInner() {
                           style={{background:C.primary,color:"#fff",border:"none",borderRadius:8,
                             padding:"0 22px",fontWeight:700,cursor:"pointer",alignSelf:"stretch"}}>+ เพิ่ม</button>
                       </div>
+                      {isCoach && rivals.length>0 && (
+                        <div style={{marginBottom:16,background:C.bgPanel,border:`1px solid ${C.border}`,
+                          borderRadius:12,padding:"10px 14px"}}>
+                          <div style={{fontSize:11,color:C.textMuted,marginBottom:8}}>
+                            🔀 ผู้เล่นย้ายทีม — ลากการ์ดผู้เล่นด้านล่างมาวางที่ทีมคู่แข่ง (หรือเลือกจากเมนูบนการ์ดถ้าใช้มือถือ)
+                          </div>
+                          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                            {rivals.map(rv=>(
+                              <RivalDropTile key={rv.id} name={rv.name} logoUrl={app.rivalLogos?.[rv.name]}
+                                dragging={!!draggingPlayer} onDropPlayer={handleTransferPlayer}/>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:14}}>
-                        {roster.map(player=>{
+                        {visibleOurRoster.map(player=>{
                           let pg=0,pw=0; const ph={};
                           allGames.forEach(g=>{
                             const s=(g.ourPicks||[]).find(d=>d.player===player);
@@ -7271,11 +7581,22 @@ function RovAppInner() {
                           const pwr=pg?Math.round(pw/pg*100):0;
                           const top=Object.entries(ph).sort((a,b)=>b[1]-a[1])[0];
                           const photoKey = `our:${player}`;
+                          const currentTeam = getCurrentTeamOf(rosterMembership[player]);
+                          // ลากย้ายทีมได้เฉพาะ coach และเฉพาะคนที่ "ตอนนี้" ยังอยู่ทีมเรา (คนที่ย้ายไปแล้วแต่ยังโผล่ในมุมมอง
+                          // patch เก่า/ทั้งหมด เป็นแค่ข้อมูลย้อนหลัง ลากซ้ำไม่ได้)
+                          const canTransfer = isCoach && rivals.length>0 && currentTeam==="our";
+                          const statusLabel = currentTeam && currentTeam!=="our" ? `🔀 ย้ายไป ${currentTeam}` : null;
                           return (
                             <RosterPlayerCard key={player}
                               player={player}
                               photoUrl={app.playerPhotos?.[photoKey]}
                               pg={pg} pw={pw} pwr={pwr} top={top}
+                              statusLabel={statusLabel}
+                              draggable={canTransfer}
+                              onDragStart={(name)=>setDraggingPlayer(name)}
+                              onDragEnd={()=>setDraggingPlayer(null)}
+                              transferTargets={canTransfer ? rivals.map(r=>r.name) : undefined}
+                              onTransfer={canTransfer ? (rivalName)=>handleTransferPlayer(player, rivalName) : undefined}
                               onSelect={()=>dispatchUI({type:"SET_SEL_PLAYER",payload:{name:player,isEnemy:false}})}
                               onRemove={()=>handleRemovePlayer(player)}
                               onRename={(newName)=>dispatchApp({type:"RENAME_PLAYER",payload:{oldName:player,newName}})}
@@ -7283,9 +7604,9 @@ function RovAppInner() {
                             />
                           );
                         })}
-                        {roster.length===0&&(
+                        {visibleOurRoster.length===0&&(
                           <div style={{textAlign:"center",color:C.textMuted,padding:30,background:C.bgPanel,borderRadius:12}}>
-                            ยังไม่มีผู้เล่น
+                            {roster.length===0 ? "ยังไม่มีผู้เล่น" : "ไม่มีผู้เล่นในทีมช่วง patch นี้ — เลือก \"ทั้งหมด\" ที่มุมขวาบนเพื่อดูทุกคนที่เคยอยู่ทีม"}
                           </div>
                         )}
                       </div>
@@ -7373,7 +7694,7 @@ function RovAppInner() {
                               const scoutGamesForTeam = (enemyStatsScope==="all" || enemyStatsScope==="vsOthers")
                                 ? flattenScoutGamesForFocus(patchFilteredScoutMatches, selEnemyTeam)
                                 : [];
-                              return (enemyRosters[selEnemyTeam]||[]).map(player=>{
+                              return visibleEnemyRosterOf(selEnemyTeam).map(player=>{
                               let pg=0,pw=0; const ph={};
                               // "เจอเรา" — แมตช์จริงที่เราเจอทีมนี้ (allGames)
                               if (enemyStatsScope==="all" || enemyStatsScope==="vsUs") {
@@ -7396,11 +7717,19 @@ function RovAppInner() {
                               const pwr=pg?Math.round(pw/pg*100):0;
                               const top=Object.entries(ph).sort((a,b)=>b[1]-a[1])[0];
                               const photoKey = `enemy:${selEnemyTeam}:${player}`;
+                              // ป้ายสถานะ: มาจากทีมเรา / ย้ายออกจากทีมนี้ไปแล้ว (โผล่เฉพาะคนที่มีประวัติย้ายทีม)
+                              const hist = rosterMembership[player];
+                              const curTeam = hist ? getCurrentTeamOf(hist) : selEnemyTeam;
+                              const cameFromUs = !!hist && hist.some(h=>h.team==="our");
+                              const enemyStatus = curTeam && curTeam!==selEnemyTeam
+                                ? (curTeam==="our" ? "🛡️ กลับไปอยู่ทีมเรา" : `🔀 ย้ายไป ${curTeam}`)
+                                : (cameFromUs ? "🛡️ เคยอยู่ทีมเรา" : null);
                               return (
                                 <RosterPlayerCard key={player}
                                   team="enemy"
                                   player={player}
                                   photoUrl={app.playerPhotos?.[photoKey]}
+                                  statusLabel={enemyStatus}
                                   pg={pg} pw={pw} pwr={pwr} top={top}
                                   onSelect={()=>dispatchUI({type:"SET_SEL_PLAYER",payload:{name:player,isEnemy:true}})}
                                   onRemove={()=>handleRemoveEnemyPlayer(selEnemyTeam,player)}
@@ -7410,9 +7739,11 @@ function RovAppInner() {
                               );
                               });
                             })()}
-                            {(enemyRosters[selEnemyTeam]||[]).length===0&&(
+                            {visibleEnemyRosterOf(selEnemyTeam).length===0&&(
                               <div style={{textAlign:"center",color:C.textMuted,padding:30,background:C.bgPanel,borderRadius:12}}>
-                                ยังไม่มีผู้เล่น — เพิ่มชื่อด้านบนได้เลย
+                                {(enemyRosters[selEnemyTeam]||[]).length===0
+                                  ? "ยังไม่มีผู้เล่น — เพิ่มชื่อด้านบนได้เลย"
+                                  : "ไม่มีผู้เล่นทีมนี้ในช่วง patch ที่เลือก — เลือก \"ทั้งหมด\" ที่มุมขวาบนเพื่อดูทุกคนที่เคยอยู่ทีม"}
                               </div>
                             )}
                           </div>

@@ -127,6 +127,9 @@ model TeamData {
   whiteboardElements   Json @default("[]") // Tactical Whiteboard current board (paths/arrows/hero markers/text)
   whiteboardFormations Json @default("[]") // saved named formation snapshots — [{ id, name, elements, mapUrl, createdAt }]
   whiteboardMapUrl     String? @db.Text // uploaded background map image — a Vercel Blob URL, not raw image data
+  // ประวัติการสังกัดทีมของผู้เล่นที่เคยย้ายทีม — { [playerName]: [{ team:"our"|rivalName, from:epochMs, to:epochMs|null }] }
+  // ผู้เล่นที่ไม่มี key = ไม่เคยย้ายทีม (โชว์ทุก patch ตามเดิม) — default {} จึง migrate เพิ่มคอลัมน์ได้ปลอดภัย ไม่กระทบข้อมูลเดิม
+  rosterMembership     Json    @default("{}")
   updatedAt     DateTime @updatedAt
   updatedBy     String?
 }

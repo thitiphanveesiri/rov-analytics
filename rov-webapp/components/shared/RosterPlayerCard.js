@@ -50,7 +50,12 @@ export function PatchSelector({ versions, value, onChange }) {
 // ═══════════════════════════════════════════
 
 // ── Roster player card — คลิกเพื่อดู Profile ปกติ, กด ✏️ เพื่อแก้ชื่อ/รูป ──
-export function RosterPlayerCard({ player, photoUrl, pg, pw, pwr, top, onSelect, onRemove, onRename, onSetPhoto, team="our" }) {
+export function RosterPlayerCard({ player, photoUrl, pg, pw, pwr, top, onSelect, onRemove, onRename, onSetPhoto, team="our",
+  // ── ย้ายทีม (ทีมเรา → ทีมคู่แข่งใน Rival) ──
+  // draggable: ลากการ์ดนี้ไปวางบนการ์ดทีมคู่แข่งได้ (เฉพาะ coach + ผู้เล่นที่ตอนนี้อยู่ทีมเรา — page เป็นคนตัดสินใจ)
+  // transferTargets/onTransfer: ทางเลือกสำรองสำหรับจอสัมผัส (HTML5 drag-and-drop ใช้ไม่ได้ในมือถือส่วนใหญ่)
+  // statusLabel: ป้ายเล็กๆ บนภาพปก เช่น "🔀 ย้ายไป RivalX" (โผล่ตอนดูแบบ "ทั้งหมด" ที่ยังเห็นคนที่ย้ายไปแล้ว)
+  draggable=false, onDragStart, onDragEnd, transferTargets, onTransfer, statusLabel }) {
   const [editing, setEditing] = useState(false);
   const [nameVal, setNameVal] = useState(player);
   const [error,   setError]   = useState("");
@@ -120,8 +125,16 @@ export function RosterPlayerCard({ player, photoUrl, pg, pw, pwr, top, onSelect,
 
   return (
     <div onClick={onSelect}
+      draggable={draggable}
+      onDragStart={draggable ? (e => {
+        // Firefox ต้อง setData ถึงจะเริ่มลากได้ / effectAllowed บอก browser ว่าเป็นการ "ย้าย"
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", player);
+        onDragStart?.(player, e);
+      }) : undefined}
+      onDragEnd={draggable ? (e => onDragEnd?.(player, e)) : undefined}
       style={{background:C.bgPanel,border:`1px solid ${hovered?borderHover:C.border}`,borderRadius:16,
-        overflow:"hidden",cursor:"pointer",display:"flex",flexDirection:"column",
+        overflow:"hidden",cursor:draggable?"grab":"pointer",display:"flex",flexDirection:"column",
         transform:hovered?"translateY(-3px)":"none",
         boxShadow:hovered?`0 8px 24px ${borderHover}25`:"none",
         transition:"transform 0.15s, box-shadow 0.15s, border-color 0.15s"}}
@@ -165,6 +178,15 @@ export function RosterPlayerCard({ player, photoUrl, pg, pw, pwr, top, onSelect,
           )}
         </div>
 
+        {statusLabel && (
+          <div style={{position:"absolute",top:10,left:10,maxWidth:"60%",
+            background:"rgba(0,0,0,0.6)",color:"#fff",borderRadius:99,
+            padding:"3px 10px",fontSize:10,fontWeight:800,backdropFilter:"blur(4px)",
+            overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+            {statusLabel}
+          </div>
+        )}
+
         {/* Win rate badge มุมขวาบน — ตำแหน่ง/สไตล์เดียวกับ TeamCard */}
         <div style={{position:"absolute",top:10,right:10,
           background:pg===0?"rgba(0,0,0,0.5)":winStatCol,
@@ -187,6 +209,19 @@ export function RosterPlayerCard({ player, photoUrl, pg, pw, pwr, top, onSelect,
           <div style={{fontSize:9,color:C.textMuted}}>W-L</div>
         </div>
       </div>
+
+      {/* ── ย้ายทีม (สำรองสำหรับจอสัมผัส — บนเดสก์ท็อปลากการ์ดไปวางบนทีมคู่แข่งได้เลย) ── */}
+      {onTransfer && transferTargets?.length > 0 && (
+        <div style={{padding:"8px 10px 0"}} onClick={e=>e.stopPropagation()}>
+          <select value="" onChange={e=>{ if(e.target.value) onTransfer(e.target.value); }}
+            style={{width:"100%",background:"transparent",color:C.textMuted,
+              border:`1px dashed ${C.border}`,borderRadius:7,padding:"5px 6px",
+              fontSize:11,fontWeight:700,cursor:"pointer"}}>
+            <option value="">🔀 ย้ายไปทีมคู่แข่ง...</option>
+            {transferTargets.map(n=><option key={n} value={n}>{n}</option>)}
+          </select>
+        </div>
+      )}
 
       {/* ── Actions ── */}
       <div style={{display:"flex",gap:6,padding:"8px 10px"}}>

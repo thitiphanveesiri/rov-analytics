@@ -24,6 +24,7 @@ export const COACH_ONLY_FIELDS = [
   "matches", "rivals", "roster", "enemyRosters", "scoutMatches",
   "playerPhotos", "teamLogo", "rivalLogos",
   "schedules", "patchInfo", "heroTiers",
+  "rosterMembership", // ย้ายทีมผู้เล่น = จัดการ roster ซึ่งเป็นงาน coach/admin อยู่แล้ว (เหมือน roster/enemyRosters)
 ];
 
 // ── stable stringify: เรียง key ก่อนเทียบ ไม่ให้ลำดับ key ต่างกันถูกนับว่า "ข้อมูลเปลี่ยน" ──
