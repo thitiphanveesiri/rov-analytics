@@ -218,7 +218,11 @@ export function RosterPlayerCard({ player, photoUrl, pg, pw, pwr, top, onSelect,
               border:`1px dashed ${C.border}`,borderRadius:7,padding:"5px 6px",
               fontSize:11,fontWeight:700,cursor:"pointer"}}>
             <option value="">🔀 ย้ายไปทีมคู่แข่ง...</option>
-            {transferTargets.map(n=><option key={n} value={n}>{n}</option>)}
+            {transferTargets.map(opt=>{
+              const value = typeof opt === "string" ? opt : opt.value;
+              const label = typeof opt === "string" ? opt : opt.label;
+              return <option key={value} value={value}>{label}</option>;
+            })}
           </select>
         </div>
       )}

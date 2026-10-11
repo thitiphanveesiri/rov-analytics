@@ -34,6 +34,9 @@ export function TeamCard({
   // isDropTarget: page บอกว่าตอนนี้กำลังลากอะไรอยู่ (ไว้เน้นการ์ดให้เห็นว่าวางตรงนี้ได้)
   onDropPlayer,
   isDropTarget = false,
+  // ซ่อนบรรทัด "X session · Y เกม" — ใช้ตอนการ์ดนี้โผล่แค่ชั่วคราวเป็น drop target ระหว่างลากผู้เล่น
+  // (ไม่มีสถิติที่สมเหตุสมผลให้โชว์ตรงนั้น ไม่ใช่การ์ดปกติของหน้า Rivals)
+  hideStats = false,
 }) {
   // ── hover state managed by React, not direct DOM mutation ──
   // Same fix as RosterPlayerCard: setting `.style.transform` imperatively
@@ -94,9 +97,11 @@ export function TeamCard({
             lineHeight:1.2,textShadow:"0 1px 6px rgba(0,0,0,0.8)"}}>
             {name}
           </div>
-          <div style={{fontSize:10,color:"rgba(255,255,255,0.65)",marginTop:2}}>
-            {sessionCount} session · {gameCount} เกม
-          </div>
+          {!hideStats && (
+            <div style={{fontSize:10,color:"rgba(255,255,255,0.65)",marginTop:2}}>
+              {sessionCount} session · {gameCount} เกม
+            </div>
+          )}
         </div>
 
         {canDrop && dragOver && (
