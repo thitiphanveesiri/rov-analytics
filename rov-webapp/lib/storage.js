@@ -2,6 +2,7 @@
 // Replaces the original window.storage calls from the Claude.ai artifact.
 
 import { stableStringify } from "./permissions.js";
+import { idbGet, idbSet, idbDel, idbClear } from "./offlineStore.js";
 
 const FIELDS = [
   "matches","rivals","roster","enemyRosters","scoutMatches",
@@ -10,6 +11,8 @@ const FIELDS = [
   "whiteboardElements","whiteboardFormations","whiteboardMapUrl",
   "rosterMembership",
 ];
+
+export const STORAGE_FIELDS = FIELDS;
 
 const FALLBACK = {
   matches:[], rivals:[], roster:["Player 1","Player 2"],
@@ -54,6 +57,46 @@ function setBase(fieldJson, skip = []) {
   baseJson = next;
 }
 
+// ── Offline snapshot + คิวที่ยังไม่ส่ง ──
+// snapshot = สำเนาข้อมูลทีมล่าสุดใน IndexedDB (state + เวอร์ชัน server + base สำหรับ 3-way merge + flag unsynced)
+// ใช้สองอย่าง: (1) เปิดแอปตอนไม่มีเน็ตได้ (2) งานที่แก้ตอน offline ไม่หายแม้ปิด/รีเฟรชแท็บ แล้วส่งตอนกลับมาออนไลน์
+// unsynced = มีการแก้ที่ยังไม่ขึ้น server — ตอนเปิดแอปครั้งถัดไปต้องใช้ state ใน snapshot (ไม่ใช่ของ server) เป็นตัวตั้ง
+const SNAPSHOT_KEY = "snapshot";
+let unsynced = false;
+let snapshotTeamId = null;
+let snapshotSavedAt = null;
+
+export const hasUnsyncedChanges = () => unsynced;
+export const getSnapshotInfo = () => ({ savedAt: snapshotSavedAt, unsynced });
+export const fieldJsonOf = (state) => serializeFields(Object.fromEntries(FIELDS.map(f => [f, state?.[f] ?? FALLBACK[f]]))).fieldJson;
+
+function isNetworkError(err) {
+  if (!err || err.isConflict || err.wasMerged || err.wasIgnored || err.code) return false;
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return true;
+  return err.name === "TypeError" && /fetch|network|load failed|offline/i.test(err.message || "");
+}
+
+async function persistSnapshot(stateObj) {
+  try {
+    const state = {};
+    FIELDS.forEach(f => { state[f] = stateObj?.[f] ?? FALLBACK[f]; });
+    snapshotSavedAt = Date.now();
+    await idbSet(SNAPSHOT_KEY, {
+      v: 1, savedAt: snapshotSavedAt, teamId: snapshotTeamId,
+      state, updatedAt: lastKnownUpdatedAt, baseJson, unsynced,
+    });
+  } catch (err) {
+    console.warn("offline snapshot write failed (non-fatal):", err);
+  }
+}
+
+// ล้างข้อมูลที่เก็บไว้ในเครื่อง (ใช้ตอน signOut) — เครื่องที่ใช้ร่วมกันจะไม่เห็นข้อมูลทีมของคนก่อนหน้า
+export async function clearOfflineData() {
+  unsynced = false; snapshotTeamId = null; snapshotSavedAt = null;
+  try { await idbClear(); } catch {}
+  try { if (typeof caches !== "undefined") await caches.delete("rov-shell-v1"); } catch {}
+}
+
 export async function loadFromStorage() {
   try {
     const res = await fetch("/api/data");
@@ -87,11 +130,43 @@ export async function loadFromStorage() {
     }
 
     // Build state from DB data, falling back to safe defaults per field
+    snapshotTeamId = data.teamId || null;
+
+    // ── มีงานที่แก้ตอน offline ค้างอยู่ (ยังไม่ขึ้น server) → ใช้ของในเครื่องเป็นตัวตั้ง ไม่ใช่ทับด้วยข้อมูล server ──
+    // คืน base/เวอร์ชันเก่าตามที่ snapshot จำไว้ แล้วให้ autosave ส่งต่อ: ถ้า server ถูกแก้ระหว่างนั้นจะชน 409
+    // แล้วเข้าทาง 3-way merge เดิม (base เก่า) ซึ่งออกแบบมาเพื่อกรณีนี้พอดี
+    const snap = await idbGet(SNAPSHOT_KEY).catch(() => null);
+    if (snap?.unsynced && snap.state && snap.baseJson && snap.teamId && snap.teamId === snapshotTeamId) {
+      lastKnownUpdatedAt = snap.updatedAt || lastKnownUpdatedAt;
+      baseJson = snap.baseJson;
+      unsynced = true;
+      const recovered = { _loaded: true, pending: false, noTeam: false, recoveredOffline: true };
+      FIELDS.forEach(f => { recovered[f] = snap.state[f] ?? FALLBACK[f]; });
+      return recovered;
+    }
+
     const state = { _loaded: true, pending: false, noTeam: false };
     FIELDS.forEach(f => { state[f] = data[f] ?? FALLBACK[f]; });
     setBase(serializeFields(state).fieldJson);
+    unsynced = false;
+    persistSnapshot(state); // ไม่ await — ไม่ให้การเขียนลงเครื่องหน่วงการเปิดแอป
     return state;
   } catch (err) {
+    // ── ไม่มีเน็ต → เปิดจาก snapshot ในเครื่อง (ถ้าเคยออนไลน์มาก่อน) ──
+    if (isNetworkError(err)) {
+      const snap = await idbGet(SNAPSHOT_KEY).catch(() => null);
+      if (snap?.state) {
+        lastKnownUpdatedAt = snap.updatedAt || null;
+        baseJson = snap.baseJson || null;
+        unsynced = !!snap.unsynced;
+        snapshotTeamId = snap.teamId || null;
+        snapshotSavedAt = snap.savedAt || null;
+        const offlineState = { _loaded: true, pending: false, noTeam: false, offline: true, snapshotAt: snap.savedAt };
+        FIELDS.forEach(f => { offlineState[f] = snap.state[f] ?? FALLBACK[f]; });
+        return offlineState;
+      }
+      return { _loaded: false, loadError: true, loadErrorMessage: "ไม่มีอินเทอร์เน็ตและยังไม่เคยเตรียมข้อมูลออฟไลน์ในเครื่องนี้", offlineNoSnapshot: true };
+    }
     console.error("loadFromStorage failed:", err);
     // ── NEVER pretend this was a successful (if empty) load ──
     // Returning `{...FALLBACK}` here used to set `_loaded: true` on a
@@ -128,7 +203,8 @@ const isObj = v => typeof v === "object" && v !== null && !Array.isArray(v);
 // 3-way merge ของ array ที่มีตัวระบุ — base = ตอนที่ client ซิงก์ล่าสุด, local = สิ่งที่ผู้ใช้เห็น, fresh = server ตอนนี้
 //   ทั้งสองฝั่งไม่ชนกัน → เก็บทั้งสองฝั่ง | ชนกัน (แก้ item เดียวกันทั้งคู่) → server ชนะ
 //   local ลบ + server ไม่ได้แก้ → ลบจริง | server ลบ → ไม่ฟื้นคืนชีพ | local ลบ + server แก้ → เก็บฉบับ server
-export function mergeListThreeWay(baseArr, localArr, freshArr, keyOf) {
+//   mergeItem (ไม่บังคับ) = ใช้ตอน "แก้ item เดียวกันทั้งคู่" แทนการให้ server ชนะทั้งก้อน — ดู mergeRecordWithGames
+export function mergeListThreeWay(baseArr, localArr, freshArr, keyOf, mergeItem) {
   if (!Array.isArray(freshArr) || !Array.isArray(localArr)) return freshArr ?? localArr ?? [];
   const index = arr => {
     const m = new Map();
@@ -147,6 +223,7 @@ export function mergeListThreeWay(baseArr, localArr, freshArr, keyOf) {
     const serverChanged = norm(item) !== norm(base.get(k));
     if (!local.has(k)) { if (serverChanged) out.push(item); continue; }     // local ลบ: ลบจริงถ้า server ไม่ได้แก้
     const localChanged = norm(local.get(k)) !== norm(base.get(k));
+    if (localChanged && serverChanged && mergeItem) { out.push(mergeItem(base.get(k), local.get(k), item)); continue; }
     out.push(localChanged && !serverChanged ? local.get(k) : item);          // ชนกัน → server ชนะ
   }
   for (const item of localArr) {
@@ -156,6 +233,29 @@ export function mergeListThreeWay(baseArr, localArr, freshArr, keyOf) {
     // อยู่ใน base แต่ server ไม่มีแล้ว = คนอื่นลบไปแล้ว → ไม่เติมกลับ
   }
   return out;
+}
+
+// ── merge ระดับเกมภายใน match/scout match เดียว ──
+// ปัญหาเดิม: 2 คนแก้ match เดียวกันคนละเกม (คนหนึ่งกรอก stats G1 อีกคนกรอก objective G2) → ถือว่า "ชน"
+// แล้ว server ชนะทั้ง match ฝั่งที่แพ้หายหมด ที่นี่ merge แยก 2 ชั้น:
+//   1) field ระดับ match (rivalName, note, ...) — 3-way ทีละ key (ชนที่ key เดียวกัน → server ชนะ)
+//   2) games[] — 3-way ทีละเกม key = gameNo (ไม่มี → ลำดับ+1) ชนที่เกมเดียวกัน → server ชนะ
+// ไม่ใช่ array ทั้งสองฝั่ง (เช่น แปลง single → BO) → server ชนะทั้งก้อนเหมือนเดิม
+const gameKey = (g, i) => g?.gameNo ?? i + 1;
+const wrapGames = arr => (Array.isArray(arr) ? arr : []).map((g, i) => ({ k: gameKey(g, i), g }));
+export function mergeRecordWithGames(base, local, fresh) {
+  if (!isObj(base) || !isObj(local) || !isObj(fresh)) return fresh;
+  const hasGames = [base, local, fresh].some(x => x.games !== undefined);
+  if (hasGames && !([local, fresh].every(x => Array.isArray(x.games)))) return fresh;
+  const { games: bg, ...bRest } = base;
+  const { games: lg, ...lRest } = local;
+  const { games: fg, ...fRest } = fresh;
+  const merged = mergeMapThreeWay(bRest, lRest, fRest);
+  if (!hasGames) return merged;
+  const games = mergeListThreeWay(wrapGames(bg), wrapGames(lg), wrapGames(fg), w => w.k)
+    .sort((a, b) => a.k - b.k)
+    .map(w => w.g);
+  return { ...merged, games };
 }
 
 export function mergeMapThreeWay(baseMap, localMap, freshMap) {
@@ -198,7 +298,7 @@ export function mergeWithBase(baseObj, localObj, freshObj) {
       if (norm(l) === norm(b)) { merged[f] = s; continue; }   // เราไม่ได้แก้ field นี้
       if (norm(s) === norm(b)) { merged[f] = l; continue; }   // คนอื่นไม่ได้แก้ field นี้
     }
-    if (MERGEABLE_LIST_FIELDS.includes(f))           merged[f] = mergeListThreeWay(b, l, s, it => it?.id);
+    if (MERGEABLE_LIST_FIELDS.includes(f))           merged[f] = mergeListThreeWay(b, l, s, it => it?.id, (f === "matches" || f === "scoutMatches") ? mergeRecordWithGames : undefined);
     else if (MERGEABLE_BY_NAME_FIELDS.includes(f))   merged[f] = mergeListThreeWay(b, l, s, it => it?.name);
     else if (MERGEABLE_MAP_FIELDS.includes(f))       merged[f] = mergeMapThreeWay(b, l, s);
     else if (MERGEABLE_STRING_LIST_FIELDS.includes(f)) merged[f] = mergeStringListThreeWay(b, l, s);
@@ -229,7 +329,7 @@ function makeError(message, extra = {}) {
   return e;
 }
 
-async function _doSaveToStorage(appState) {
+async function _saveInner(appState) {
   // Pending-approval / no-team accounts can't save anything — server
   // blocks this with a 403 anyway (see app/api/data PUT), but skip the
   // network round-trip entirely rather than let it fail every 600ms via
@@ -242,10 +342,30 @@ async function _doSaveToStorage(appState) {
   FIELDS.forEach(f => { payload[f] = appState[f] ?? FALLBACK[f]; });
   const { fieldJson, partsJoined } = serializeFields(payload);
 
+  // ── Dirty check: ทุก field เท่ากับที่ server มีล่าสุด (base) → ไม่มีอะไรต้องส่ง ──
+  // เดิมการโหลดข้อมูลเสร็จก็ทำให้ autosave ยิง PUT ทันที (state เปลี่ยนจาก LOAD) ซึ่งขยับ updatedAt บน server
+  // แล้วทำให้คนอื่นที่กำลังกรอกโดน 409 ทุกครั้งที่ใครสักคนเปิดแอป
+  if (baseJson && lastKnownUpdatedAt && FIELDS.every(f => baseJson[f] === fieldJson[f])) {
+    unsynced = false;
+    return true;
+  }
+
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    throw new TypeError("Failed to fetch (offline)");
+  }
+
   const res = await putData(fieldJson, partsJoined, lastKnownUpdatedAt);
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
+
+    // ── 401: session หมดอายุ (มักเจอตอนกลับมาออนไลน์หลัง offline นาน) ──
+    // ห้ามทิ้งงานที่ค้าง: เก็บลง snapshot (unsynced) แล้วให้ UI ขอ login ใหม่ — พอโหลดหลัง login จะกู้งานนี้มาส่งต่อเอง
+    if (res.status === 401) {
+      unsynced = true;
+      await persistSnapshot(payload);
+      throw makeError("session หมดอายุ", { isAuth: true, code: "AUTH" });
+    }
 
     // ── 428: server ไม่ได้รับเลขเวอร์ชัน (client ยังไม่เคยโหลดสำเร็จ/state หลุด) ──
     // ดึงเวอร์ชันล่าสุดมาตั้งฐาน แล้วให้ autosave รอบถัดไป (retry อัตโนมัติของ RovApp) ลองใหม่
@@ -274,9 +394,12 @@ async function _doSaveToStorage(appState) {
           const retryBody = await retryRes.json().catch(() => ({}));
           if (retryBody.updatedAt) lastKnownUpdatedAt = retryBody.updatedAt;
           setBase(m.fieldJson, retryBody.ignoredFields || []);
+          unsynced = false;
+          await persistSnapshot(merged);
           // Let the caller know a merge happened, so the UI can say so
           // instead of pretending it was a completely normal save.
-          throw makeError("merged", { wasMerged: true });
+          // sentFieldJson = สิ่งที่ local มีตอนเริ่ม save — caller ใช้แยกว่า field ไหน "ผู้ใช้แก้เพิ่มระหว่างรอ" (ห้ามถูกทับ)
+          throw makeError("merged", { wasMerged: true, sentFieldJson: fieldJson });
         }
         // retry also failed — fall through to the hard conflict error below,
         // using whatever updatedAt that second attempt reports
@@ -312,6 +435,8 @@ async function _doSaveToStorage(appState) {
   // และบอก UI ให้แจ้งผู้ใช้ ไม่งั้นจะเห็นเป็น "บันทึกแล้ว ✅" ทั้งที่การแก้ไขไม่ถูกเก็บ
   const ignored = Array.isArray(body.ignoredFields) ? body.ignoredFields : [];
   setBase(fieldJson, ignored);
+  unsynced = false;
+  await persistSnapshot(payload);
   if (ignored.length) throw makeError("ignored fields", { wasIgnored: true, ignoredFields: ignored });
 
   // IMPORTANT: never catch-and-return-false here — the caller relies on
@@ -320,6 +445,21 @@ async function _doSaveToStorage(appState) {
   // "✅ บันทึกแล้ว" even when the save had actually failed, silently
   // losing data on reload.
   return true;
+}
+
+async function _doSaveToStorage(appState) {
+  if (appState.pending || appState.noTeam) return true;
+  try {
+    return await _saveInner(appState);
+  } catch (err) {
+    if (isNetworkError(err)) {
+      // ไม่มีเน็ต: เก็บงานลง IndexedDB (ไม่หายแม้ปิดแท็บ) แล้วให้ UI แสดงสถานะ offline แทนที่จะรัว error
+      unsynced = true;
+      await persistSnapshot(appState);
+      throw makeError("offline", { isOffline: true });
+    }
+    throw err;
+  }
 }
 
 // ── Serialized save queue ──

@@ -24,7 +24,8 @@
 import crypto from "node:crypto";
 import { prisma } from "./prisma.js";
 import { resolveHeroRole } from "./heroes.js";
-import { durationToMinutes } from "./duration.js";
+import { playedMinutes } from "./duration.js";
+import { matchTime } from "./matchTime.js";
 
 function heroName(heroRefOrString) {
   if (!heroRefOrString) return null;
@@ -78,6 +79,15 @@ function parseMatchDate(dateStr) {
   return isNaN(parsed.getTime()) ? new Date() : parsed;
 }
 
+// เวลาแข่งจริง: playedAt → (แมตช์เก่า) id ซึ่งคือ Date.now() ตอนบันทึก → (ไม่มีเลย) parse สตริงวันที่เดิม
+// เดิมใช้แค่ parseMatchDate(m.date) ซึ่ง parse สตริงไทยไม่ได้เลย จึงตกไปเป็น "ตอนนี้" ทุกครั้งที่ rebuild
+// ทำให้ Match.date ทุกแถวเท่ากับเวลา save ล่าสุด — patch timeline ฝั่ง server จึงผิดทั้งหมด
+function matchDateOf(m) {
+  const t = matchTime(m);
+  if (t > 0) return new Date(t);
+  return parseMatchDate(m.date);
+}
+
 /**
  * Rebuilds Match/Game/Pick rows for one team from the matches array that
  * was just saved to TeamData. Call this AFTER the TeamData upsert succeeds.
@@ -106,7 +116,7 @@ export async function syncMatchesToRelational(teamId, matches = [], customHeroes
       sourceId: String(m.id),
       rivalName: m.rivalName ?? null,
       category: m.category || "scrim",
-      date: parseMatchDate(m.date),
+      date: matchDateOf(m),
       note: m.note ?? null,
     });
 
@@ -122,9 +132,7 @@ export async function syncMatchesToRelational(teamId, matches = [], customHeroes
         // หัก pauseDuration (ถ้ามี) ออกก่อนเก็บ — ให้ตรงกับวิธีคำนวณ
         // avgGameDuration ฝั่ง client (RovApp.js Overview) เวลาที่จดไว้ดิบๆ
         // รวมช่วงที่เกมหยุดด้วย ไม่ใช่เวลาเล่นจริง
-        durationMin: g.duration
-          ? Math.max(0, durationToMinutes(g.duration) - (g.pauseDuration ? durationToMinutes(g.pauseDuration) : 0))
-          : null,
+        durationMin: g.duration ? playedMinutes(g) : null,
         objectives: g.objectives ?? undefined,
       });
 
@@ -138,7 +146,7 @@ export async function syncMatchesToRelational(teamId, matches = [], customHeroes
       picks = applyStats(picks, g.gameStats, "enemy");
 
       for (const p of picks) {
-        pickRows.push({ id: crypto.randomUUID(), gameId, ...p });
+        pickRows.push({ id: crypto.randomUUID(), gameId, teamId, ...p });
       }
     });
   }

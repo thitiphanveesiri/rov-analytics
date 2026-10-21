@@ -128,6 +128,8 @@ const matchSchema = z.object({
   category: z.string().max(MAX_SHORT_TEXT).optional().default("scrim"),
   rivalName: z.string().max(MAX_SHORT_TEXT).optional().nullable(),
   boType: z.string().max(20).optional(),
+  // เวลาแข่งจริง (epoch ms) — ดู lib/matchTime.js ; ไม่บังคับ แมตช์เก่าไม่มี
+  playedAt: z.number().finite().positive().optional(),
   patch: z.string().max(50).optional(),
   note: z.string().max(MAX_TEXT).optional().nullable(),
   // BO-series matches carry `games`; single-game matches carry the fields

@@ -3,7 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { validateTeamData } from "@/lib/validation";
-import { syncMatchesToRelational } from "@/lib/matchSync";
+import { syncMatchesWithStatus } from "@/lib/matchSyncStatus";
 import { syncScheduleForTeam } from "@/lib/googleCalendar";
 import { checkRateLimit } from "@/lib/rateLimit";
 import {
@@ -213,6 +213,9 @@ export async function PUT(req) {
       playerPhotos: true, teamLogo: true, rivalLogos: true,
       schedules: true, videos: true, patchInfo: true, heroTiers: true, practiceAssignments: true,
       rosterMembership: true,
+      // field ที่เดิมไม่ได้อ่าน — ต้องมีเพื่อเทียบ "ไม่มีอะไรเปลี่ยนจริง" (dirty check ด้านล่าง)
+      heroPhotos: true, customHeroes: true, roleOverrides: true,
+      whiteboardElements: true, whiteboardFormations: true, whiteboardMapUrl: true,
     },
   });
 
@@ -242,16 +245,27 @@ export async function PUT(req) {
     }, { status: 422 });
   }
 
-  const hasRealWrite = Object.entries(writeData).some(([k, v]) => k !== "updatedBy" && v !== undefined);
+  // ── Dirty check ฝั่ง server ──
+  // "เขียนจริง" = มี field ที่ผู้เรียกมีสิทธิ์เขียน *และค่าต่างจากใน DB* เท่านั้น เดิมนับแค่ว่ามี field ไม่ใช่ undefined
+  // ทำให้ client ที่ส่งค่าเดิมทั้งก้อน (เช่น autosave หลังโหลดเสร็จ) ขยับ updatedAt ทุกครั้ง แล้วคนอื่นที่กำลังกรอกโดน 409
+  // sameJson เรียง key ก่อนเทียบ จึงไม่ถูกหลอกด้วยลำดับ key ที่ต่างกัน
+  const hasRealWrite = Object.entries(writeData).some(
+    ([k, v]) => k !== "updatedBy" && v !== undefined && (!currentState || !sameJson(v, currentState[k]))
+  );
 
   try {
     let updatedAt;
 
     if (!hasRealWrite) {
-      // ไม่มี field ไหนที่ผู้เรียกมีสิทธิ์เขียน (เช่น member ที่แก้แต่ส่วนของ coach) —
+      // ไม่มี field ไหนที่ต้องเขียนจริง (ไม่มีสิทธิ์เขียน เช่น member ที่แก้แต่ส่วนของ coach หรือค่าเท่าเดิมทุก field) —
       // ไม่ต้องเขียน DB ซึ่งจะเป็นแค่การขยับเลขเวอร์ชันแล้วทำให้คนอื่นเจอ conflict ลอยๆ
       // แต่ยังต้องเช็คว่าเวอร์ชันที่ client ถืออยู่ยังตรงกับปัจจุบันไหม
-      if (currentState && new Date(expectedUpdatedAt).getTime() !== currentState.updatedAt.getTime()) {
+      // ถ้าที่ client ส่งมา "ตรงกับ DB ทุก field อยู่แล้ว" ไม่มีอะไรจะหายแม้เวอร์ชันเก่า — ตอบ ok พร้อมเวอร์ชันปัจจุบันเลย
+      // (client จะใช้เป็น base ใหม่พอดี) แทนที่จะโยน 409 ให้ผู้ใช้เห็น toast ทั้งที่ไม่มีอะไรชน
+      const identicalToDb = !!currentState && Object.entries(requestedWrite).every(
+        ([k, v]) => v === undefined || sameJson(v, currentState[k])
+      );
+      if (currentState && !identicalToDb && new Date(expectedUpdatedAt).getTime() !== currentState.updatedAt.getTime()) {
         return json({
           error: "CONFLICT",
           message: "ข้อมูลถูกแก้ไขจากที่อื่นระหว่างที่คุณกำลังแก้ไข กรุณารีเฟรชหน้าเพื่อดูข้อมูลล่าสุดก่อนบันทึกต่อ",
@@ -293,11 +307,8 @@ export async function PUT(req) {
       const before = currentState;
       after(async () => {
         if (writeData.matches !== undefined && !sameJson(before?.matches, writeData.matches)) {
-          try {
-            await syncMatchesToRelational(teamId, writeData.matches, writeData.customHeroes || [], writeData.roleOverrides || {});
-          } catch (err) {
-            console.error("matchSync error (non-fatal) for team", teamId, err);
-          }
+          // จดผล success/fail + เวลาลง MatchSyncStatus (ไม่ throw)
+          await syncMatchesWithStatus(teamId, writeData.matches, writeData.customHeroes || [], writeData.roleOverrides || {});
         }
 
         if (writeData.schedules !== undefined && !sameJson(before?.schedules, writeData.schedules)) {

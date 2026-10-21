@@ -8,6 +8,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import Image from "next/image";
+// unoptimized: ขอไฟล์ต้นฉบับตรงๆ (ไม่ผ่าน /_next/image) เพื่อให้ service worker cache รูปไว้ใช้ตอน offline ได้
 import { upload } from "@vercel/blob/client";
 import { deleteBlobUrls } from "@/lib/blobCleanup";
 import { compressImage } from "@/lib/imageCompress";
@@ -22,7 +23,7 @@ export function PlayerAvatar({ name, photoUrl, size=44, team="our", style={} }) 
       overflow:"hidden",background:col+"22",border:`2px solid ${col}55`,
       flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",...style}}>
       {photoUrl && !err ? (
-        <Image src={photoUrl} alt={name} fill sizes={`${size}px`} loading="lazy"
+        <Image src={photoUrl} alt={name} fill sizes={`${size}px`} loading="lazy" unoptimized
           onError={()=>setErr(true)}
           style={{objectFit:"cover"}}/>
       ) : (

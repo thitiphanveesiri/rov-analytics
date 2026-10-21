@@ -55,3 +55,10 @@ export function formatDurationDisplay(input) {
   if (!input) return null;
   return normalizeDuration(input).replace(".", ":");
 }
+
+// เวลาเล่นจริงของเกม (นาทีทศนิยม) = duration − pauseDuration — เวลาที่จดไว้รวมช่วงที่เกมหยุด
+// (ผู้เล่น/คนดูขอหยุด) ถ้าไม่หักออก ค่าเฉลี่ย/สถิติต่อนาทีจะผิด
+// ใช้สูตรเดียวกันทุกที่ (Overview, PlayerProfile, Rival stats, Weekly summary, matchSync.js)
+export function playedMinutes(g) {
+  return Math.max(0, durationToMinutes(g?.duration) - (g?.pauseDuration ? durationToMinutes(g.pauseDuration) : 0));
+}

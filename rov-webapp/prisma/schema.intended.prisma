@@ -141,6 +141,19 @@ model TeamData {
 //  so it's always a point-in-time mirror, not something edited directly.
 // ══════════════════════════════════════════════════════════════
 
+// ── Match sync status (1 row per team) ──
+// ผลของ lib/matchSync.js ครั้งล่าสุด — แยกตารางเพราะ TeamData.updatedAt คือ optimistic lock ของ /api/data
+// (update TeamData จะ bump updatedAt แล้วทำให้ client โดน 409) | query: SELECT * FROM "MatchSyncStatus" WHERE ok = false
+model MatchSyncStatus {
+  teamId        String    @id
+  lastAttemptAt DateTime
+  lastSuccessAt DateTime?
+  ok            Boolean   // ผล attempt ล่าสุด
+  error         String?   @db.Text // ข้อความ error ของ attempt ล่าสุด (ตัดที่ 500 ตัวอักษร)
+  failCount     Int       @default(0) // fail ติดกันตั้งแต่ success ล่าสุด
+  matchCount    Int?      // จำนวน match ที่ sync สำเร็จครั้งล่าสุด
+}
+
 model Match {
   id         String   @id @default(cuid())
   teamId     String
@@ -156,6 +169,7 @@ model Match {
   @@unique([teamId, sourceId])
   @@index([teamId, date])
   @@index([teamId, rivalName])
+  @@index([teamId, createdAt])
 }
 
 model Game {
@@ -176,9 +190,12 @@ model Pick {
   id        String  @id @default(cuid())
   gameId    String
   game      Game    @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  // denormalized จาก Match.teamId (ตั้งตอน matchSync) — ให้ analytics กรองทีมได้โดยไม่ต้อง join Match→Game→Pick
+  // nullable เพราะแถวเก่าก่อน migration ถูก backfill ด้วย SQL; matchSync rebuild ใส่ให้ทุกแถวใหม่เสมอ
+  teamId    String?
   side      String  // "our" | "enemy"
   isBan     Boolean @default(false)
-  slotIdx   Int     // pick: 0-4 (role slot) — ban: 0-3 (ban order)
+  slotIdx   Int     // pick: 0-4 (role slot) — ban: 0..BANS_PER_TEAM-1 (ban order; 0-3 under 4-ban rule)
   hero      String
   role      String? // resolved role at sync time (resolveHeroRole) — denormalized on purpose so hero role changes don't rewrite history
   player    String?
@@ -191,6 +208,8 @@ model Pick {
   @@index([gameId, side])
   @@index([hero])
   @@index([hero, isBan])
+  @@index([hero, role]) // Pick ไม่มี heroId — hero คือชื่อฮีโร่ (string)
+  @@index([teamId, side, isBan, role, hero]) // win/pick rate ตามตำแหน่งของทีม: กรอง team+side+isBan ก่อน group (role, hero)
 }
 
 // ── Patch version history — needed for the "win rate vs patch" timeline.

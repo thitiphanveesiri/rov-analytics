@@ -9,6 +9,7 @@
 
 import { useState } from "react";
 import Image from "next/image";
+// unoptimized: ขอไฟล์ต้นฉบับตรงๆ (ไม่ผ่าน /_next/image) เพื่อให้ service worker cache รูปไว้ใช้ตอน offline ได้
 import { HERO_DATA, ROLE_COLOR } from "@/lib/heroes";
 import { useHeroImage } from "@/lib/useHeroImage";
 import { C } from "@/lib/theme";
@@ -22,7 +23,7 @@ export function HeroCard({hero, size=72, banned=false, showName=true}) {
     <div style={{position:"relative",width:size,height:size,borderRadius:8,overflow:"hidden",
       background:col+"22",border:`1.5px solid ${col}44`,flexShrink:0}}>
       {imgUrl && !err
-        ? <Image src={imgUrl} alt={hero.name} fill sizes={`${size}px`} loading="lazy"
+        ? <Image src={imgUrl} alt={hero.name} fill sizes={`${size}px`} loading="lazy" unoptimized
             onError={()=>setErr(true)}
             style={{objectFit:"cover"}}/>
         : <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center"}}>
@@ -55,7 +56,7 @@ export function HeroChip({ name, size=24, accentCol, textCol, bold=true, fontSiz
       <div style={{position:"relative",width:size,height:size,borderRadius:6,overflow:"hidden",
         background:col+"22",border:`1.5px solid ${col}44`,flexShrink:0}}>
         {hero && imgUrl && !err ? (
-          <Image src={imgUrl} alt={name} fill sizes={`${size}px`} loading="lazy"
+          <Image src={imgUrl} alt={name} fill sizes={`${size}px`} loading="lazy" unoptimized
             onError={()=>setErr(true)}
             style={{objectFit:"cover"}}/>
         ) : (
