@@ -33,6 +33,13 @@ function heroName(heroRefOrString) {
   return heroRefOrString.name || null;
 }
 
+// roleOverrides / customHeroes may hold a role as an array (flex hero with several
+// roles). Pick.role is a single String, so take the first non-empty entry.
+function normalizeRole(r) {
+  if (Array.isArray(r)) r = r.find((x) => typeof x === "string" && x) ?? null;
+  return typeof r === "string" && r ? r : "Unknown";
+}
+
 function buildPickRows(picks, side, isBan, customHeroes, roleOverrides) {
   if (!Array.isArray(picks)) return [];
   return picks
@@ -45,7 +52,7 @@ function buildPickRows(picks, side, isBan, customHeroes, roleOverrides) {
         isBan,
         slotIdx: idx,
         hero: name,
-        role: resolveHeroRole(name, customHeroes, roleOverrides),
+        role: normalizeRole(resolveHeroRole(name, customHeroes, roleOverrides)),
         player: isBan ? null : (slot?.player || null),
       };
     })
