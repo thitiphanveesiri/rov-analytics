@@ -90,7 +90,7 @@ const AdminPanel = dynamic(
 // ── แถบรับผู้เล่นที่ลากมา (ย้ายทีม) — ปกติ "ย่อ/ซ่อน" อยู่ โผล่มาเฉพาะตอนกำลังลากการ์ดผู้เล่นจริงๆ ──
 // ใช้การ์ด TeamCard ตัวเดียวกับที่หน้า Rivals ใช้ (ใหญ่ มีโลโก้เต็ม) ตามที่ขอ แทนที่ pill เล็กๆ แบบเดิม
 // รองรับลากจากทีมไหนไปทีมไหนก็ได้ — รายชื่อทีมเป้าหมายคำนวณจาก "ทุกทีมที่มี ยกเว้นทีมต้นทางที่กำลังลากออกมา"
-function TransferDropZone({ draggingPlayer, draggingFromTeam, ourTeamName, ourTeamLogo, rivals, rivalLogos, onDrop }) {
+function TransferDropZone({ draggingPlayer, draggingFromTeam, ourTeamName, ourTeamLogo, rivals, rivalLogos, statsOf, onDrop }) {
   if (!draggingPlayer) return null; // ย่ออยู่เป็นค่าเริ่มต้นเสมอ — render ก็ไม่ render เลยถ้าไม่ได้ลากอยู่
 
   const targets = [
@@ -109,9 +109,11 @@ function TransferDropZone({ draggingPlayer, draggingFromTeam, ourTeamName, ourTe
       </div>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:10}}>
         {targets.map(t => (
-          <div key={t.key} style={{height:110}}>
-            <TeamCard name={t.name} logoUrl={t.logoUrl} hideStats
-              winRatePct={null} onDropPlayer={(name)=>onDrop(name, draggingFromTeam, t.key)}/>
+          <div key={t.key}>
+            <TeamCard name={t.name} logoUrl={t.logoUrl}
+              {...(statsOf ? statsOf(t.key) : { hideStats:true, winRatePct:null })}
+              accentColor={t.key==="our" ? C.primary : C.lose}
+              onDropPlayer={(name)=>onDrop(name, draggingFromTeam, t.key)}/>
           </div>
         ))}
       </div>
@@ -788,6 +790,14 @@ function RovAppInner() {
   const visibleEnemyRosterOf = (team) => (enemyRosters[team] || []).filter(p =>
     isMembershipActiveForPatch(rosterMembership[p], team, patchVersions, selectedPatch));
 
+  // stats ของการ์ดทีม (ใช้ทั้งหน้า Rival/Roster และช่องปล่อยตอนลากย้ายทีม — ให้หน้าตาเหมือนกัน)
+  const teamCardStats = (key) => {
+    const ms = key==="our" ? patchFilteredMatches : patchFilteredMatches.filter(m=>m.rivalName===key);
+    const gs = ms.flatMap(m=>Array.isArray(m.games)&&m.games.length?m.games:[m]);
+    const w = gs.filter(g=>g.result==="WIN").length;
+    return { sessionCount: ms.length, gameCount: gs.length, winRatePct: gs.length ? Math.round(w/gs.length*100) : 0 };
+  };
+
   // ── games to feed PlayerProfile ──
   // For our own players, PlayerProfile keeps using the plain app-wide
   // allGames like before (only one "our team", no scoping needed). For an
@@ -1025,9 +1035,9 @@ function RovAppInner() {
         <DraftPageR
           draft={draft}
           dispatch={dispatchDraft}
-          roster={roster}
+          roster={visibleOurRoster}
           rivals={rivals}
-          enemyRosters={enemyRosters}
+          enemyRosters={Object.fromEntries(Object.keys(enemyRosters).map(t=>[t, visibleEnemyRosterOf(t)]))}
           onFinishSession={finishSession}
           allGames={allGames}
           scoutMatches={app.scoutMatches}
@@ -1779,6 +1789,7 @@ function RovAppInner() {
                     ourTeamLogo={app.teamLogo}
                     rivals={rivals}
                     rivalLogos={app.rivalLogos}
+                    statsOf={teamCardStats}
                     onDrop={(name, fromTeam, toTeam)=>handleTransferPlayer(name, fromTeam, toTeam)}
                   />
 

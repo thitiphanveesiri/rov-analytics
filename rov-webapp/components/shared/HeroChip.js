@@ -36,7 +36,7 @@ export function HeroCard({hero, size=72, banned=false, showName=true}) {
         <div style={{fontSize:Math.max(8,size*0.135),color:"#fff",fontWeight:700,lineHeight:1.1,
           overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{hero.name}</div>
       </div>}
-      {banned && <div style={{position:"absolute",inset:0,background:"rgba(255,71,87,0.65)",
+      {banned && <div style={{position:"absolute",inset:0,background:"rgba(255,71,87,0.3)",
         display:"flex",alignItems:"center",justifyContent:"center"}}>
         <span style={{fontSize:size*0.45,fontWeight:900,color:"#fff"}}>✕</span>
       </div>}
