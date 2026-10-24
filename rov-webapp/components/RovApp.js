@@ -92,6 +92,7 @@ const AdminPanel = dynamic(
 // ใช้การ์ด TeamCard ตัวเดียวกับที่หน้า Rivals ใช้ (ใหญ่ มีโลโก้เต็ม) ตามที่ขอ แทนที่ pill เล็กๆ แบบเดิม
 // รองรับลากจากทีมไหนไปทีมไหนก็ได้ — รายชื่อทีมเป้าหมายคำนวณจาก "ทุกทีมที่มี ยกเว้นทีมต้นทางที่กำลังลากออกมา"
 function TransferDropZone({ draggingPlayer, draggingFromTeam, ourTeamName, ourTeamLogo, rivals, rivalLogos, statsOf, onDrop }) {
+  const scrollRef = useRef(null);
   if (!draggingPlayer) return null; // ย่ออยู่เป็นค่าเริ่มต้นเสมอ — render ก็ไม่ render เลยถ้าไม่ได้ลากอยู่
 
   const targets = [
@@ -102,11 +103,21 @@ function TransferDropZone({ draggingPlayer, draggingFromTeam, ourTeamName, ourTe
   if (targets.length === 0) return null; // ไม่มีทีมอื่นให้ย้ายไปเลย (เช่นยังไม่มี Rival สักทีม)
 
   return (
-    <div style={{position:"sticky",top:8,zIndex:40,marginBottom:16,
+    <div ref={scrollRef}
+      // เลื่อนรายการทีมอัตโนมัติเมื่อลากการ์ดไปใกล้ขอบบน/ล่างของแถบนี้ (เมื่อมีทีมเยอะจนต้องเลื่อนลงไปดู)
+      onDragOver={(e)=>{
+        const el = scrollRef.current; if (!el) return;
+        const r = el.getBoundingClientRect(), EDGE = 56;
+        if (e.clientY > r.bottom - EDGE) el.scrollTop += 16;
+        else if (e.clientY < r.top + EDGE) el.scrollTop -= 16;
+      }}
+      style={{position:"fixed",top:8,left:16,right:16,maxWidth:960,margin:"0 auto",zIndex:40,
+      maxHeight:"55vh",overflowY:"auto",overscrollBehavior:"contain",
       background:C.bgPanel,border:`2px dashed ${C.primary}70`,borderRadius:14,
       padding:"12px 14px",boxShadow:"0 8px 24px rgba(0,0,0,0.35)"}}>
       <div style={{fontSize:12,fontWeight:800,color:C.primaryLight,marginBottom:10,textAlign:"center"}}>
         📥 ปล่อย "{draggingPlayer}" ที่ทีมที่ต้องการย้ายไป
+        {targets.length>4 && <span style={{display:"block",fontWeight:500,fontSize:10,color:C.textMuted,marginTop:2}}>ลากไปใกล้ขอบล่าง/บนของกรอบนี้เพื่อเลื่อนดูทีมอื่น</span>}
       </div>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:10}}>
         {targets.map(t => (
@@ -1864,7 +1875,7 @@ function RovAppInner() {
                               pg={pg} pw={pw} pwr={pwr} top={top}
                               statusLabel={statusLabel}
                               draggable={canTransfer}
-                              onDragStart={(name)=>{ setDraggingPlayer(name); setDraggingFromTeam("our"); }}
+                              onDragStart={(name)=>{ setTimeout(()=>{ setDraggingPlayer(name); setDraggingFromTeam("our"); },0); }}
                               onDragEnd={()=>{ setDraggingPlayer(null); setDraggingFromTeam(null); }}
                               transferTargets={transferTargets}
                               onTransfer={canTransfer ? (toTeam)=>handleTransferPlayer(player, "our", toTeam) : undefined}
@@ -2011,7 +2022,7 @@ function RovAppInner() {
                                   statusLabel={enemyStatus}
                                   pg={pg} pw={pw} pwr={pwr} top={top}
                                   draggable={canTransfer}
-                                  onDragStart={(name)=>{ setDraggingPlayer(name); setDraggingFromTeam(selEnemyTeam); }}
+                                  onDragStart={(name)=>{ setTimeout(()=>{ setDraggingPlayer(name); setDraggingFromTeam(selEnemyTeam); },0); }}
                                   onDragEnd={()=>{ setDraggingPlayer(null); setDraggingFromTeam(null); }}
                                   transferTargets={transferTargets}
                                   onTransfer={canTransfer ? (toTeam)=>handleTransferPlayer(player, selEnemyTeam, toTeam) : undefined}
