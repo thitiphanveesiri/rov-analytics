@@ -18,6 +18,7 @@ import { HeroChip } from "@/components/shared/HeroChip";
 import { PhotoPicker, ImageCropModal } from "@/components/shared/PlayerMedia";
 import { ToastProvider, useToast } from "@/lib/toast";
 import { LogoImg } from "@/components/shared/TeamLogo";
+import { TransferConfirmModal } from "@/components/roster/TransferConfirmModal";
 import { TeamCard } from "@/components/shared/TeamCard";
 import { NoTeamScreen } from "@/components/shared/NoTeamScreen";
 import { PerformanceTrend, CoachNotesHub } from "@/components/shared/PerformanceTrend";
@@ -668,6 +669,7 @@ function RovAppInner() {
 
   const [newPlayerPhoto,      setNewPlayerPhoto]      = useState(null);
   const [draggingPlayer,      setDraggingPlayer]      = useState(null); // ชื่อผู้เล่นที่กำลังถูกลากอยู่ (ย้ายทีม) — ใช้ไฮไลต์ drop tile
+  const [transferReq,         setTransferReq]         = useState(null); // modal ยืนยันย้ายทีม
   const [draggingFromTeam,    setDraggingFromTeam]    = useState(null); // ทีมต้นทางของการลากครั้งนี้ ("our" หรือชื่อ rival) — ใช้คำนวณว่าทีมไหนเป็นปลายทางที่ลากไปได้บ้าง
   const [newEnemyPlayerPhoto, setNewEnemyPlayerPhoto]  = useState(null);
   const [showAddRival,        setShowAddRival]         = useState(false);
@@ -697,15 +699,35 @@ function RovAppInner() {
   // ถามยืนยันก่อนเสมอ เพราะเป็นการเปลี่ยนสถานะสังกัดของผู้เล่น (ยกเลิกได้ด้วยการย้ายกลับทันทีถ้าลากผิดทีม) และ
   // กันการลากพลาด/ปล่อยมือผิดทีมเงียบๆ
   const teamLabel = useCallback((team) => team==="our" ? (effectiveUser?.teamName||app.teamName||"ทีมเรา") : team, [effectiveUser, app.teamName]);
+  // ขอย้าย → เปิด modal ยืนยัน (ยังไม่เปลี่ยนข้อมูลจนกว่าจะกดยืนยัน)
   const handleTransferPlayer = useCallback((playerName, fromTeam, toTeam) => {
     setDraggingPlayer(null);
     setDraggingFromTeam(null);
     if (!playerName || !fromTeam || !toTeam || fromTeam===toTeam) return;
-    if (!window.confirm(`ย้าย "${playerName}" จาก "${teamLabel(fromTeam)}" ไปทีม "${teamLabel(toTeam)}"?\n\nสถิติเก่ากับทีมเดิมจะยังอยู่ครบ (ดูย้อนหลังได้ตอนเลือก patch เก่า หรือ "ทั้งหมด") ` +
-                        `ตั้งแต่วันนี้ผู้เล่นจะไปอยู่ใน Roster ของ "${teamLabel(toTeam)}" แทน`)) return;
-    dispatchApp({ type:"TRANSFER_PLAYER", payload:{ playerName, fromTeam, toTeam } });
-    toast(`ย้าย ${playerName} ไปทีม ${teamLabel(toTeam)} แล้ว`, "success");
-  }, [toast, teamLabel]);
+    setTransferReq(prev => prev ? prev : { playerName, fromTeam, toTeam, phase:"confirm", errorText:"" });
+  }, []);
+
+  // กดยืนยัน: dispatch ครั้งเดียว (กันกดซ้ำด้วย phase) แล้วรอผล autosave จริงก่อนปิด modal
+  const transferLockRef = useRef(false);
+  const confirmTransfer = useCallback((toTeam) => {
+    if (transferLockRef.current || !transferReq || transferReq.phase !== "confirm") return; // กันกดซ้ำ
+    transferLockRef.current = true;
+    dispatchApp({ type:"TRANSFER_PLAYER", payload:{ playerName:transferReq.playerName, fromTeam:transferReq.fromTeam, toTeam } });
+    setTransferReq({ ...transferReq, toTeam, phase:"saving", sawSaving:false });
+  }, [transferReq]);
+  useEffect(() => { if (!transferReq) transferLockRef.current = false; }, [transferReq]);
+
+  useEffect(() => {
+    if (!transferReq || transferReq.phase !== "saving") return;
+    const done = (msg, kind) => { toast(msg, kind); setTransferReq(null); };
+    if (saveStatus === "saving" && !transferReq.sawSaving) { setTransferReq(p => p && { ...p, sawSaving:true }); return; }
+    if (!transferReq.sawSaving) return; // ยังเป็นสถานะเก่า — รอ autosave รอบนี้เริ่มก่อน
+    const label = teamLabel(transferReq.toTeam);
+    if (saveStatus === "saved") done(`ย้าย ${transferReq.playerName} ไปทีม ${label} แล้ว`, "success");
+    else if (saveStatus === "offline") done(`ย้าย ${transferReq.playerName} แล้ว (เก็บในเครื่อง รอซิงค์เมื่อออนไลน์)`, "success");
+    else if (saveStatus === "error") setTransferReq(p => p && { ...p, phase:"error",
+      errorText:"บันทึกขึ้นเซิร์ฟเวอร์ไม่สำเร็จ — การย้ายอยู่ในเครื่องนี้ ระบบจะลองบันทึกใหม่ให้ ตรวจสอบสถานะที่มุมบน" });
+  }, [saveStatus, transferReq, toast, teamLabel]);
 
   const handleAddEnemyPlayer = useCallback((rivalName) => {
     const name = ui.newEnemyName.trim();
@@ -2020,6 +2042,18 @@ function RovAppInner() {
         </div>
       )}
     </div>
+      {transferReq && (() => {
+        const teamObj = (k) => ({ key:k, name:teamLabel(k), logoUrl: k==="our" ? app.teamLogo : app.rivalLogos?.[k] });
+        const targets = ["our", ...rivals.map(r=>r.name)].filter(k => k!==transferReq.fromTeam).map(teamObj);
+        const photoKey = transferReq.fromTeam==="our" ? `our:${transferReq.playerName}` : `enemy:${transferReq.fromTeam}:${transferReq.playerName}`;
+        return (
+          <TransferConfirmModal
+            player={transferReq.playerName} photoUrl={app.playerPhotos?.[photoKey]}
+            from={teamObj(transferReq.fromTeam)} teams={targets} initialTo={transferReq.toTeam}
+            phase={transferReq.phase} errorText={transferReq.errorText}
+            onConfirm={confirmTransfer} onCancel={()=>setTransferReq(null)}/>
+        );
+      })()}
     </HeroPhotosContext.Provider>
   );
 }
