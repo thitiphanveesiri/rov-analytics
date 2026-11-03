@@ -13,6 +13,10 @@ export default function AdminPanel({ session }) {
   const [members,    setMembers]    = useState([]);
   const [loading,    setLoading]    = useState(true);
   const [updating,   setUpdating]   = useState(null); // userId กำลัง update
+  const [passwordTarget, setPasswordTarget] = useState(null);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [passwordSaving, setPasswordSaving] = useState(false);
   const toast = useToast();
 
   // ── Invite code: ดึงสดจาก /api/data แทนการอ่านจาก session ──
@@ -62,6 +66,7 @@ export default function AdminPanel({ session }) {
     member_removed: "🚫 ลบสมาชิกออกจากทีม",
     member_approved: "✅ อนุมัติสมาชิก",
     member_rejected: "⛔ ปฏิเสธคำขอเข้าร่วม",
+    password_reset: "🔑 ตั้งรหัสผ่านใหม่",
   };
 
   async function fetchMembers() {
@@ -97,6 +102,30 @@ export default function AdminPanel({ session }) {
     } catch (err) {
       toast(err.message || "เปลี่ยน Role ไม่สำเร็จ", "error");
     } finally { setUpdating(null); }
+  }
+
+  async function resetMemberPassword(e) {
+    e.preventDefault();
+    if (!passwordTarget) return;
+    if (newPassword.length < 6) return toast("รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร", "error");
+    if (newPassword !== confirmPassword) return toast("รหัสผ่านที่กรอกไม่ตรงกัน", "error");
+    setPasswordSaving(true);
+    try {
+      const res = await fetch("/api/admin/members/password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: passwordTarget.id, password: newPassword }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "ตั้งรหัสผ่านไม่สำเร็จ");
+      toast(`ตั้งรหัสผ่านให้ ${passwordTarget.email} สำเร็จ`, "success");
+      setPasswordTarget(null);
+      setNewPassword("");
+      setConfirmPassword("");
+      if (showAuditLog) fetchAuditLog();
+    } catch (err) {
+      toast(err.message || "ตั้งรหัสผ่านไม่สำเร็จ", "error");
+    } finally { setPasswordSaving(false); }
   }
 
   async function removeMember(userId, email) {
@@ -238,7 +267,12 @@ export default function AdminPanel({ session }) {
                         ✅ อนุมัติ
                       </button>
                     </div>
-                    <div>
+                    <div style={{display:"flex",gap:6,justifyContent:"flex-end"}}>
+                      <button onClick={()=>setPasswordTarget(m)}
+                        title="ตั้งรหัสผ่านใหม่"
+                        style={{background:C.primary+"15",border:`1px solid ${C.primary}50`,
+                          color:C.primaryLight,borderRadius:7,padding:"4px 9px",
+                          cursor:"pointer",fontSize:11,fontWeight:700}}>🔑</button>
                       <button onClick={()=>rejectMember(m.id, m.email)}
                         disabled={updating===m.id}
                         style={{background:"transparent",border:`1px solid ${C.lose}40`,
@@ -269,7 +303,12 @@ export default function AdminPanel({ session }) {
                     </div>
 
                     {/* remove */}
-                    <div>
+                    <div style={{display:"flex",gap:6,justifyContent:"flex-end"}}>
+                      {!isSelf && <button onClick={()=>setPasswordTarget(m)}
+                        title="ตั้งรหัสผ่านใหม่"
+                        style={{background:C.primary+"15",border:`1px solid ${C.primary}50`,
+                          color:C.primaryLight,borderRadius:7,padding:"4px 9px",
+                          cursor:"pointer",fontSize:11,fontWeight:700}}>🔑</button>}
                       {!isSelf && !isLast && (
                         <button onClick={()=>removeMember(m.id, m.email)}
                           disabled={updating===m.id}
@@ -356,6 +395,41 @@ export default function AdminPanel({ session }) {
           </div>
         )}
       </div>
+
+      {passwordTarget && (
+        <div role="presentation" onClick={e => { if (e.target === e.currentTarget && !passwordSaving) setPasswordTarget(null); }}
+          style={{position:"fixed",inset:0,zIndex:1000,background:"#000a",display:"flex",
+            alignItems:"center",justifyContent:"center",padding:20}}>
+          <form role="dialog" aria-modal="true" aria-labelledby="reset-password-title"
+            onSubmit={resetMemberPassword}
+            style={{width:"100%",maxWidth:420,background:C.bgPanel,border:`1px solid ${C.border}`,
+              borderRadius:14,padding:24,boxShadow:"0 20px 60px #0008"}}>
+            <h3 id="reset-password-title" style={{margin:"0 0 6px",fontSize:18,color:C.textMain}}>ตั้งรหัสผ่านใหม่</h3>
+            <p style={{margin:"0 0 18px",fontSize:12,color:C.textMuted}}>{passwordTarget.email}</p>
+            <label style={{display:"block",fontSize:12,color:C.textMuted,marginBottom:6}}>รหัสผ่านใหม่ (อย่างน้อย 6 ตัวอักษร)</label>
+            <input autoFocus type="password" minLength={6} maxLength={128} required value={newPassword}
+              onChange={e=>setNewPassword(e.target.value)} autoComplete="new-password"
+              style={{width:"100%",boxSizing:"border-box",background:C.bgBase,color:C.textMain,
+                border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 12px",marginBottom:12}} />
+            <label style={{display:"block",fontSize:12,color:C.textMuted,marginBottom:6}}>ยืนยันรหัสผ่านใหม่</label>
+            <input type="password" minLength={6} maxLength={128} required value={confirmPassword}
+              onChange={e=>setConfirmPassword(e.target.value)} autoComplete="new-password"
+              style={{width:"100%",boxSizing:"border-box",background:C.bgBase,color:C.textMain,
+                border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 12px"}} />
+            <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:20}}>
+              <button type="button" disabled={passwordSaving}
+                onClick={()=>{setPasswordTarget(null);setNewPassword("");setConfirmPassword("");}}
+                style={{background:"transparent",border:`1px solid ${C.border}`,color:C.textMuted,
+                  borderRadius:8,padding:"9px 14px",cursor:"pointer"}}>ยกเลิก</button>
+              <button type="submit" disabled={passwordSaving}
+                style={{background:C.primary,border:"none",color:"#fff",borderRadius:8,
+                  padding:"9px 14px",fontWeight:700,cursor:passwordSaving?"wait":"pointer",opacity:passwordSaving?0.6:1}}>
+                {passwordSaving ? "กำลังบันทึก..." : "บันทึกรหัสผ่าน"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 }
