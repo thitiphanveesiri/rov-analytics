@@ -20,7 +20,8 @@
 // (VideoLibrary.js type:"file" ก็ใช้ blob: เหมือนกัน) ไว้ล่วงหน้า แม้ยังไม่มีรายงานว่าพังก็ตาม
 const CSP_DIRECTIVES = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline'",
+  // 'wasm-unsafe-eval' = ให้คอมไพล์ WebAssembly ได้ (Tesseract.js อ่านตัวเลขสกอร์ในเบราว์เซอร์) — ไม่เปิด eval() ของ JS
+  "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https://static.wikia.nocookie.net https://*.fandom.com https://*.public.blob.vercel-storage.com",
   "font-src 'self' data:",
