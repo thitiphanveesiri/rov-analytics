@@ -69,6 +69,10 @@ const MyStatsPage = dynamic(
   () => import("@/components/shared/MyStatsPage").then(m => m.MyStatsPage),
   { loading: LazyLoadingPlaceholder, ssr: false }
 );
+const HeatmapPage = dynamic(
+  () => import("@/components/shared/HeatmapPage").then(m => m.HeatmapPage),
+  { loading: LazyLoadingPlaceholder, ssr: false }
+);
 const HelpPage = dynamic(
   () => import("@/components/shared/HelpPage").then(m => m.HelpPage),
   { loading: LazyLoadingPlaceholder, ssr: false }
@@ -147,6 +151,7 @@ const LAZY_CHUNK_LOADERS = [
   () => import("@/components/shared/PracticePage"),
   () => import("@/components/shared/MyStatsPage"),
   () => import("@/components/shared/HelpPage"),
+  () => import("@/components/shared/HeatmapPage"),
   () => import("@/components/shared/Analytics"),
   () => import("@/components/shared/TacticalWhiteboard"),
   () => import("@/components/shared/AdminPanel"),
@@ -797,6 +802,7 @@ function RovAppInner() {
     {id:"mystats", icon:"👤",label:"My Stats"},
     {id:"practice",icon:"🏋️",label:"Practice"},
     {id:"analytics",icon:"📈",label:"Analytics"},
+    {id:"heatmap", icon:"🔥",label:"Heatmap"},
     {id:"draft",   icon:"⚔️",label:"Live Draft", coachOnly:true},
     {id:"matches", icon:"📋",label:"Match Log"},
     {id:"rivals",  icon:"🎯",label:"Rivals"},
@@ -1057,6 +1063,9 @@ function RovAppInner() {
           onDelete={handleDeletePractice}
         />
       )}
+
+      {/* ── HEATMAP PAGE (ตำแหน่งฮีโร่จากวิดีโอ) ── */}
+      {page==="heatmap" && <HeatmapPage />}
 
       {/* ── ANALYTICS PAGE ── */}
       {page==="analytics" && (

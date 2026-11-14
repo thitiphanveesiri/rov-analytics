@@ -20,3 +20,6 @@ npm-debug.log*
 
 # prisma
 /prisma/migrations/dev.db
+
+# tesseract assets (สร้างโดย scripts/copy-tesseract-assets.mjs ตอน npm install)
+/public/tesseract/
