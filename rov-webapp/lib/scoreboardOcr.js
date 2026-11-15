@@ -65,8 +65,8 @@ const VARIANTS = (scales) => [90, 100, 110, 120, 130, 150].flatMap(t => scales.m
 const V_SUMMARY = [{ thr: 100, scale: 3 }, { thr: 120, scale: 3 }, { thr: 110, scale: 4 }, { thr: 130, scale: 4 }];
 // ชุดสำรองสำหรับช่องที่ชุดมาตรฐานอ่านไม่ได้ (12 แบบ)
 const V_WIDE = [90, 100, 110, 120, 130, 150].flatMap(thr => [3, 4].map(scale => ({ thr, scale })));
+const V_DAMAGE = [100, 115, 130, 145].map(thr => ({ thr, scale: 2 }));
 const V_SCORE = [110, 130, 150, 170].map(thr => ({ thr, scale: 3 }));
-const V_DAMAGE = VARIANTS([2, 3, 4]);
 
 // ความกว้างของหมึก (หน่วย = พิกเซลภาพจริง) ระหว่างหลักแรกถึงหลักสุดท้าย — เลข 2 หลักกว้างกว่า 1 หลักชัดเจน
 export function inkWidth(img, scale) {
@@ -120,9 +120,14 @@ const SUMMARY = {
   score: [[655, 765], [1080, 1190]], scoreY: [8, 82],
   thumb: { blue: [152, 300], red: [920, 1070] },
 };
+// หน้า "ข้อมูล": แถวเดียวกับหน้าสรุป (แถบหัวตารางเดียวกัน จึงใช้ตำแหน่งแถบเป็นจุดอ้างอิงร่วมกัน)
+// แต่ละแถวมี 2 บรรทัด: ตัวเลข (ดาเมจที่ทำ / ดาเมจที่รับ / ทีมไฟต์) และแถบ % ใต้ตัวเลข — อ่านทีละช่อง
 const DAMAGE = {
-  baseH: 1206, rows: [320, 474, 629, 783, 938], half: 26,
-  blue: [0, 660], red: [1075, 1740],
+  numDy: 4, numHalf: 13, pctDy: 36, pctHalf: 12,
+  cols: {
+    blue: { D: [436, 525], T: [588, 682], F: [742, 775], pD: [440, 563], pT: [595, 718], pF: [749, 870] },
+    red: { D: [1203, 1295], T: [1357, 1452], F: [1510, 1550], pD: [1211, 1334], pT: [1365, 1489], pF: [1519, 1638] },
+  },
 };
 
 // ───────────── หาตำแหน่งตารางหน้าสรุปจากภาพเอง (รองรับหลายขนาด/สัดส่วน/ขอบดำ/ครอปต่างกัน) ─────────────
@@ -175,8 +180,31 @@ function summaryMap(bm) {
   return findSummaryLayout(bm) || { s: bm.height / SUMMARY.baseH, ox: 0, oy: 0, anchored: false };
 }
 
+// สัดส่วนพิกเซลในกรอบ (พิกัดอ้างอิง) ที่เข้าเงื่อนไข
+function zoneFrac(bm, m, x0, y0, x1, y1, pred) {
+  const X0 = Math.max(0, Math.round(m.ox + x0 * m.s)), X1 = Math.min(bm.width, Math.round(m.ox + x1 * m.s));
+  const Y0 = Math.max(0, Math.round(m.oy + y0 * m.s)), Y1 = Math.min(bm.height, Math.round(m.oy + y1 * m.s));
+  let n = 0, hit = 0; const d = bm.data;
+  for (let y = Y0; y < Y1; y++) for (let x = X0; x < X1; x++) { const i = (y * bm.width + x) * 4; n++; if (pred(d[i], d[i + 1], d[i + 2])) hit++; }
+  return n ? hit / n : 0;
+}
+// หน้า "ข้อมูล" มีแถบ % สีเขียว (ทีมไฟต์) ทุกแถว ; หน้าสรุปไม่มี
+export function looksLikeDamagePage(bm, m) {
+  const green = (r, g, b) => g > 120 && r < 90 && b < 110 && g > r * 1.6;
+  let rowsWithBar = 0;
+  for (const y of SUMMARY.rows) if (zoneFrac(bm, m, 790, y + 20, 900, y + 50, green) >= 0.015) rowsWithBar++;
+  return rowsWithBar >= 3;
+}
+// หน้าสรุปแบบ "ประวัติการเล่น" มีแถวไอเทม (สีสดหลากสี) ใต้ชื่อ → ตัวเลข K/D/A เลื่อนขึ้นครึ่งบนของแถว ; แบบย่อไม่มี
+export function looksLikeHistory(bm, m) {
+  const sat = (r, g, b) => Math.max(r, g, b) - Math.min(r, g, b) > 110;
+  const v = SUMMARY.rows.map(y => zoneFrac(bm, m, 500, y + 8, 820, y + 42, sat)).sort((a, b) => a - b);
+  return v[2] > 0.02;   // มัธยฐาน (แถวสุดท้ายอาจติดพื้นหลังด้านล่างจนค่าสูงผิดปกติ)
+}
+
 export function detectKind(bm) {
-  if (findSummaryLayout(bm)) return "summary";
+  const m = findSummaryLayout(bm);
+  if (m) return looksLikeDamagePage(bm, m) ? "damage" : "summary";
   // ตัวสำรอง (ไม่มีข้อมูลพิกเซล หรือหาแถบไม่เจอ): หน้าสรุปกว้างมาก (~2.16:1); หน้า "ข้อมูล" ~1.45–1.7:1
   return bm.width / bm.height >= 1.9 ? "summary" : "damage";
 }
@@ -236,16 +264,28 @@ export function fixByConstraints(teams, score) {
   return warnings;
 }
 
+// สกอร์ทีมด้านบนภาพ (ซ้าย=น้ำเงิน, ขวา=แดง) — ตำแหน่งเดียวกันทั้งหน้าสรุปและหน้า "ข้อมูล"
+async function readTeamScores(recognize, bm, m) {
+  const L = SUMMARY, X = x => m.ox + x * m.s, Y = y => m.oy + y * m.s, out = [];
+  for (const [x0, x1] of L.score) {
+    const r = await readNumbers(recognize, bm, [X(x0), Y(L.scoreY[0]), X(x1), Y(L.scoreY[1])], 1, V_SCORE, { mode: "max", whitelist: "0123456789", join: true });
+    out.push(r.values ? +r.values[0] : null);
+  }
+  return out;
+}
+
 export async function readSummary(bm, recognize, onStep = () => {}) {
   const m = summaryMap(bm); const L = SUMMARY;
   const X = x => m.ox + x * m.s, Y = y => m.oy + y * m.s;
   const teams = [[], []]; const warnings = [];
+  const hist = m.anchored && looksLikeHistory(bm, m);
+  const dy = hist ? -32 : 0, half = hist ? 18 : L.half;
   if (!m.anchored) warnings.push("หาแถบหัวตารางในภาพไม่เจอ — ใช้ค่าประมาณจากขนาดภาพ ผลอาจเพี้ยน (ลองภาพที่เห็นตารางครบทั้งสองฝั่ง)");
   const KEYS = [["K", "kills"], ["D", "deaths"], ["A", "assists"], ["G", "gold"]];
   for (let t = 0; t < 2; t++) {
     const cols = t === 0 ? L.cols.blue : L.cols.red;
     for (let i = 0; i < L.rows.length; i++) {
-      const y0 = Y(L.rows[i] - L.half), y1 = Y(L.rows[i] + L.half);
+      const y0 = Y(L.rows[i] + dy - half), y1 = Y(L.rows[i] + dy + half);
       const row = { conf: 1 };
       for (const [c, key] of KEYS) {
         const box = [X(cols[c][0]), y0, X(cols[c][1]), y1], o = { whitelist: "0123456789", join: true };
@@ -259,17 +299,13 @@ export async function readSummary(bm, recognize, onStep = () => {}) {
       teams[t].push(row); onStep();
     }
   }
-  const score = [];
-  for (const [x0, x1] of L.score) {
-    const r = await readNumbers(recognize, bm, [X(x0), Y(L.scoreY[0]), X(x1), Y(L.scoreY[1])], 1, V_SCORE, { mode: "max", whitelist: "0123456789", join: true });
-    score.push(r.values ? +r.values[0] : null);
-  }
+  const score = await readTeamScores(recognize, bm, m);
   warnings.push(...fixByConstraints(teams.map(rows => ({ rows })), score));
   teams.forEach(rows => rows.forEach(r => {
     if (r.kills === undefined || r.deaths === undefined || r.assists === undefined || r.gold === undefined) r.unread = true;
     delete r._inkK; delete r._inkD;
   }));
-  return { kind: "summary", teams, score, warnings };
+  return { kind: "summary", variant: hist ? "history" : "compact", teams, score, warnings };
 }
 
 // กรอบรูปโปรไฟล์ฮีโร่ของแต่ละแถว (พิกเซลของภาพจริง) — ใช้ตัดภาพย่อให้ผู้ใช้เห็นว่าแถวไหนคือฮีโร่ตัวไหน ตอนเลือก slot
@@ -305,25 +341,83 @@ export function fixByPercent(rows, idx, key, tol = 0.35) {
   }
 }
 
+// "28.3 %" → 28.3 ; ถ้า OCR ทำจุดหาย ("283") → ใส่จุดก่อนหลักสุดท้าย ; อ่านไม่ได้/เกินช่วง → null
+export function parsePercent(txt) {
+  const t = String(txt);
+  const m = t.match(/(\d{1,3})\s*[.,]\s*(\d)/);
+  let v = null;
+  if (m) v = +(m[1] + "." + m[2]);
+  else { const d = (t.match(/\d/g) || []).join(""); if (d.length >= 2 && d.length <= 4) v = +(d.slice(0, -1) + "." + d.slice(-1)); }
+  return v != null && v >= 0 && v <= 100 ? v : null;
+}
+
+async function readPercent(recognize, bm, box) {
+  const tally = new Map();
+  // ตัวหนังสือ % เป็นสีเทาอมชมพู (ไม่ใช่ขาวสนิท) ความสว่างช่อง min ราว 100–130 บนพื้นแถบ ~30–60 → ต้องใช้ threshold ต่ำกว่าตัวเลขปกติ
+  // (ทดสอบ 4 ชุดกับภาพจริง: ชุดนี้ถูก 30/30 ; threshold 130+ อ่านไม่ได้เลย)
+  for (const [thr, scale] of [[80, 3], [95, 3], [110, 3], [80, 4]]) {
+    const v = parsePercent(await recognize(prepare(bm, box, { thr, scale }), { whitelist: "0123456789.% " }));
+    if (v != null) tally.set(v, (tally.get(v) || 0) + 1);
+  }
+  return tally.size ? [...tally.entries()].sort((a, b) => b[1] - a[1])[0][0] : null;
+}
+
+/**
+ * % ดาเมจรวมทั้งทีมต้อง ≈ 100 ; ถ้าไม่ครบเพราะ % พลาดช่องเดียว (เช่น 11.7 ถูกอ่านเป็น 1.7) ให้ซ่อมช่องนั้นเป็น 100 − ผลรวมช่องอื่น
+ * โดยต้องใกล้เคียงสัดส่วนที่คำนวณจากตัวเลขดาเมจเอง (±0.8) ด้วย — คืน true เมื่อ % ใช้ตรวจตัวเลขได้
+ */
+export function repairPercents(rows, idx, key) {
+  const ps = rows.map(r => r.pct?.[idx]);
+  if (ps.some(v => v == null)) return false;
+  const sum = ps.reduce((a, v) => a + v, 0);
+  if (Math.abs(sum - 100) <= 1.0) return true;
+  const vals = rows.map(r => r[key]);
+  if (vals.some(v => v == null)) return false;
+  const total = vals.reduce((a, v) => a + v, 0);
+  if (!total) return false;
+  for (let k = 0; k < rows.length; k++) {
+    const cand = +(100 - (sum - ps[k])).toFixed(1);
+    if (cand >= 0 && cand <= 100 && Math.abs(cand - (vals[k] / total) * 100) <= 0.8) { rows[k].pct[idx] = cand; return true; }
+  }
+  return false;
+}
+
 export async function readDamage(bm, recognize, onStep = () => {}) {
-  const s = bm.height / DAMAGE.baseH; const L = DAMAGE;
+  const m = summaryMap(bm); const L = DAMAGE;
+  const X = x => m.ox + x * m.s, Y = y => m.oy + y * m.s;
   const teams = [[], []]; const warnings = [];
+  if (!m.anchored) warnings.push("หาแถบหัวตารางในภาพไม่เจอ — ใช้ค่าประมาณจากขนาดภาพ ผลอาจเพี้ยน (ลองภาพที่เห็นตารางครบทั้งสองฝั่ง)");
+  const num = async (c, yc) => {
+    const box = [X(c[0]), Y(yc + L.numDy - L.numHalf), X(c[1]), Y(yc + L.numDy + L.numHalf)], o = { whitelist: "0123456789", join: true };
+    let r = await readNumbers(recognize, bm, box, 1, V_DAMAGE, o);
+    if (!r.values) { const r2 = await readNumbers(recognize, bm, box, 1, V_WIDE, o); if (r2.values) r = r2; }
+    return r;
+  };
   for (let t = 0; t < 2; t++) {
-    const [x0, x1] = t === 0 ? L.blue : L.red;
-    for (let i = 0; i < L.rows.length; i++) {
-      const y = L.rows[i];
-      const nums = await readNumbers(recognize, bm, [x0 * s, (y - L.half) * s, Math.min(x1 * s, bm.width), (y + L.half) * s], 3, V_DAMAGE);
-      const pct = await readPercents(recognize, bm, [x0 * s, (y + 25) * s, Math.min(x1 * s, bm.width), (y + 72) * s]);
-      const row = { conf: nums.conf, pct };
-      if (nums.values) { row.damage = +nums.values[0]; row.damageTaken = +nums.values[1]; row.fights = +nums.values[2]; }
+    const c = t === 0 ? L.cols.blue : L.cols.red;
+    for (let i = 0; i < SUMMARY.rows.length; i++) {
+      const yc = SUMMARY.rows[i];
+      const row = { conf: 1 };
+      for (const [k, key] of [["D", "damage"], ["T", "damageTaken"], ["F", "fights"]]) {
+        const r = await num(c[k], yc);
+        if (r.values) { row[key] = +r.values[0]; row.conf = Math.min(row.conf, r.conf); } else row.conf = 0;
+      }
+      row.pct = [];
+      for (const k of ["pD", "pT", "pF"]) row.pct.push(await readPercent(recognize, bm, [X(c[k][0]), Y(yc + L.pctDy - L.pctHalf), X(c[k][1]), Y(yc + L.pctDy + L.pctHalf)]));
       teams[t].push(row); onStep();
     }
-    fixByPercent(teams[t], 0, "damage"); fixByPercent(teams[t], 1, "damageTaken");
-    teams[t].forEach(r => { if (r.damage === undefined) r.unread = true; });
+    const nm = t === 0 ? "ซ้าย" : "ขวา";
+    // % ของดาเมจที่ทำ/รับ รวมกันทั้งทีมต้อง ≈ 100 — ถ้าไม่ใช่ แปลว่าอ่าน % พลาด จึงไม่เอา % ไปแก้ตัวเลข (กันแก้ของที่ถูกอยู่แล้วให้ผิด)
+    [[0, "damage", "ดาเมจที่ทำ"], [1, "damageTaken", "ดาเมจที่รับ"]].forEach(([idx, key, label]) => {
+      if (repairPercents(teams[t], idx, key)) fixByPercent(teams[t], idx, key);
+      else warnings.push(`ทีม${nm}: อ่าน % ${label}ไม่ครบ (รวม ${teams[t].reduce((a, r) => a + (r.pct[idx] ?? 0), 0).toFixed(1)} ควร ≈100) จึงใช้ % ช่วยตรวจเลขของทีมนี้ไม่ได้ — ดู${label}ของทีมนี้กับภาพ`);
+    });
+    fixByPercent(teams[t], 2, "fights");
+    teams[t].forEach(r => { if (r.damage === undefined || r.damageTaken === undefined) r.unread = true; });
     const fixed = teams[t].filter(r => r.fixed).length;
-    if (fixed) warnings.push(`ทีม${t === 0 ? "ซ้าย" : "ขวา"}: แก้ดาเมจอัตโนมัติ ${fixed} แถวโดยเทียบกับ % ในภาพ — ตรวจอีกครั้ง`);
+    if (fixed) warnings.push(`ทีม${nm}: แก้ดาเมจอัตโนมัติ ${fixed} แถวโดยเทียบกับ % ในภาพ — ตรวจอีกครั้ง`);
   }
-  const score = [];
+  const score = await readTeamScores(recognize, bm, m);
   return { kind: "damage", teams, score, warnings };
 }
 
@@ -334,20 +428,46 @@ export async function readDamage(bm, recognize, onStep = () => {}) {
  * @returns {{teams:[{rows:Array},{rows:Array}], warnings:string[], kinds:string[], flags:Object}}
  *   teams[*].rows[i] = { kills, deaths, assists, gold, damage, damageTaken, _flag? } — shape เดียวกับที่ mapScoreboard() รับอยู่
  */
+/**
+ * "ทีมไฟต์" ในหน้าข้อมูล = จำนวนคิล+แอสซิสต์ของผู้เล่น (เกมคิด % จาก (K+A)/คิลรวมทีม — ตรวจกับข้อมูลจริงแล้วตรงทุกแถว)
+ * → เมื่อมีทั้งหน้าสรุปและหน้าข้อมูล ใช้ตรวจว่า K/A ที่อ่านจากหน้าสรุปถูกไหม ; ติดธงแถวที่ไม่ตรง
+ */
+export function crossCheckFights(merged, fightsRead) {
+  const warnings = [];
+  merged.forEach((rows, t) => rows.forEach((row, i) => {
+    const f = fightsRead[t]?.[i];
+    if (f == null || row.kills == null || row.assists == null || row.kills + row.assists === f) return;
+    row._flag = true;
+    warnings.push(`ทีม${t === 0 ? "ซ้าย" : "ขวา"} แถว ${i + 1}: ทีมไฟต์ในหน้าข้อมูล = ${f} แต่ K+A จากหน้าสรุป = ${row.kills + row.assists} — ตรวจ K/A ของแถวนี้`);
+  }));
+  return warnings;
+}
+
 export async function readScoreboards(images, recognize, onStep = () => {}) {
   const merged = [[{}, {}, {}, {}, {}], [{}, {}, {}, {}, {}]];
+  const fightsRead = [[], []]; const scoreRead = [[], []];
   const warnings = []; const kinds = [];
   for (const img of images) {
     const kind = img.kind && img.kind !== "auto" ? img.kind : detectKind(img.bitmap);
     kinds.push(kind);
     const r = kind === "summary" ? await readSummary(img.bitmap, recognize, onStep) : await readDamage(img.bitmap, recognize, onStep);
     warnings.push(...r.warnings);
+    (r.score || []).forEach((v, t) => scoreRead[t].push(v));
     r.teams.forEach((rows, t) => rows.forEach((row, i) => {
       const { conf, pct, fights, fixed, suspect, unread, ...vals } = row;
+      if (fights != null) fightsRead[t][i] = fights;
       Object.assign(merged[t][i], vals);
       const low = (conf ?? 1) < 0.6 || unread || (suspect && suspect.length);
       if (low || fixed) merged[t][i]._flag = true;
     }));
   }
-  return { teams: merged.map(rows => ({ rows })), warnings, kinds };
+  if (kinds.includes("summary") && kinds.includes("damage")) warnings.push(...crossCheckFights(merged, fightsRead));
+  // สกอร์ทีมในภาพ: ใช้ที่อ่านได้จากหัวภาพ ; ถ้าอ่านไม่ได้ ใช้ผลรวมคิล (ต้องมีครบ 5 แถว) — ใช้เลือกฝั่งทีมเราอัตโนมัติ
+  const scores = [0, 1].map(t => {
+    const fromImg = scoreRead[t].find(v => v != null);
+    if (fromImg != null) return fromImg;
+    const ks = merged[t].map(r => r.kills);
+    return ks.every(k => k != null) ? ks.reduce((a, k) => a + k, 0) : null;
+  });
+  return { teams: merged.map(rows => ({ rows })), scores, warnings, kinds };
 }

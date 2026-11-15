@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { snapHero, toStat, mapScoreboard, mergeStats, buildStatsFromMapping } from "@/lib/scoreboardMatch";
+import { snapHero, toStat, mapScoreboard, mergeStats, buildStatsFromMapping, decideOurSide } from "@/lib/scoreboardMatch";
 
 assert.equal(snapHero("nakroth"), "Nakroth");
 assert.equal(snapHero("Lu Bu"), "Lu Bu");
@@ -60,4 +60,19 @@ assert.equal(m2.gameStats.our[0].gold, 15381); assert.equal(m2.gameStats.enemy[0
 const m3 = buildStatsFromMapping(shot, true, [0, 0, -1, 3, 4], [0, 1, 2, 3, 4]);
 assert.equal(m3.duplicates.length, 1); assert.equal(m3.gameStats.our[2], undefined);
 assert.equal(m3.gameStats.our[0].kills, 1, "แถวหลังทับแถวแรก");
+
+// ── decideOurSide: เกมแรกทีมเราอยู่น้ำเงิน เกมสองอยู่แดง ──
+{
+  assert.equal(decideOurSide([9, 12], 9, 12).side, "first", "ตรงตามลำดับ → ซ้าย/น้ำเงิน");
+  assert.equal(decideOurSide([9, 12], 12, 9).side, "second", "ตรงแบบสลับ → ขวา/แดง");
+  assert.equal(decideOurSide([20, 20], 20, 20).side, null, "สกอร์เสมอ แยกไม่ได้");
+  assert.equal(decideOurSide([9, 12], 3, 4).side, null, "ไม่ตรงทั้งสองแบบ");
+  assert.ok(decideOurSide([9, 12], 3, 4).note.includes("ไม่ตรง"));
+  assert.equal(decideOurSide([9, 12], 0, 0).side, null, "ยังไม่ได้บันทึกสกอร์");
+  assert.equal(decideOurSide([9, 12], "", "").side, null);
+  assert.equal(decideOurSide([9, 12], undefined, undefined).side, null);
+  assert.equal(decideOurSide([null, 12], 9, 12).side, null, "อ่านสกอร์ในภาพไม่ได้");
+  assert.equal(decideOurSide([9, 12], "12", "9").side, "second", "รับสกอร์เป็นข้อความจากช่อง input ได้");
+  assert.equal(decideOurSide([0, 5], 5, 0).side, "second", "ทีมหนึ่งได้ 0 คิลก็ใช้ได้");
+}
 console.log("scoreboardMatch tests ok");

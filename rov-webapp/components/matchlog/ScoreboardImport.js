@@ -1,7 +1,7 @@
 "use client";
 import { useRef, useState } from "react";
 import { C } from "@/lib/theme";
-import { buildStatsFromMapping, mergeStats } from "@/lib/scoreboardMatch";
+import { buildStatsFromMapping, mergeStats, decideOurSide } from "@/lib/scoreboardMatch";
 import { readScoreboards, detectKind, summaryThumbBoxes } from "@/lib/scoreboardOcr";
 
 // ═══════════════════════════════════════════
@@ -67,13 +67,14 @@ async function createRecognizer() {
   };
 }
 
-export default function ScoreboardImport({ ourPicks, enemyPicks, gameStats, onChangeStats }) {
+export default function ScoreboardImport({ ourPicks, enemyPicks, gameStats, onChangeStats, ourScore, enemyScore }) {
   const fileRef = useRef(null);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState("");
   const [parsed, setParsed] = useState(null);
   const [side, setSide] = useState("first");   // ทีมเราคือทีมซ้าย(สีน้ำเงิน) — ค่ามาตรฐานของ RoV
+  const [sideNote, setSideNote] = useState(null);   // { auto: bool, text } — เหตุผลที่ระบบเลือกฝั่งให้ (หรือบอกว่าเลือกให้ไม่ได้)
   const [kindSel, setKindSel] = useState("auto");   // ชนิดภาพ: auto = ให้ระบบเดาจากตำแหน่งแถบหัวตาราง
   const [thumbs, setThumbs] = useState(null);   // [team][row] → dataURL (เฉพาะเมื่อมีภาพหน้าสรุป)
   const [mapFirst, setMapFirst] = useState([0, 1, 2, 3, 4]);    // แถวในภาพ (ทีมซ้าย) → slot
@@ -91,8 +92,13 @@ export default function ScoreboardImport({ ourPicks, enemyPicks, gameStats, onCh
       rec = await createRecognizer();
       const total = files.length * 10; let done = 0;
       const result = await readScoreboards(images, rec.recognize, () => setProgress(Math.min(1, ++done / total)));
-      const sm = images.find(im => (im.kind !== "auto" ? im.kind : detectKind(im.bitmap)) === "summary");
+      // ภาพย่อโปรไฟล์ฮีโร่ตัดจากหน้าสรุปก่อน ถ้าไม่มีก็ใช้ภาพแรก (หน้า "ข้อมูล" มีรูปฮีโร่ตำแหน่งเดียวกัน)
+      const sm = images.find(im => (im.kind !== "auto" ? im.kind : detectKind(im.bitmap)) === "summary") || images[0];
       setThumbs(sm ? makeThumbs(sm.bitmap) : null);
+      // เกมแรกทีมเราอยู่ฝั่งน้ำเงิน เกมสองอยู่ฝั่งแดง ฯลฯ → เทียบสกอร์ในภาพกับสกอร์ที่บันทึกไว้เพื่อเลือกฝั่งให้เอง
+      const d = decideOurSide(result.scores, ourScore, enemyScore);
+      setSide(d.side ?? "first");
+      setSideNote({ auto: d.side != null, text: d.note });
       setParsed(result);
     } catch (e) {
       console.error(e);
@@ -156,6 +162,11 @@ export default function ScoreboardImport({ ourPicks, enemyPicks, gameStats, onCh
               <option value="second">ทีมขวา / สีแดง</option>
             </select>
           </div>
+          {sideNote && (
+            <div style={{ fontSize: 11, marginBottom: 6, color: sideNote.auto ? C.win : C.lose }}>
+              {sideNote.auto ? "🔎 ระบบเลือกฝั่งให้: " : "⚠️ "}{sideNote.text}
+            </div>
+          )}
           <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 6 }}>
             ℹ️ อ่านชื่อฮีโร่จากภาพไม่ได้ — ดูภาพย่อของแต่ละแถว แล้วเลือก slot ให้ตรงกับฮีโร่ตัวนั้น (ค่าเริ่มต้น = ตามลำดับบน→ล่าง)
           </div>

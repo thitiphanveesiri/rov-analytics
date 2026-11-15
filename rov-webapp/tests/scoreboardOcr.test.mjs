@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { fixByPercent, detectKind, prepare, readScoreboards, summaryThumbBoxes, fixByConstraints, findSummaryLayout } from "@/lib/scoreboardOcr";
+import { fixByPercent, detectKind, prepare, readScoreboards, summaryThumbBoxes, fixByConstraints, findSummaryLayout, parsePercent, repairPercents, crossCheckFights, looksLikeDamagePage, looksLikeHistory } from "@/lib/scoreboardOcr";
 
 // ── detectKind: หน้าสรุปกว้าง (~2.16:1) / หน้า "ข้อมูล" แคบกว่า (~1.45–1.7:1)
 assert.equal(detectKind({ width: 1837, height: 866 }), "summary");
@@ -38,6 +38,7 @@ assert.deepEqual(r.kinds, ["summary"]);
 assert.equal(steps, 10);
 assert.equal(r.teams.length, 2); assert.equal(r.teams[0].rows.length, 5);
 assert.equal(r.teams[0].rows[0].kills, 7);
+assert.deepEqual(r.scores, [7, 7], "คืนสกอร์ทีมในภาพ [ซ้าย, ขวา]");
 assert.equal(r.teams[0].rows[0].gold, 7, "อ่านทีละช่อง: K/D/A/ทอง แยกกัน");
 assert.equal(r.teams[1].rows[4].assists, 7);
 // หน้าสรุป: อ่าน 4 ช่อง × 4 แบบ ต่อแถว + สกอร์ทีม 2 ช่อง × 4 แบบ
@@ -106,4 +107,50 @@ assert.equal(detectKind(synth(1920, 1080, 1.1, 40, 10)), "summary");
 // summaryThumbBoxes ตามตำแหน่ง/สเกลที่หาเจอ
 const tb2 = summaryThumbBoxes(synth(1600, 1200, 0.87, 5, 225));
 assert.ok(tb2[0][0][1] > 225 && tb2[1][4][3] < 1200, "กรอบภาพย่ออยู่ในภาพและเลื่อนตามตำแหน่งตาราง");
+
+// ── parsePercent ──
+assert.equal(parsePercent("28.3 %"), 28.3);
+assert.equal(parsePercent("100.0 %"), 100);
+assert.equal(parsePercent("283 %"), 28.3, "จุดหาย → ใส่จุดก่อนหลักสุดท้าย");
+assert.equal(parsePercent("1000"), 100);
+assert.equal(parsePercent(""), null); assert.equal(parsePercent("5"), null); assert.equal(parsePercent("350.0"), null, "เกิน 100 → null");
+
+// ── repairPercents: % พลาดช่องเดียว (11.7 → 1.7) ซ่อมได้ ; ถ้ารวมไม่ครบแต่ซ่อมไม่ได้ → false ──
+{
+  const dmg = [123718, 70646, 53339, 54550, 135270];
+  const mkRows = ps => dmg.map((d, i) => ({ damage: d, pct: [ps[i], null, null] }));
+  const good = mkRows([28.3, 16.1, 12.2, 12.5, 30.9]);
+  assert.equal(repairPercents(good, 0, "damage"), true);
+  const one = mkRows([28.3, 6.1, 12.2, 12.5, 30.9]);          // 16.1 อ่านเป็น 6.1
+  assert.equal(repairPercents(one, 0, "damage"), true); assert.equal(one[1].pct[0], 16.1);
+  const two = mkRows([8.3, 6.1, 12.2, 12.5, 30.9]);            // พลาด 2 ช่อง → ซ่อมไม่ได้
+  assert.equal(repairPercents(two, 0, "damage"), false);
+  // ใช้ร่วมกับ fixByPercent: เลขอ่านผิด (53339→93339) + % ถูก → แก้ได้
+  const bad = mkRows([28.3, 16.1, 12.2, 12.5, 30.9]); bad[2].damage = 93339;
+  assert.equal(repairPercents(bad, 0, "damage"), true); fixByPercent(bad, 0, "damage");
+  assert.equal(bad[2].damage, 53339);
+}
+
+// ── crossCheckFights: ทีมไฟต์ (หน้าข้อมูล) = K + A (หน้าสรุป) ──
+{
+  const merged = [[{ kills: 5, assists: 2 }, { kills: 2, assists: 7 }], [{ kills: 4, assists: 5 }]];
+  assert.deepEqual(crossCheckFights(merged, [[7, 9], [9]]), []);
+  const w = crossCheckFights(merged, [[7, 8], [9]]);
+  assert.equal(w.length, 1); assert.ok(merged[0][1]._flag && !merged[0][0]._flag);
+  assert.deepEqual(crossCheckFights([[{ kills: 1, assists: 1 }]], [[]]), [], "ไม่มีค่าไฟต์ → ข้าม");
+}
+
+// ── ชนิดภาพ: หน้า "ข้อมูล" (แถบ % เขียว) / หน้าสรุปแบบประวัติ (แถวไอเทมสีสด) ──
+{
+  const ROWS_REF = [226, 337, 447, 558, 669];
+  const paint = (bm, x0, y0, x1, y1, c, every = 1) => { for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) if ((x + y) % every === 0) { const i = (y * bm.width + x) * 4; bm.data[i] = c[0]; bm.data[i + 1] = c[1]; bm.data[i + 2] = c[2]; } };
+  const plain = synth(1907, 858, 0.991, 44, 0), m = findSummaryLayout(plain);
+  assert.equal(detectKind(plain), "summary"); assert.equal(looksLikeHistory(plain, m), false); assert.equal(looksLikeDamagePage(plain, m), false);
+  const dmgPg = synth(1907, 858, 0.991, 44, 0);
+  for (const y of ROWS_REF) paint(dmgPg, Math.round(44 + 790 * 0.991), Math.round((y + 22) * 0.991), Math.round(44 + 860 * 0.991), Math.round((y + 42) * 0.991), [50, 165, 70]);
+  assert.equal(detectKind(dmgPg), "damage");
+  const hist = synth(1907, 858, 0.991, 44, 0);
+  for (const y of ROWS_REF) paint(hist, Math.round(44 + 500 * 0.991), Math.round((y + 10) * 0.991), Math.round(44 + 800 * 0.991), Math.round((y + 40) * 0.991), [230, 40, 40], 2);
+  assert.equal(looksLikeHistory(hist, findSummaryLayout(hist)), true); assert.equal(detectKind(hist), "summary");
+}
 console.log("scoreboardOcr tests OK");

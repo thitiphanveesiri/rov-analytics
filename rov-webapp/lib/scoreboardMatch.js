@@ -133,3 +133,22 @@ export function buildStatsFromMapping(parsed, ourIsFirst, mapFirst, mapSecond) {
   }
   return { gameStats: out, duplicates };
 }
+
+/**
+ * เดาว่า "ทีมเรา" อยู่ฝั่งไหนของภาพ จากการเทียบสกอร์ในภาพ [ซ้าย, ขวา] กับสกอร์ที่บันทึกไว้ในเกม (ourScore / enemyScore)
+ *  - ตรงแบบตามลำดับ → "first" (ซ้าย/น้ำเงิน) ; ตรงแบบสลับ → "second" (ขวา/แดง)
+ *  - เดาไม่ได้ (ยังไม่ได้บันทึกสกอร์, อ่านสกอร์ในภาพไม่ได้, สกอร์เสมอกัน, หรือไม่ตรงทั้งสองแบบ) → side = null พร้อมเหตุผล
+ * @returns {{ side: "first"|"second"|null, note: string }}
+ */
+export function decideOurSide(shotScores, ourScore, enemyScore) {
+  const num = v => (v === "" || v == null || !Number.isFinite(Number(v)) ? null : Number(v));
+  const [l, r] = [num(shotScores?.[0]), num(shotScores?.[1])];
+  const [o, e] = [num(ourScore), num(enemyScore)];
+  if (o == null || e == null || (o === 0 && e === 0)) return { side: null, note: "ยังไม่ได้บันทึกสกอร์ของเกมนี้ ระบบจึงเลือกฝั่งให้ไม่ได้ — เลือกเอง" };
+  if (l == null || r == null) return { side: null, note: "อ่านสกอร์จากภาพไม่ได้ ระบบจึงเลือกฝั่งให้ไม่ได้ — เลือกเอง" };
+  const asIs = l === o && r === e, swapped = l === e && r === o;
+  if (asIs && swapped) return { side: null, note: `สกอร์เสมอกัน (${l}–${r}) ระบบแยกฝั่งไม่ได้ — เลือกเอง` };
+  if (asIs) return { side: "first", note: `สกอร์ในภาพ ${l}–${r} ตรงกับที่บันทึกไว้ (${o}–${e}) → ทีมเราอยู่ฝั่งซ้าย/น้ำเงิน` };
+  if (swapped) return { side: "second", note: `สกอร์ในภาพ ${l}–${r} ตรงกับที่บันทึกไว้แบบสลับ (${o}–${e}) → ทีมเราอยู่ฝั่งขวา/แดง` };
+  return { side: null, note: `สกอร์ในภาพ ${l}–${r} ไม่ตรงกับที่บันทึกไว้ (${o}–${e}) ทั้งสองฝั่ง — ตรวจว่าเป็นภาพของเกมนี้ และเลือกฝั่งเอง` };
+}

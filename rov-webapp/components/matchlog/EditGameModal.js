@@ -68,7 +68,7 @@ export function UnifiedStatsEditor({ ourPicks, enemyPicks, gameStats, onChangeSt
 
   return (
     <div style={{background:"#080614",borderRadius:10,overflow:"hidden",border:`1px solid ${C.border}`}}>
-      <ScoreboardImport ourPicks={ourPicks} enemyPicks={enemyPicks} gameStats={gameStats} onChangeStats={onChangeStats}/>
+      <ScoreboardImport ourPicks={ourPicks} enemyPicks={enemyPicks} gameStats={gameStats} onChangeStats={onChangeStats} ourScore={ourScore} enemyScore={enemyScore}/>
       {hasScore && hasAnyStat > 0 && (
         <div style={{padding:"10px 12px",background:"#0f0c22",borderBottom:`1px solid ${C.border}`,
           display:"flex",flexWrap:"wrap",gap:8}}>
