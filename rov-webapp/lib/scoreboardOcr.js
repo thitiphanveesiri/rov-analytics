@@ -111,6 +111,9 @@ async function readPercents(recognize, bm, box) {
 // ───────────── layouts (พิกัดอ้างอิงจากภาพสูง 870 / 1206 px แล้วสเกลตามความสูงจริง) ─────────────
 // พิกัดวัดจากภาพหน้าสรุปจริง (สูง 866px) แล้วสเกลตามความสูงภาพ — อ่านทีละช่อง (K / D / A / ทอง) ไม่อ่านทั้งบรรทัด
 // เพราะเครื่องหมาย "/" ทำให้ Tesseract อ่านเป็นตัวเลขปนเข้ามา (ทดสอบแล้วอ่านทั้งบรรทัดผิดเกือบทุกแถว)
+// เลขเวอร์ชันตัวอ่าน — แสดงในหน้าเว็บ ใช้ตรวจว่า deploy โค้ดล่าสุดแล้วหรือยัง
+export const OCR_VERSION = "r6";
+
 const SUMMARY = {
   baseH: 866, rows: [226, 337, 447, 558, 669], half: 22,
   cols: {
@@ -407,6 +410,9 @@ export async function readDamage(bm, recognize, onStep = () => {}) {
       teams[t].push(row); onStep();
     }
     const nm = t === 0 ? "ซ้าย" : "ขวา";
+    if (teams[t].flatMap(r => r.pct).filter(v => v == null).length >= 10) {
+      warnings.push(`ทีม${nm}: อ่านแถบ % ไม่ได้เลย — ตรวจว่าเป็นหน้า "ข้อมูล" (แท็บ ข้อมูล ที่มี สร้างดาเมจ / รับความเสียหาย / ทีมไฟต์) ไม่ใช่แท็บ ดาเมจ หรือแท็บอื่น`);
+    }
     // % ของดาเมจที่ทำ/รับ รวมกันทั้งทีมต้อง ≈ 100 — ถ้าไม่ใช่ แปลว่าอ่าน % พลาด จึงไม่เอา % ไปแก้ตัวเลข (กันแก้ของที่ถูกอยู่แล้วให้ผิด)
     [[0, "damage", "ดาเมจที่ทำ"], [1, "damageTaken", "ดาเมจที่รับ"]].forEach(([idx, key, label]) => {
       if (repairPercents(teams[t], idx, key)) fixByPercent(teams[t], idx, key);
@@ -443,14 +449,22 @@ export function crossCheckFights(merged, fightsRead) {
   return warnings;
 }
 
+const KIND_TH = { summary: "หน้าสรุป", damage: "หน้า \"ข้อมูล\"" };
+
 export async function readScoreboards(images, recognize, onStep = () => {}) {
   const merged = [[{}, {}, {}, {}, {}], [{}, {}, {}, {}, {}]];
   const fightsRead = [[], []]; const scoreRead = [[], []];
-  const warnings = []; const kinds = [];
+  const warnings = []; const kinds = []; const infos = [];
   for (const img of images) {
-    const kind = img.kind && img.kind !== "auto" ? img.kind : detectKind(img.bitmap);
+    const detected = detectKind(img.bitmap);
+    let kind = img.kind && img.kind !== "auto" ? img.kind : detected;
+    if (kind !== detected && findSummaryLayout(img.bitmap)) {
+      warnings.push(`ภาพที่ ${kinds.length + 1}: เลือกชนิดเป็น ${KIND_TH[kind]} แต่ภาพนี้ดูเป็น ${KIND_TH[detected]} — อ่านตามที่ดูเป็น (เลือก "อัตโนมัติ" ได้ถ้าไม่แน่ใจ)`);
+      kind = detected;
+    }
     kinds.push(kind);
     const r = kind === "summary" ? await readSummary(img.bitmap, recognize, onStep) : await readDamage(img.bitmap, recognize, onStep);
+    infos.push({ kind, variant: r.variant || null, anchored: !!findSummaryLayout(img.bitmap) });
     warnings.push(...r.warnings);
     (r.score || []).forEach((v, t) => scoreRead[t].push(v));
     r.teams.forEach((rows, t) => rows.forEach((row, i) => {
@@ -469,5 +483,5 @@ export async function readScoreboards(images, recognize, onStep = () => {}) {
     const ks = merged[t].map(r => r.kills);
     return ks.every(k => k != null) ? ks.reduce((a, k) => a + k, 0) : null;
   });
-  return { teams: merged.map(rows => ({ rows })), scores, warnings, kinds };
+  return { teams: merged.map(rows => ({ rows })), scores, warnings, kinds, infos, version: OCR_VERSION };
 }

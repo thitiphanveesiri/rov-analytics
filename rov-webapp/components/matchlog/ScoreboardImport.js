@@ -2,7 +2,7 @@
 import { useRef, useState } from "react";
 import { C } from "@/lib/theme";
 import { buildStatsFromMapping, mergeStats, decideOurSide } from "@/lib/scoreboardMatch";
-import { readScoreboards, detectKind, summaryThumbBoxes } from "@/lib/scoreboardOcr";
+import { readScoreboards, detectKind, summaryThumbBoxes, OCR_VERSION } from "@/lib/scoreboardOcr";
 
 // ═══════════════════════════════════════════
 //  อ่านสกอร์จากภาพสรุปผลแมตช์ → เติม K/D/A/Gold/Dmg/DmgTaken อัตโนมัติ  (ฟรี: Tesseract.js รันในเบราว์เซอร์ ไม่เรียก API/ไม่มี key)
@@ -138,8 +138,8 @@ export default function ScoreboardImport({ ourPicks, enemyPicks, gameStats, onCh
         <select value={kindSel} onChange={e => setKindSel(e.target.value)} disabled={busy} title="ใช้เมื่อระบบเดาชนิดภาพผิด"
           style={{ background: C.bgCard, border: `1px solid ${C.border}`, color: C.textMain, borderRadius: 6, padding: "4px 6px", fontSize: 11 }}>
           <option value="auto">ชนิดภาพ: อัตโนมัติ</option>
-          <option value="summary">หน้าสรุป (K/D/A, ทอง)</option>
-          <option value="damage">หน้าข้อมูล (ดาเมจ)</option>
+          <option value="summary">หน้าสรุป (K/D/A, ทอง) ทั้งแบบย่อ/ละเอียด/ประวัติ</option>
+          <option value="damage">หน้า "ข้อมูล" (สร้างดาเมจ / รับดาเมจ / ทีมไฟต์)</option>
         </select>
         <span style={{ fontSize: 10, color: C.textMuted }}>
           เลือก 1–2 ภาพ (หน้าสรุป + หน้าข้อมูล) หรือคลิกตรงนี้แล้ววาง (Ctrl+V) · ใช้ภาพต้นฉบับ ไม่ผ่านการบีบอัด
@@ -152,7 +152,7 @@ export default function ScoreboardImport({ ourPicks, enemyPicks, gameStats, onCh
         <div style={{ marginTop: 10, border: `1px solid ${C.border}`, borderRadius: 8, padding: 10 }}>
           <div style={{ fontSize: 12, fontWeight: 800, color: C.primaryLight, marginBottom: 6 }}>
             อ่านได้: {parsed.teams[0].rows.length} + {parsed.teams[1].rows.length} แถว
-            <span style={{ fontWeight: 600, color: C.textMuted }}> ({parsed.kinds.map(k => k === "summary" ? "หน้าสรุป" : "หน้าข้อมูล").join(" + ")})</span>
+            <span style={{ fontWeight: 600, color: C.textMuted }}> ({(parsed.infos || []).map(i => i.kind === "damage" ? "หน้า \"ข้อมูล\"" : `หน้าสรุป${i.variant === "history" ? " (ละเอียด/ประวัติ)" : " (แบบย่อ)"}`).join(" + ")}) · ตัวอ่าน {parsed.version || OCR_VERSION}</span>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, fontSize: 11, color: C.textMuted }}>
             ทีมเราในภาพคือ

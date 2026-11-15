@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { fixByPercent, detectKind, prepare, readScoreboards, summaryThumbBoxes, fixByConstraints, findSummaryLayout, parsePercent, repairPercents, crossCheckFights, looksLikeDamagePage, looksLikeHistory } from "@/lib/scoreboardOcr";
+import { fixByPercent, detectKind, prepare, readScoreboards, summaryThumbBoxes, fixByConstraints, findSummaryLayout, parsePercent, repairPercents, crossCheckFights, looksLikeDamagePage, looksLikeHistory, OCR_VERSION } from "@/lib/scoreboardOcr";
 
 // ── detectKind: หน้าสรุปกว้าง (~2.16:1) / หน้า "ข้อมูล" แคบกว่า (~1.45–1.7:1)
 assert.equal(detectKind({ width: 1837, height: 866 }), "summary");
@@ -152,5 +152,18 @@ assert.equal(parsePercent(""), null); assert.equal(parsePercent("5"), null); ass
   const hist = synth(1907, 858, 0.991, 44, 0);
   for (const y of ROWS_REF) paint(hist, Math.round(44 + 500 * 0.991), Math.round((y + 10) * 0.991), Math.round(44 + 800 * 0.991), Math.round((y + 40) * 0.991), [230, 40, 40], 2);
   assert.equal(looksLikeHistory(hist, findSummaryLayout(hist)), true); assert.equal(detectKind(hist), "summary");
+}
+
+// ── เลือกชนิดภาพผิด: ภาพเป็นหน้าสรุป (มีแถบหัวตาราง ไม่มีแถบ % เขียว) แต่ผู้ใช้เลือก "หน้าข้อมูล" → ใช้ตามภาพ + เตือน ──
+{
+  const bm = synth(1907, 858, 0.991, 44, 0);
+  const rec = async () => "7";
+  const r = await readScoreboards([{ bitmap: bm, kind: "damage" }], rec, () => {});
+  assert.deepEqual(r.kinds, ["summary"], "ใช้ตามภาพ ไม่ใช่ตามที่เลือกผิด");
+  assert.ok(r.warnings.some(w => w.includes("เลือกชนิดเป็น")), "ต้องเตือน");
+  assert.equal(r.infos[0].anchored, true); assert.equal(r.version, OCR_VERSION);
+  // ภาพที่หาแถบไม่เจอ (ไม่รู้ว่าเป็นหน้าอะไร) → เชื่อที่ผู้ใช้เลือก ไม่เตือนเรื่องชนิด
+  const r2 = await readScoreboards([{ bitmap: synth(1000, 500, 1, 0, 0, false), kind: "damage" }], rec, () => {});
+  assert.deepEqual(r2.kinds, ["damage"]); assert.ok(!r2.warnings.some(w => w.includes("เลือกชนิดเป็น")));
 }
 console.log("scoreboardOcr tests OK");
